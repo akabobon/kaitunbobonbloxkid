@@ -1,9 +1,50 @@
 -- =================================================================
---         BOBON HUB v21.22 ONE-PILE UNDERFOOT | REAL OWNERSHIP SWEEP | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.24 IMMEDIATE PROGRESSION PRIORITY | ALL-MOB PILE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.21 VIDEO SWEEP GATHER ATTACK | Version: v21.22
+--         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24
 --
---  v21.22 ONE-PILE UNDERFOOT GATHER:
+--  v21.24 IMMEDIATE PROGRESSION / QUEST PRIORITY FIX:
+--  [PQ-1] Eligible permanent progression now PREEMPTS normal level farming immediately.
+--         Farm travel/cluster/targets are released through PrepareClaimedAction, then the
+--         progression ActionToken owns the job until it finishes or yields.
+--  [PQ-2] Saber starts as soon as Lv.200 is reached even while a level quest is active.
+--         Removed the old CombatController:IsDamageReady() startup gate that could leave
+--         Lv.200+ accounts farming forever before the Saber puzzle ever claimed an action.
+--  [PQ-3] Saber flow made state-aware: plates are attempted when the door state is unknown,
+--         RichSon=nil explicitly starts dialogue, Mob Leader/Saber Expert get bounded spawn
+--         waits, and failed spawn waits retry soon instead of the old 300-second cooldown.
+--  [PQ-4] Mandatory Sea2/Bartilo/Sea3 story work no longer waits for a pre-verified combat
+--         backend; combat verification is allowed to happen naturally when a boss is fought.
+--  [PQ-5] Bartilo gate corrected to Lv.850. Race V2 follows Bartilo/Alchemist server state.
+--  [PQ-6] Direct-ready item goals preempt farm: Pole when Thunder God is live, Kabucha when
+--         fragments are ready, Rengoku when Hidden Key is owned, Midnight Blade when 100
+--         Ectoplasm is ready, live Factory/Acidum, guaranteed Yama pull, live Tushita path,
+--         ready CDK, ready Skull Guitar puzzle, and final TTK purchase.
+--  [PQ-7] Skull Guitar first activation now requires a real Full Moon night window before
+--         it can steal movement. Existing puzzle progress remains immediately resumable.
+--  [PQ-8] Progression action retry shortened but remains bounded; missing bosses/events yield
+--         back to level farm instead of camping forever. No new movement coroutine is added.
+--  [PQ-9] v21.23 one-pile gather/combat/TravelManager logic is otherwise preserved.
+--
+--  v21.23 ALL-MOB / PERSISTENT PILE FIX:
+--  [AP-1] Fixes the real v21.22 omission bug: candidate membership is now decided from
+--         each mob's ORIGINAL spawn position, not its current underfoot position. Already
+--         gathered mobs therefore stay in LastBatch while the player sweeps farther away.
+--  [AP-2] Quest field radius is widened and the sweep retries much more aggressively, so
+--         the controller keeps working until every live same-name mob in the active camp
+--         is either stacked or temporarily on a short retry cooldown.
+--  [AP-3] Executor environments with no usable isnetworkowner API no longer deadlock at
+--         'damage works / gather never happens'. A mob that takes REAL HP damage while the
+--         player is physically close may start a one-shot movement trial. The root is NOT
+--         continuously rewritten during the trial; only a position that persists across
+--         several Heartbeats becomes a short DAMAGE-LEASE stack authority.
+--  [AP-4] A DAMAGE-LEASE is refreshed only by fresh real HP damage. If the server snaps the
+--         NPC away from the pile, the lease is revoked immediately and the mob returns to
+--         the acquisition sweep instead of becoming a permanent client-side statue.
+--  [AP-5] Network-owner=true remains the strongest path and is unchanged. No anti-cheat or
+--         kick bypass is added; TravelManager still remains the single movement owner.
+--
+--  v21.23 ALL-MOB PERSISTENT PILE GATHER:
 --  [P1] Every NETWORK-OWNED same-name quest mob is pinned to ONE exact pile point.
 --       ClusterStackRadius stays 0; there is no ring/spread around the player.
 --  [P2] During the ownership sweep the pile anchor follows the player's X/Z, so all
@@ -602,7 +643,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.22 ONE-PILE UNDERFOOT + REAL OWNERSHIP SWEEP + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.24 IMMEDIATE PROGRESSION PRIORITY + ALL-MOB PILE + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -808,13 +849,13 @@ _G.Settings = {
     ClusterAuthorityProbeRange = 100,
     -- A damage-proven unknown-owner root stays eligible long enough for a complete
     -- 3-4 mob independent-swing cycle. It is revoked if real HP stops changing.
-    ClusterAuthorityDamageTTL = 1.50,
+    ClusterAuthorityDamageTTL = 2.80,
     ClusterAuthorityProbeCooldown = 0.18,
     ClusterAuthorityProbeWindow = 1.60,
     ClusterAuthorityProbeMissCooldown = 1.60,
     ClusterAuthorityMaxProbeAttempts = 3,
     ClusterAuthorityHardMissCooldown = 5.0,
-    ClusterAuthorityFieldRadius = 220,
+    ClusterAuthorityFieldRadius = 650,
     ClusterQuestPhysicalFallback = true,
     ClusterSkipPhysicalFallback = true,
     ClusterStrictOwnership = true,
@@ -910,20 +951,30 @@ _G.Settings = {
     ClusterAcquireGrace = 0.35,
     -- A quest uses only its current spawn field. GatherMaxDistance remains the
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
-    ClusterQuestRadius  = 220,
+    ClusterQuestRadius  = 650,
     ClusterAcquireSweep = true,
-    ClusterAcquireTimeout = 1.20,
-    ClusterAcquireMaxTimeout = 4.00,
-    ClusterAcquireSettle = 0.35,
-    ClusterAcquireRetry = 0.18,
-    ClusterAcquireMaxAttempts = 2,
-    ClusterAcquireCycleRetry = 1.20,
+    ClusterAcquireTimeout = 2.00,
+    ClusterAcquireMaxTimeout = 6.00,
+    ClusterAcquireSettle = 0.60,
+    ClusterAcquireRetry = 0.12,
+    ClusterAcquireMaxAttempts = 6,
+    ClusterAcquireCycleRetry = 0.35,
     ClusterAcquireArrivalThreshold = 3.25,
     ClusterAcquireTravelSpeed = 360,
-    ClusterAcquireHoverHeight = 8,
-    ClusterAcquireGroupRadius = 105,
+    ClusterAcquireHoverHeight = 6,
+    ClusterAcquireGroupRadius = 140,
     ClusterOwnershipSettle = 0.18,
     ClusterAcquirePreferCoverage = true,
+    -- v21.23: fallback ONLY for environments where ownership cannot be queried.
+    -- It requires real HP damage at the mob's real position + close physical approach,
+    -- then a one-shot movement persistence test before the mob may join the pile.
+    ClusterDamageLeaseEnabled = true,
+    ClusterDamageLeaseAcquireRadius = 18,
+    ClusterDamageLeaseProofWindow = 0.28,
+    ClusterDamageLeaseProofChecks = 5,
+    ClusterDamageLeaseProofRadius = 7,
+    ClusterDamageLeaseSnapRejectRadius = 18,
+    ClusterDamageLeaseTTL = 2.50,
     -- v21.22: a single exact pile stays horizontally under the player during sweep.
     ClusterOnePileUnderfoot = true,
     ClusterPileFollowDuringSweep = true,
@@ -966,6 +1017,13 @@ _G.Settings = {
     NearQuestSnapCooldown= 0.08,
     -- Optional item failure/timeout must not block level farming forever.
     ItemRetryCooldown   = 300,
+    -- v21.24: permanent progression may interrupt ordinary level farm as soon as
+    -- its real level/server prerequisite is ready. Polling is throttled.
+    ProgressionPreemptFarm = true,
+    ProgressionPriorityPoll = 0.45,
+    ProgressionImmediateRetry = 2.0,
+    ProgressionMissingSpawnRetry = 10.0,
+    ProgressionActionRetry = 8.0,
     ServerHopCooldown   = 120,
     MaxFarmDistance     = 300,
     StatBatchLimit      = 100,
@@ -1536,7 +1594,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.22", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.24", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2328,6 +2386,10 @@ local GatherProbeAttempts = setmetatable({}, { __mode = "k" })
 -- overwritten by the visual anchor and therefore remain usable for real range gating.
 local GatherOriginalPositions = setmetatable({}, { __mode = "k" })
 local GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
+-- v21.23 unknown-owner fallback. These tables never grant permanent authority;
+-- leases are short, damage-backed and revoked on server snap-back.
+local GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+local GatherMoveTrial = setmetatable({}, { __mode = "k" })
 local GatherGeneration = 0
 
 local function ToolCombatKind(tool)
@@ -4503,6 +4565,8 @@ function FarmPositionController:ReleaseCluster()
     GatherProbeAttempts = setmetatable({}, { __mode = "k" })
     GatherOriginalPositions = setmetatable({}, { __mode = "k" })
     GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
+    GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+    GatherMoveTrial = setmetatable({}, { __mode = "k" })
     if ClusterFarmController then
         ClusterFarmController.LastBatch = {}
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
@@ -4629,11 +4693,14 @@ ClientOwnsMob = function(root)
     -- Roblox's GetNetworkOwner is normally server-only. If this environment exposes
     -- it, use the answer; otherwise return nil and keep the NPC at its real position.
     local ok, owner = pcall(function() return root:GetNetworkOwner() end)
-    if ok then
+    if ok and owner ~= nil then
         _G.BobonDiagnostics.OwnerAPI = "ENGINE"
         return owner == LP
     end
-    _G.BobonDiagnostics.OwnerAPI = "NONE"
+    -- Some executors expose the method but return nil on the client. Treat that as
+    -- UNKNOWN, not an explicit server-owned=false result, so the physical sweep can
+    -- use the damage-backed persistence fallback below.
+    _G.BobonDiagnostics.OwnerAPI = ok and "ENGINE-NIL" or "NONE"
     return nil
 end
 
@@ -4751,6 +4818,8 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         GatherProbeAttempts = setmetatable({}, { __mode = "k" })
         GatherOriginalPositions = setmetatable({}, { __mode = "k" })
         GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
+    GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+    GatherMoveTrial = setmetatable({}, { __mode = "k" })
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
@@ -4855,8 +4924,11 @@ function ClusterFarmController:IsDamageProven(model)
     if not at then return false end
     if tick() - at > (_G.Settings.ClusterAuthorityDamageTTL or 1.50) then
         DamageProvenGatherRoots[root] = nil
-        if GatherAuthorityClass[root] == "DAMAGE" then
+        if GatherAuthorityClass[root] == "DAMAGE"
+            or GatherAuthorityClass[root] == "DAMAGE-LEASE" then
             GatherAuthorityClass[root] = nil
+            GatherDamageLeaseUntil[root] = nil
+            GatherMoveTrial[root] = nil
             VerifiedGatherRoots[root] = nil
         end
         return false
@@ -4870,12 +4942,22 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
 
-    -- v21.22: movement authority is STRICTLY network ownership.
-    -- Real HP damage can prove combat, but it cannot prove that a local NPC CFrame
-    -- is server-authoritative. Never call a DAMAGE-only root "stacked".
-    if GatherAuthorityClass[root] ~= "OWNED" or ClientOwnsMob(root) ~= true then
-        GatherAuthorityClass[root] = nil
-        VerifiedGatherRoots[root] = nil
+    local authority = GatherAuthorityClass[root]
+    if authority == "OWNED" then
+        if ClientOwnsMob(root) ~= true then
+            GatherAuthorityClass[root] = nil
+            VerifiedGatherRoots[root] = nil
+            return false
+        end
+    elseif authority == "DAMAGE-LEASE" then
+        if (GatherDamageLeaseUntil[root] or 0) <= tick()
+            or not self:IsDamageProven(model) then
+            GatherAuthorityClass[root] = nil
+            GatherDamageLeaseUntil[root] = nil
+            VerifiedGatherRoots[root] = nil
+            return false
+        end
+    else
         return false
     end
 
@@ -5104,8 +5186,6 @@ function ClusterFarmController:ConfirmDamageProof(model)
     if not root or not hum or hum.Health <= 0 then return false end
 
     local now = tick()
-    -- Damage proof is retained only for combat diagnostics/backend verification.
-    -- It never grants movement/stack authority in v21.21.
     DamageProvenGatherRoots[root] = now
     GatherProbeCandidates[root] = nil
     GatherProbeFailedUntil[root] = nil
@@ -5118,27 +5198,65 @@ function ClusterFarmController:ConfirmDamageProof(model)
         state.ClusterAuthorityProbeFirstAttackAt = 0
     end
 
-    if ClientOwnsMob(root) == true then
-        local anchorCF = state and state.ClusterAnchor
-        if anchorCF then
+    if GatherAuthorityClass[root] == "DAMAGE-LEASE"
+        and (GatherDamageLeaseUntil[root] or 0) > now then
+        GatherDamageLeaseUntil[root] = now
+            + (tonumber(_G.Settings.ClusterDamageLeaseTTL) or 1.80)
+        VerifiedGatherRoots[root] = now
+    end
+
+    local own = ClientOwnsMob(root)
+    if own == true then
+        local pile = self:GetPileAnchorPosition()
+            or (state and state.ClusterAnchor and state.ClusterAnchor.Position)
+        if pile then
             local ok = pcall(function()
-                local rot = root.CFrame.Rotation
                 root.AssemblyLinearVelocity = Vector3.zero
                 root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(anchorCF.Position) * rot
+                root.CFrame = CFrame.new(pile)
             end)
             if ok then
                 GatherAuthorityClass[root] = "OWNED"
+                GatherDamageLeaseUntil[root] = nil
+                GatherMoveTrial[root] = nil
                 VerifiedGatherRoots[root] = now
                 return true
             end
         end
+        return true
     end
 
-    -- Important: leave an unowned NPC at its real replicated position.
-    if GatherAuthorityClass[root] ~= "OWNED" then
-        GatherAuthorityClass[root] = nil
-        VerifiedGatherRoots[root] = nil
+    -- v21.23 fallback: only UNKNOWN ownership may try this path. We never override an
+    -- explicit false result from a working ownership API. The hit happened while the
+    -- mob was still at its real replicated position, so the HP delta is genuine.
+    if own == nil and _G.Settings.ClusterDamageLeaseEnabled ~= false
+        and state and (state.ClusterMode == "QUEST" or state.ClusterMode == "SKIP") then
+        local me = HRP()
+        local okPos, pos = pcall(function() return root.Position end)
+        local acquireRadius = tonumber(_G.Settings.ClusterDamageLeaseAcquireRadius) or 18
+        if me and okPos and IsValidPos(pos)
+            and (pos - me.Position).Magnitude <= acquireRadius then
+            local pile = self:GetPileAnchorPosition()
+                or (state.ClusterAnchor and state.ClusterAnchor.Position)
+            if pile and not GatherMoveTrial[root] then
+                local okMove = pcall(function()
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = CFrame.new(pile)
+                end)
+                if okMove then
+                    -- One write only. RestackBatch will intentionally NOT rewrite this root
+                    -- until enough Heartbeats prove the position did not snap back.
+                    GatherMoveTrial[root] = {
+                        StartedAt = now,
+                        Anchor = pile,
+                        Checks = 0,
+                    }
+                    GatherAuthorityClass[root] = "DAMAGE-TRIAL"
+                    VerifiedGatherRoots[root] = nil
+                end
+            end
+        end
     end
     return true
 end
@@ -5233,10 +5351,13 @@ function ClusterFarmController:GetAcquireTarget()
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
             and not self:IsVerified(model)
+            and not GatherMoveTrial[root]
             and (self.AcquireBlockedUntil[model] or 0) <= now
             and ClientOwnsMob(root) ~= true then
-            local ok, pos = pcall(function() return root.Position end)
-            if ok and IsValidPos(pos) then
+            local ok, livePos = pcall(function() return root.Position end)
+            local pos = entry.Position or GatherOriginalPositions[root]
+                or (ok and livePos or nil)
+            if pos and IsValidPos(pos) then
                 acquirePool[#acquirePool + 1] = {
                     Model = model,
                     Root = root,
@@ -5354,17 +5475,11 @@ function ClusterFarmController:RestackBatch()
     local anchorCF = state and state.ClusterAnchor
     if not anchorCF then return 0 end
 
-    -- v21.22: ONE shared point. During sweep it follows the player's X/Z; after
-    -- sweep it settles exactly under the stable farm hover. Every owned root is
-    -- written to this same Vector3, so the stack radius is literally zero.
     local anchor = self:GetPileAnchorPosition() or anchorCF.Position
     local now = tick()
     local kept, verifiedCount = {}, 0
 
-    local function moveOwnedRoot(root)
-        -- The decisive v21.22 rule: never write an NPC CFrame until ownership is
-        -- positively proven for THIS root on THIS frame.
-        if ClientOwnsMob(root) ~= true then return false end
+    local function writeRoot(root)
         return pcall(function()
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
@@ -5372,40 +5487,93 @@ function ClusterFarmController:RestackBatch()
         end)
     end
 
+    local proofWindow = tonumber(_G.Settings.ClusterDamageLeaseProofWindow) or 0.28
+    local proofChecks = math.max(2,
+        math.floor(tonumber(_G.Settings.ClusterDamageLeaseProofChecks) or 5))
+    local proofRadius = tonumber(_G.Settings.ClusterDamageLeaseProofRadius) or 7
+    local rejectRadius = tonumber(_G.Settings.ClusterDamageLeaseSnapRejectRadius) or 18
+    local leaseTTL = tonumber(_G.Settings.ClusterDamageLeaseTTL) or 1.80
+
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
         local root = model and model:FindFirstChild("HumanoidRootPart")
         local hum = model and model:FindFirstChildOfClass("Humanoid")
         if model and model.Parent and root and root.Parent and hum and hum.Health > 0
             and self:IsModelAllowed(model) then
-            kept[#kept + 1] = {Model=model, Humanoid=hum, Root=root}
+            kept[#kept + 1] = {
+                Model=model, Humanoid=hum, Root=root,
+                Position=entry.Position or GatherOriginalPositions[root],
+            }
 
             local okPos, rootPos = pcall(function() return root.Position end)
             if okPos and IsValidPos(rootPos) and not GatherOriginalPositions[root] then
                 GatherOriginalPositions[root] = rootPos
             end
 
-            if ClientOwnsMob(root) == true and moveOwnedRoot(root) then
-                GatherAuthorityClass[root] = "OWNED"
-                VerifiedGatherRoots[root] = now
-                GatherProbeCandidates[root] = nil
-                GatherProbeFailedUntil[root] = nil
-                verifiedCount = verifiedCount + 1
-            else
-                -- Leave the real replicated NPC exactly where the server has it.
-                -- Do not zero its velocity, do not CFrame it, and do not call it
-                -- stacked merely because combat happened to damage it.
-                if GatherAuthorityClass[root] == "OWNED" then
-                    GatherAuthorityClass[root] = nil
+            local own = ClientOwnsMob(root)
+            if own == true then
+                if writeRoot(root) then
+                    GatherAuthorityClass[root] = "OWNED"
+                    GatherDamageLeaseUntil[root] = nil
+                    GatherMoveTrial[root] = nil
+                    VerifiedGatherRoots[root] = now
+                    GatherProbeCandidates[root] = nil
+                    GatherProbeFailedUntil[root] = nil
+                    verifiedCount = verifiedCount + 1
                 end
-                VerifiedGatherRoots[root] = nil
-                GatherProbeCandidates[root] = nil
+            else
+                local trial = GatherMoveTrial[root]
+                if trial then
+                    -- IMPORTANT: do not rewrite during proof. A server-owned root must get
+                    -- a chance to snap back; otherwise a local-only statue could pass.
+                    local okTrialPos, trialPos = pcall(function() return root.Position end)
+                    if okTrialPos and IsValidPos(trialPos) then
+                        local dist = (trialPos - trial.Anchor).Magnitude
+                        if dist <= proofRadius then
+                            trial.Checks = (trial.Checks or 0) + 1
+                            if now - (trial.StartedAt or now) >= proofWindow
+                                and trial.Checks >= proofChecks
+                                and self:IsDamageProven(model) then
+                                GatherMoveTrial[root] = nil
+                                GatherAuthorityClass[root] = "DAMAGE-LEASE"
+                                GatherDamageLeaseUntil[root] = now + leaseTTL
+                                VerifiedGatherRoots[root] = now
+                                verifiedCount = verifiedCount + 1
+                            end
+                        elseif dist >= rejectRadius
+                            or now - (trial.StartedAt or now) > proofWindow + 0.35 then
+                            GatherMoveTrial[root] = nil
+                            GatherDamageLeaseUntil[root] = nil
+                            GatherAuthorityClass[root] = nil
+                            VerifiedGatherRoots[root] = nil
+                        end
+                    end
+                elseif GatherAuthorityClass[root] == "DAMAGE-LEASE"
+                    and (GatherDamageLeaseUntil[root] or 0) > now
+                    and self:IsDamageProven(model) then
+                    -- Damage-backed lease has already survived a no-rewrite persistence
+                    -- test. Keep the root in the moving underfoot pile until damage goes
+                    -- stale; every later HP delta refreshes the lease.
+                    if writeRoot(root) then
+                        VerifiedGatherRoots[root] = now
+                        -- Do NOT extend the lease here. Only a new real HP delta in
+                        -- ConfirmDamageProof may refresh it.
+                        verifiedCount = verifiedCount + 1
+                    end
+                else
+                    if GatherAuthorityClass[root] == "OWNED"
+                        or GatherAuthorityClass[root] == "DAMAGE-LEASE"
+                        or GatherAuthorityClass[root] == "DAMAGE-TRIAL" then
+                        GatherAuthorityClass[root] = nil
+                    end
+                    GatherDamageLeaseUntil[root] = nil
+                    VerifiedGatherRoots[root] = nil
+                    GatherProbeCandidates[root] = nil
+                end
             end
         end
     end
 
-    -- v21.18's HP-probe state is retired for QUEST/SKIP movement. Keeping these
-    -- fields cleared also guarantees a re-execute cannot inherit a staged statue.
     state.ClusterAuthorityProbeTarget = nil
     state.ClusterAuthorityProbeStartedAt = 0
     state.ClusterAuthorityProbeFirstAttackAt = 0
@@ -5462,14 +5630,22 @@ function ClusterFarmController:Tick()
             local root = mob:FindFirstChild("HumanoidRootPart")
             if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
                 local okPos, pos = pcall(function() return root.Position end)
-                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                    and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
-                    and (pos - anchor).Magnitude <= maxDistance then
-                    if not GatherOriginalPositions[root] then GatherOriginalPositions[root] = pos end
-                    candidates[#candidates + 1] = {
-                        Model=mob, Humanoid=hum, Root=root,
-                        Position=GatherOriginalPositions[root] or pos
-                    }
+                if okPos and IsValidPos(pos) then
+                    if not GatherOriginalPositions[root] then
+                        GatherOriginalPositions[root] = pos
+                    end
+                    local fieldPos = GatherOriginalPositions[root] or pos
+                    -- v21.23: field membership uses the immutable pre-magnet position.
+                    -- A pile being towed hundreds of studs during the sweep must NEVER
+                    -- disappear from LastBatch just because its current CFrame moved.
+                    if IsAllowedWorldPosition(fieldPos)
+                        and IsSubmergedPosition(fieldPos) == IsSubmergedPosition(anchor)
+                        and (fieldPos - anchor).Magnitude <= maxDistance then
+                        candidates[#candidates + 1] = {
+                            Model=mob, Humanoid=hum, Root=root,
+                            Position=fieldPos
+                        }
+                    end
                 end
             end
         end
@@ -7587,6 +7763,7 @@ end)
 local MaterialPrepController
 local FightingStyleUnlockController
 local ItemProgression = {}
+ItemProgression.LastPriorityScan = 0
 ItemProgression.NextOptional = {
     Saber = 0, PoleV1 = 0, Rengoku = 0, MidnightBlade = 0,
     Kabucha = 0, AcidumRifle = 0, Yama = 0, Tushita = 0, CDK = 0,
@@ -7654,15 +7831,16 @@ end
 function ItemProgression:CheckSaber()
     if not _G.Settings.AutoItems or not _G.Settings.AutoSaber then return false end
     if InventoryHas("Saber") or Level() < 200 or GetSea() ~= 1 then return false end
-    if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Saber") then return false end
+
     local myToken = _G.State:ClaimAction("Saber")
     if myToken == 0 then return false end
     PrepareClaimedAction("Saber")
-    self:DelayOptional("Saber")
+    -- Saber is permanent progression, not a five-minute optional detour. A short
+    -- retry is enough because every server-side step is re-read on the next run.
+    self.NextOptional.Saber = tick() + (_G.Settings.ProgressionImmediateRetry or 2.0)
     _G.State:SetMode("GettingItem")
-    _G.BobonStatus = "Item: Saber Sword"
-
+    _G.BobonStatus = "Progression: Saber"
 
     task.spawn(function()
         local ok, err = xpcall(function()
@@ -7674,23 +7852,48 @@ function ItemProgression:CheckSaber()
                     or (backpack and backpack:FindFirstChild(name))
                 if not tool or not hum then return false end
                 if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end) end
-                task.wait(0.2)
+                task.wait(0.18)
                 return c and c:FindFirstChild(name) ~= nil
             end
 
-            -- Current Saber flow: Jungle plates -> Torch/Burn -> Cup/SickMan
-            -- -> RichSon/Mob Leader -> Relic -> Saber Expert.
+            local function WaitLiveBoss(name, waitCF, timeout)
+                local boss = FindBoss(name)
+                if boss then return boss end
+                if waitCF and _G.State:IsActionValid(myToken) then
+                    TravelAndWait("Saber", myToken, waitCF, {
+                        timeout=60, arrivalThreshold=8, settle=0.25,
+                    })
+                end
+                local deadline = tick() + (timeout or 30)
+                repeat
+                    if not _G.State:IsActionValid(myToken) or not IsAlive() then return nil end
+                    boss = FindBoss(name)
+                    if boss then return boss end
+                    task.wait(0.4)
+                until tick() >= deadline
+                return nil
+            end
+
+            -- Current verified flow: five Jungle buttons -> Torch/Desert curtain ->
+            -- Cup/Sick Man -> Rich Man/Mob Leader -> Relic -> Saber Expert.
             local map = workspace:FindFirstChild("Map")
             local jungle = map and map:FindFirstChild("Jungle")
             local plates = jungle and jungle:FindFirstChild("QuestPlates")
             local plateDoor = plates and plates:FindFirstChild("Door")
-            if plateDoor and plateDoor.Transparency == 0 then
+            local needPlates = true
+            if plateDoor then
+                pcall(function() needPlates = plateDoor.Transparency < 0.95 end)
+            end
+            if needPlates and plates then
+                _G.BobonStatus = "Saber: Jungle buttons"
                 for i = 1, 5 do
+                    if not _G.State:IsActionValid(myToken) then return end
                     local plate = plates:FindFirstChild("Plate" .. i)
-                    local button = plate and plate:FindFirstChild("Button")
-                    if button and _G.State:IsActionValid(myToken) then
+                    local button = plate and (plate:FindFirstChild("Button")
+                        or plate:FindFirstChild("Button", true))
+                    if button and button:IsA("BasePart") then
                         TravelAndWait("Saber", myToken, button.CFrame, {
-                            timeout = 60, arrivalThreshold = 5, settle = 0.35,
+                            timeout=45, arrivalThreshold=4, settle=0.28,
                         })
                     end
                 end
@@ -7698,14 +7901,17 @@ function ItemProgression:CheckSaber()
 
             if not _G.State:IsActionValid(myToken) then return end
             if not HasItem("Torch") then
+                _G.BobonStatus = "Saber: Getting Torch"
                 TravelAndWait("Saber", myToken, CFrame.new(-1610,11,164), {
-                    timeout = 90, arrivalThreshold = 6, settle = 1,
+                    timeout=75, arrivalThreshold=5, settle=0.8,
                 })
             end
             if HasItem("Torch") and EquipNamed("Torch") then
+                _G.BobonStatus = "Saber: Burning Desert curtain"
                 TravelAndWait("Saber", myToken, CFrame.new(1114,5,4350), {
-                    timeout = 90, arrivalThreshold = 7, settle = 1,
+                    timeout=75, arrivalThreshold=6, settle=1.0,
                 })
+                task.wait(0.4)
             end
 
             if not _G.State:IsActionValid(myToken) then return end
@@ -7714,16 +7920,20 @@ function ItemProgression:CheckSaber()
                 sickProgress = CommF_:InvokeServer("ProQuestProgress", "SickMan")
             end)
             if sickProgress ~= 0 then
+                _G.BobonStatus = "Saber: Cup / Sick Man"
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "GetCup") end)
+                task.wait(0.20)
                 if EquipNamed("Cup") then
                     local cup = Char() and Char():FindFirstChild("Cup")
                     if cup then
                         pcall(function()
                             CommF_:InvokeServer("ProQuestProgress", "FillCup", cup)
                         end)
+                        task.wait(0.15)
                     end
                 end
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "SickMan") end)
+                task.wait(0.25)
             end
 
             if not _G.State:IsActionValid(myToken) then return end
@@ -7731,13 +7941,28 @@ function ItemProgression:CheckSaber()
             pcall(function()
                 richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
             end)
+            -- Current public flows explicitly start Rich Son when nil. The old source
+            -- did nothing in this state, so Saber could stall forever after Sick Man.
+            if richProgress == nil then
+                _G.BobonStatus = "Saber: Starting Rich Man quest"
+                pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
+                task.wait(0.35)
+                pcall(function()
+                    richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
+                end)
+            end
+
             if richProgress == 0 then
-                local boss = FindBoss("Mob Leader")
+                _G.BobonStatus = "Saber: Mob Leader"
+                local boss = WaitLiveBoss("Mob Leader",
+                    CFrame.new(-2967.59521,-4.91089821,5328.70703), 35)
                 if not boss then
-                    _G.BobonStatus = "Item: Waiting for Mob Leader"
+                    self.NextOptional.Saber = tick()
+                        + (_G.Settings.ProgressionMissingSpawnRetry or 10)
+                    _G.BobonStatus = "Saber: Mob Leader not spawned • retrying"
                     return
                 end
-                local deadline = tick() + 120
+                local deadline = tick() + 150
                 while boss and _G.State:IsActionValid(myToken) and IsAlive()
                     and tick() < deadline do
                     local bh = boss:FindFirstChildOfClass("Humanoid")
@@ -7752,50 +7977,60 @@ function ItemProgression:CheckSaber()
                     if TravelManager:IsAtCombatAnchor(br) then
                         Attack(boss, "Mob Leader")
                     end
-                    task.wait(0.12)
+                    task.wait(0.10)
                 end
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
+                task.wait(0.3)
             end
 
             pcall(function()
                 richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
             end)
             if richProgress == 1 or HasItem("Relic") then
+                _G.BobonStatus = "Saber: Placing Relic"
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
+                task.wait(0.2)
                 EquipNamed("Relic")
                 if TravelAndWait("Saber", myToken, CFrame.new(-1405,30,4), {
-                    timeout=90, arrivalThreshold=8, settle=0.5,
+                    timeout=75, arrivalThreshold=6, settle=0.8,
                 }) then
+                    -- Touch/equipped Relic is the real puzzle interaction. Keep the
+                    -- current remote as a compatibility acknowledgement only.
                     pcall(function()
                         CommF_:InvokeServer("ProQuestProgress", "PlaceRelic")
                     end)
                 end
+                task.wait(0.35)
             end
 
-            local saberBoss = FindBoss("Saber Expert")
+            if not _G.State:IsActionValid(myToken) then return end
+            _G.BobonStatus = "Saber: Saber Expert"
+            local saberBoss = WaitLiveBoss("Saber Expert", CFrame.new(-1405,30,4), 35)
             if not saberBoss then
-                _G.BobonStatus = "Item: Waiting for Saber Expert"
+                self.NextOptional.Saber = tick()
+                    + (_G.Settings.ProgressionMissingSpawnRetry or 10)
+                _G.BobonStatus = "Saber: Expert not spawned • retrying"
                 return
             end
-            local timeout = os.time() + 180
+            local timeout = tick() + 210
             while _G.State:IsActionValid(myToken) and not InventoryHas("Saber")
-                and os.time() < timeout and IsAlive() do
+                and tick() < timeout and IsAlive() do
                 local boss = saberBoss
-                if boss and boss:FindFirstChild("HumanoidRootPart") and boss.Humanoid.Health > 0 then
-                    PrepareCombatTarget(boss)
-                    EquipCombatTool()
-                    TravelManager:Request(boss.HumanoidRootPart, "Saber", {
-                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                        combatHover = true,
-                    })
-                    if TravelManager:IsAtCombatAnchor(boss.HumanoidRootPart) then
-                        Attack(boss, "Saber Expert")
-                    end
-                else
-                    break
+                local bh = boss and boss:FindFirstChildOfClass("Humanoid")
+                local br = boss and boss:FindFirstChild("HumanoidRootPart")
+                if not boss or not bh or bh.Health <= 0 or not br then break end
+                PrepareCombatTarget(boss)
+                EquipCombatTool()
+                TravelManager:Request(br, "Saber", {
+                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                    combatHover = true,
+                })
+                if TravelManager:IsAtCombatAnchor(br) then
+                    Attack(boss, "Saber Expert")
                 end
-                task.wait(0.1)
+                task.wait(0.08)
             end
+            InventoryCache.At = 0
         end, debug.traceback)
         if not ok then warn("[BobonHub] Module Error: Saber: " .. tostring(err)) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
@@ -7809,21 +8044,19 @@ function ItemProgression:CheckSaber()
     return true
 end
 
-
 function ItemProgression:CheckPoleV1()
     if not _G.Settings.AutoItems then return false end
     if InventoryHas("Pole (1st Form)") or Level() < 575 or GetSea() ~= 1 then return false end
-    if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("PoleV1") then return false end
     local boss = FindBoss("Thunder God")
     if not boss then
-        self:DelayOptional("PoleV1")
+        self.NextOptional.PoleV1 = tick() + (_G.Settings.ProgressionMissingSpawnRetry or 10)
         return false
     end
     local myToken = _G.State:ClaimAction("PoleV1")
     if myToken == 0 then return false end
     PrepareClaimedAction("PoleV1")
-    self:DelayOptional("PoleV1")
+    self.NextOptional.PoleV1 = tick() + (_G.Settings.ProgressionActionRetry or 8)
     _G.State:SetMode("GettingItem")
     _G.BobonStatus = "Item: Pole v1"
 
@@ -7870,7 +8103,6 @@ function ItemProgression:CheckSecondSea()
     if GetSea() >= 2 or Level() < 700 then return false end
     -- Before leaving Sea 1, bank Godhuman materials that cannot be farmed here later.
     if MaterialPrepController and MaterialPrepController:TryRunForSeaExit(1) then return true end
-    if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Sea2") then return false end
     local myToken = _G.State:ClaimAction("Sea2")
     if myToken == 0 then return false end
@@ -7944,8 +8176,7 @@ end
 
 
 function ItemProgression:CheckBartilo()
-    if GetSea() ~= 2 or Level() < 800 then return false end
-    if not CombatController:IsDamageReady() then return false end
+    if GetSea() ~= 2 or Level() < 850 then return false end
     if not self:OptionalReady("Bartilo") then return false end
     local progress
     local okProgress = pcall(function()
@@ -8146,7 +8377,6 @@ function ItemProgression:CheckThirdSea()
     if GetSea() ~= 2 or Level() < 1500 then return false end
     -- Bank Sea-2-only Godhuman/Skull/Sanguine materials before TravelZou.
     if MaterialPrepController and MaterialPrepController:TryRunForSeaExit(2) then return true end
-    if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Sea3") then return false end
     local myToken = _G.State:ClaimAction("Sea3")
     if myToken == 0 then return false end
@@ -8290,7 +8520,8 @@ local function StartOptionalAction(self, key, owner, status, body)
     local token = _G.State:ClaimAction(owner)
     if token == 0 then return false end
     PrepareClaimedAction(owner)
-    self.NextOptional[key] = tick() + (_G.Settings.ProgressionRetry or 45)
+    self.NextOptional[key] = tick() + (_G.Settings.ProgressionActionRetry
+        or _G.Settings.ProgressionRetry or 8)
     _G.State:SetMode("GettingItem")
     _G.BobonStatus = status
     task.spawn(function()
@@ -8495,7 +8726,8 @@ function ItemProgression:CheckKabucha()
     self.NextOptional.Kabucha = tick() + (_G.Settings.ProgressionRetry or 45)
     pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","1") end)
     pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","2") end)
-    return false
+    InventoryCache.At = 0
+    return true
 end
 
 function ItemProgression:CheckRengoku()
@@ -8524,6 +8756,8 @@ function ItemProgression:CheckMidnightBlade()
         if self:OptionalReady("MidnightBlade") then
             self.NextOptional.MidnightBlade = tick() + (_G.Settings.ProgressionRetry or 45)
             pcall(function() CommF_:InvokeServer("Ectoplasm","Buy",3) end)
+            InventoryCache.At = 0
+            return true
         end
         return false
     end
@@ -8595,8 +8829,6 @@ end
 function ItemProgression:CheckTushita()
     if not _G.Settings.AutoAdvancedItems or not _G.Settings.AutoCDK
         or GetSea() ~= 3 or Level() < 2000 or InventoryHas("Tushita") then return false end
-    if not CombatController:IsDamageReady() then return false end
-
     local torch = FindOwnedTool("Holy Torch")
     if torch then
         return StartOptionalAction(self, "Tushita", "Tushita", "Item: Tushita Holy Torch", function(token)
@@ -9050,7 +9282,6 @@ function ItemProgression:CheckAcidumRifle()
     -- while the Factory is closed; only act when a real Core is present.
     local core = FindMob("Core") or FindBoss("Core")
     if not core or not _G.State:IsTargetValid(core) then return false end
-    if not CombatController:IsDamageReady() then return false end
 
     self.NextOptional.AcidumRifle = tick() + (_G.Settings.ProgressionRetry or 45)
     return StartOptionalAction(self, "AcidumRifle", "Factory", "Item: Factory Core / Acidum Rifle", function(token)
@@ -9211,6 +9442,29 @@ local function RunSkullSwamp(token)
     FarmPositionController:ReleaseCluster()
 end
 
+local function IsRealFullMoonNight()
+    local lighting = game:GetService("Lighting")
+    local sky = lighting:FindFirstChild("Sky") or lighting:FindFirstChild("FantasySky")
+    local texture = ""
+    if sky then pcall(function() texture = tostring(sky.MoonTextureId or "") end) end
+    -- Current public Blox Fruits moon-phase implementations map this texture to 100%.
+    local fullTexture = string.find(texture, "9709149431", 1, true) ~= nil
+    local clock = tonumber(lighting.ClockTime) or 12
+    return fullTexture and (clock >= 18 or clock <= 5)
+end
+
+function ItemProgression:IsSoulGuitarImmediateReady()
+    if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
+        or HasSkullGuitar() then return false end
+    if MaterialCount("Bones") < 500 or MaterialCount("Ectoplasm") < 250
+        or MaterialCount("Dark Fragment") < 1 then return false end
+    if not CanSpendFragments(5000, "Item: Skull Guitar", 70) then return false end
+    local npcs = workspace:FindFirstChild("NPCs")
+    if npcs and npcs:FindFirstChild("Skeleton Machine") then return true end
+    if GuitarProgress() then return true end
+    return IsRealFullMoonNight()
+end
+
 function ItemProgression:CheckSoulGuitar()
     if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
         or HasSkullGuitar() then return false end
@@ -9234,6 +9488,10 @@ function ItemProgression:CheckSoulGuitar()
 
     local progress=GuitarProgress()
     if not progress then
+        if not IsRealFullMoonNight() then
+            self.NextOptional.SoulGuitar = tick() + 5
+            return false
+        end
         return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: Full Moon gravestone",function(token)
             TravelAndWait("SkullGuitar",token,CFrame.new(-8655.02,141.32,6160.02),{timeout=90,arrivalThreshold=10,settle=0.6})
             pcall(function() CommF_:InvokeServer("gravestoneEvent",2) end)
@@ -9268,8 +9526,9 @@ function ItemProgression:CheckSoulGuitar()
         end)
     end
     pcall(function() CommF_:InvokeServer("soulGuitarBuy",true) end)
+    InventoryCache.At = 0
     self.NextOptional.SoulGuitar=tick()+3
-    return false
+    return true
 end
 
 end -- v21.1 Skull Guitar helper scope
@@ -9301,7 +9560,7 @@ function ItemProgression:CheckRaceV2()
                 TravelAndWait("RaceV2", token, flower2.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
                 return
             end
-            if not FindOwnedTool("Flower 3") and CombatController:IsDamageReady() then
+            if not FindOwnedTool("Flower 3") then
                 local swan = FindMob("Swan Pirate")
                 if swan then FightNamedForAction("Swan Pirate","RaceV2",token,90) end
                 return
@@ -9317,11 +9576,9 @@ function ItemProgression:CheckRaceV2()
     end)
 end
 
--- Progression is deliberately a *farm-window* operation.  A valid quest is
--- never interrupted by an optional item or boss; Sea 2/3 and item checks run
--- only after the current quest is finished (or before the first quest).
--- `allowSea` also accepts a wrong quest so the level-700/1500 sea gate cannot
--- accidentally send the player to a next-sea quest before unlocking it.
+-- Safe-window progression still handles long dependency farming/material work.
+-- v21.24 adds RunImmediateChecks() below for permanent goals whose actual
+-- prerequisites are ready; those goals are allowed to preempt an active level quest.
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
     -- Mandatory world gates first.
@@ -9353,6 +9610,85 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if self:CheckTushita() then return true end
     if self:CheckCDK() then return true end
     if self:CheckSoulGuitar() then return true end
+    return false
+end
+
+-- v21.24 PREEMPTIVE PROGRESSION SCHEDULER.
+-- Only work whose *real* prerequisite is ready is allowed to interrupt the current
+-- level quest. Long material/mastery grinds stay in RunChecks safe windows so one
+-- unavailable optional goal cannot starve level progression forever.
+function ItemProgression:RunImmediateChecks()
+    if _G.Settings.ProgressionPreemptFarm == false or not _G.State:CanAct() then return false end
+    local now = tick()
+    if now - (self.LastPriorityScan or 0) < (_G.Settings.ProgressionPriorityPoll or 0.45) then
+        return false
+    end
+    self.LastPriorityScan = now
+
+    local sea, lv = GetSea(), Level()
+
+    -- Saber is the first permanent item milestone and must fire at Lv.200 even if
+    -- a normal level quest is currently accepted/running.
+    if sea == 1 and lv >= 200 and not InventoryHas("Saber") then
+        if self:CheckSaber() then return true end
+    end
+
+    -- Mandatory story gates. These always outrank ordinary level farming.
+    if self:CheckSecondSea() then return true end
+    if self:CheckBartilo() then return true end
+    if self:CheckThirdSea() then return true end
+
+    -- Race V2 becomes a real actionable quest only when the Alchemist server state
+    -- says so (Bartilo was checked above first).
+    if self:CheckRaceV2() then return true end
+
+    -- Live/direct-ready permanent items. Missing spawns/keys simply return false.
+    if self:CheckPoleV1() then return true end
+    if self:CheckKabucha() then return true end
+    if self:CheckRengoku() then return true end
+
+    -- Midnight Blade should interrupt immediately when the purchase bill is already
+    -- ready. Farming the 100 Ectoplasm itself remains bounded safe-window work.
+    if sea == 2 and lv >= 1000 and not InventoryHas("Midnight Blade")
+        and MaterialCount("Ectoplasm") >= 100 then
+        if self:CheckMidnightBlade() then return true end
+    end
+
+    -- Factory Core is a live event; CheckAcidumRifle only claims when Core exists.
+    if self:CheckAcidumRifle() then return true end
+
+    -- Yama immediate pull only at the guaranteed threshold. Below 30, Elite Hunter
+    -- farming remains safe-window work instead of repeatedly stealing every farm tick.
+    if sea == 3 and lv >= 1500 and not InventoryHas("Yama")
+        and _G.Settings.AutoAdvancedItems and _G.Settings.AutoCDK then
+        local eliteProgress = 0
+        pcall(function() eliteProgress = tonumber(CommF_:InvokeServer("EliteHunter","Progress")) or 0 end)
+        if eliteProgress >= 30 and self:CheckYama() then return true end
+    end
+
+    -- Tushita only claims if Holy Torch is owned or rip_indra is actually live.
+    if sea == 3 and lv >= 2000 and not InventoryHas("Tushita") then
+        local tushitaReady = FindOwnedTool("Holy Torch") ~= nil
+            or FindBoss("rip_indra") ~= nil or FindBoss("rip_indra True Form") ~= nil
+        if tushitaReady and self:CheckTushita() then return true end
+    end
+
+    -- CDK has strict server/mastery prerequisites inside CheckCDK; once ready it is
+    -- permanent progression and should preempt level farm immediately.
+    if self:CheckCDK() then return true end
+
+    -- Skull Guitar may preempt only once materials/fragments plus Full Moon/current
+    -- puzzle progress make the next stage genuinely actionable.
+    if type(self.IsSoulGuitarImmediateReady) == "function"
+        and self:IsSoulGuitarImmediateReady() then
+        if self:CheckSoulGuitar() then return true end
+    end
+
+    -- Final TTK purchase is instant once all three current/legacy aliases have 300
+    -- mastery and the Beli bill is ready. Training itself still rides normal farm.
+    if SwordProgressionController and SwordProgressionController:TryTrueTripleKatana() then
+        return true
+    end
     return false
 end
 -- ══════════════════════════════════════════════════════════════════
@@ -11077,10 +11413,22 @@ task.spawn(function()
                 return
             end
 
+            -- v21.24 PERMANENT PROGRESSION PREEMPTS LEVEL FARM. This runs before
+            -- quest identity/skip/farm so reaching a real milestone (Saber 200,
+            -- Bartilo 850, Sea gates, ready permanent items, etc.) immediately
+            -- hands movement to its own ActionToken instead of waiting for the
+            -- current level quest to finish.
+            local okPriority, priorityResult = pcall(function()
+                return ItemProgression:RunImmediateChecks()
+            end)
+            if not okPriority then
+                warn("[BobonHub] Module Error: ProgressionPriority: " .. tostring(priorityResult))
+            elseif priorityResult then
+                return
+            end
 
-            -- FARM-FIRST GATE: inspect the current level/quest before any
-            -- optional progression.  A valid quest always wins, so item and
-            -- boss routines cannot pull the player away mid-farm.
+            -- LEVEL FARM FALLBACK: only runs when no eligible permanent progression
+            -- has claimed the tick.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
             if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
@@ -11233,8 +11581,8 @@ task.spawn(function()
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
                 local okSea, seaResult = pcall(function()
-                    -- Sea gates vẫn là bắt buộc ở level 700/1500; optional
-                    -- item/boss tuyệt đối không được chen vào giữa quest.
+                    -- Mandatory gates are also checked by the preemptive scheduler.
+                    -- Keep this fallback for the exact quest-transition tick.
                     return ItemProgression:RunChecks(true, false)
                 end)
                 if not okSea then
@@ -11243,10 +11591,9 @@ task.spawn(function()
                     return
                 end
 
-                -- A confirmed closed quest is the only safe window for
-                -- optional kaitun items/boss drops. The old placement was
-                -- below this return path, so Saber/Pole/BossManager were
-                -- logically unreachable and never ran at all.
+                -- Closed-quest window remains useful for long dependency work
+                -- (materials/mastery/boss drops). Direct-ready permanent goals were
+                -- already checked above and may now preempt an active quest.
                 -- The wrapper is authoritative here. A completed quest can
                 -- leave stale title text behind, so questMatch may still be
                 -- true even though there is no active quest.
@@ -11566,7 +11913,16 @@ task.spawn(function()
                             or ((hybridAcquireAttack or hybridClusterAttack)
                                 and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER"))
                     EquipCombatTool()
-                    Attack(target, questMobName)
+                    -- v21.23: once a real HP hit has started the one-shot movement
+                    -- persistence trial, stop spamming that unstacked mob for a moment.
+                    -- This keeps the NPC alive long enough to join the pile instead of
+                    -- killing it at its original spawn before the gather proof finishes.
+                    local moveTrialInFlight = targetRoot and GatherMoveTrial[targetRoot] ~= nil
+                    if not moveTrialInFlight then
+                        Attack(target, questMobName)
+                    else
+                        _G.BobonDiagnostics.Packet = "WAIT-PILE-PROOF"
+                    end
                     if os.time() - lastAttackLog >= 5 then
                         lastAttackLog = os.time()
                         DLog("ATTACK", ((hybridAcquireAttack or hybridClusterAttack)
@@ -11784,10 +12140,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.22] Full Script Loaded Successfully!")
-print("[BobonHub v21.22] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.22] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.22] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.22] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.22] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.22] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.24] Full Script Loaded Successfully!")
+print("[BobonHub v21.24] Architecture: Progression Priority | Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.24] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.24] Modules: Immediate Progression | QuestFarm | One-Pile Cluster | Combat | Factory | Material Prep | CDK/Skull | Fire HUD")
+print("[BobonHub v21.24] Progression: Saber@200 PREEMPT | Sea2/Bartilo@850/Sea3 | RaceV2 | Factory | Pole/Kabucha/Rengoku/Midnight/Acidum | Yama/Tushita/TTK/CDK | Skull Guitar")
+print("[BobonHub v21.24] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.24] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
