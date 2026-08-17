@@ -1,7 +1,21 @@
 -- =================================================================
---         BOBON HUB v21.1 STARTUP FIX | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.2 VIDEO FARM FIX | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.0 DEEP RESEARCH | Version: v21.1
+--         Base: v21.1 STARTUP FIX | Version: v21.2
+--
+--  v21.2 VIDEO FARM HOTFIX:
+--  [VF-1] Combat legacy RegisterAttack/RegisterHit probe is no longer disabled
+--         just because COMBAT_REMOTE_THREAD is absent. Missing flag now means
+--         "probe and verify by real HP delta", not "never attack".
+--  [VF-2] TOKEN-4 discovery now checks runtime/env/getgc upvalues/constants,
+--         rejects tokens that fail HP verification, and retries later.
+--  [VF-3] Cluster stacking marks a mob verified ONLY when client network
+--         ownership is proven. Local-only ghost CFrame writes no longer count.
+--  [VF-4] If no mob can be server-owned at the static quest anchor, moved stays
+--         zero so the existing fallback chases a real live quest mob first.
+--         Once ownership is acquired, the full batch can stack normally.
+--  [VF-5] Keeps Teddy-style 22-stud air farm; no forced dip/M1 fallback added.
+--
 --
 --  v21.1 STARTUP HOTFIX:
 --  [S-1] Fixed Luau compile failure: v21.0 exceeded the main-chunk local-variable limit.
@@ -333,7 +347,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.1 STARTUP FIX + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.2 VIDEO FARM FIX + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1154,7 +1168,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.1", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.2", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2062,6 +2076,8 @@ local CombatController = {
     HelperScanDone = 0,
     SessionToken = nil,
     SessionTokenSource = nil,
+    TokenScanAt = 0,
+    RejectedTokens = {},
     FailedUntil = {},
     BackendProofs = {},
     BackendLastProof = {},
@@ -2146,30 +2162,117 @@ function CombatController:ResolveNativeHelper()
 end
 
 function CombatController:ResolveSessionToken()
-    if IsCombatToken(self.SessionToken) then return self.SessionToken end
+    local now = tick()
+    local function accept(value, source)
+        if not IsCombatToken(value) then return nil end
+        local rejectedUntil = self.RejectedTokens and self.RejectedTokens[value] or 0
+        if rejectedUntil and rejectedUntil > now then return nil end
+        self.SessionToken = value
+        self.SessionTokenSource = source or "runtime-scan"
+        return value
+    end
+
+    local cached = accept(self.SessionToken, self.SessionTokenSource or "cache")
+    if cached then return cached end
+
+    -- Fast paths: several public/current clients cache the live token in an
+    -- executor env or game-global table after the legitimate combat thread starts.
+    local env = (type(getgenv) == "function" and getgenv()) or _G
     local gameGlobal = self:GetGameGlobal()
+    for _, scope in ipairs({env, _G, gameGlobal}) do
+        if type(scope) == "table" then
+            for _, key in ipairs({
+                "_lastToken", "lastToken", "LastToken", "CombatToken",
+                "combatToken", "AttackToken", "attackToken",
+            }) do
+                local token = accept(rawget(scope, key), "env:" .. key)
+                if token then return token end
+            end
+        end
+    end
+
+    -- Keep the old SendHitsToServer derivation as a cheap compatibility path.
     local helper = gameGlobal and rawget(gameGlobal, "SendHitsToServer")
     local getUps = type(getupvalues) == "function" and getupvalues
         or (type(debug) == "table" and type(debug.getupvalues) == "function"
             and debug.getupvalues or nil)
-    if type(helper) ~= "function" or type(getUps) ~= "function" then return nil end
-    local ok, upvalues = pcall(getUps, helper)
-    if not ok or type(upvalues) ~= "table" or upvalues[1] == nil then return nil end
-    -- Runtime-derived adapter observed in current public clients. It is never
-    -- trusted merely because it has the right shape; health delta is the gate.
-    local candidate = tostring(LP.UserId):sub(2, 4)
-        .. tostring(upvalues[1]):sub(11, 15)
-    if IsCombatToken(candidate) then
-        self.SessionToken = candidate
-        self.SessionTokenSource = "runtime"
-        return candidate
+    if type(helper) == "function" and type(getUps) == "function" then
+        local ok, upvalues = pcall(getUps, helper)
+        if ok and type(upvalues) == "table" then
+            for _, value in pairs(upvalues) do
+                local token = accept(value, "SendHitsToServer-upvalue")
+                if token then return token end
+            end
+            if upvalues[1] ~= nil then
+                local candidate = tostring(LP.UserId):sub(2, 4)
+                    .. tostring(upvalues[1]):sub(11, 15)
+                local token = accept(candidate, "legacy-derived")
+                if token then return token end
+            end
+        end
+    end
+
+    -- getgc is expensive on mobile executors, so scan at most once every 2s
+    -- and cap the number of inspected objects. Every candidate is still gated
+    -- by the existing HP-delta verification before becoming trusted.
+    if now - (self.TokenScanAt or 0) < 5 then return nil end
+    self.TokenScanAt = now
+
+    local getGC = type(getgc) == "function" and getgc or nil
+    local getConstants = type(getconstants) == "function" and getconstants
+        or (type(debug) == "table" and type(debug.getconstants) == "function"
+            and debug.getconstants or nil)
+    if not getGC then return nil end
+
+    local okGC, objects = pcall(getGC, true)
+    if not okGC or type(objects) ~= "table" then return nil end
+
+    local inspected = 0
+    for _, object in pairs(objects) do
+        inspected = inspected + 1
+        if inspected > 800 then break end
+
+        if type(object) == "function" then
+            if getUps then
+                local okUp, values = pcall(getUps, object)
+                if okUp and type(values) == "table" then
+                    for _, value in pairs(values) do
+                        local token = accept(value, "getgc-upvalue")
+                        if token then return token end
+                    end
+                end
+            end
+            if getConstants then
+                local okConst, values = pcall(getConstants, object)
+                if okConst and type(values) == "table" then
+                    for _, value in pairs(values) do
+                        local token = accept(value, "getgc-constant")
+                        if token then return token end
+                    end
+                end
+            end
+        elseif type(object) == "table" then
+            -- Only inspect token-looking keys in arbitrary tables to avoid
+            -- treating unrelated 8-char hex strings as combat tokens.
+            for key, value in pairs(object) do
+                if type(key) == "string" and string.find(string.lower(key), "token", 1, true) then
+                    local token = accept(value, "getgc-table:" .. key)
+                    if token then return token end
+                end
+            end
+        end
     end
     return nil
 end
 
 function CombatController:LegacyAllowed()
+    if not self:ResolveRemotes() then return false end
     local gameGlobal = self:GetGameGlobal()
-    return gameGlobal and rawget(gameGlobal, "COMBAT_REMOTE_THREAD") == false
+    local flag = gameGlobal and rawget(gameGlobal, "COMBAT_REMOTE_THREAD")
+    -- Missing flag is not evidence that the 2-argument RegisterHit path is
+    -- invalid. Let the normal HP-delta verifier probe it once and blacklist it
+    -- only when the server actually produces no damage.
+    return flag ~= true
 end
 
 local function SelectEnemyHitPart(enemy)
@@ -2357,7 +2460,14 @@ end
 function CombatController:FailBackend(backend, reason)
     if not backend then return end
     self.FailedUntil[backend] = tick() + (_G.Settings.CombatBackendRetry or 12)
-    if backend == "TOKEN-4" then self.SessionToken = nil end
+    if backend == "TOKEN-4" then
+        if IsCombatToken(self.SessionToken) then
+            self.RejectedTokens = self.RejectedTokens or {}
+            self.RejectedTokens[self.SessionToken] = tick() + 60
+        end
+        self.SessionToken = nil
+        self.SessionTokenSource = nil
+    end
     if backend == "CLIENT-HELPER" then
         self.NativeHelper = nil
         self.HelperScanDone = 0
@@ -2621,13 +2731,21 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
         end
         return hitOk
     elseif backend == "LEGACY-2" then
+        -- Current public clients commonly use Head as the 2-argument hit part.
+        -- Keep entry.Part as fallback for rigs without Head.
         local hitList = {}
+        local basePart = nil
         for _, entry in ipairs(entries) do
-            hitList[#hitList + 1] = { entry.Model, entry.Part }
+            local part = entry.Model:FindFirstChild("Head") or entry.Part
+            if part and part:IsA("BasePart") then
+                hitList[#hitList + 1] = { entry.Model, part }
+                basePart = basePart or part
+            end
         end
+        if not basePart or #hitList == 0 then return false end
         pcall(function() self.RegisterAttack:FireServer(0) end)
         local hitOk = pcall(function()
-            self.RegisterHit:FireServer(entries[1].Part, hitList)
+            self.RegisterHit:FireServer(basePart, hitList)
         end)
         return hitOk
     elseif backend == "GUN-REMOTE" then
@@ -2848,6 +2966,8 @@ function CombatController:Cleanup()
     self.HelperScanDone = 0
     self.SessionToken = nil
     self.SessionTokenSource = nil
+    self.TokenScanAt = 0
+    self.RejectedTokens = {}
     self.GameGlobal = nil
     self.VerifiedBackend = nil
     self.FastVerified = false
@@ -3725,6 +3845,7 @@ function ClusterFarmController:RestackBatch()
     local anchor = anchorCF.Position
     local now = tick()
     local kept, moved = {}, 0
+
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
         local root = model and model:FindFirstChild("HumanoidRootPart")
@@ -3732,18 +3853,29 @@ function ClusterFarmController:RestackBatch()
         if model and model.Parent and root and root.Parent and hum and hum.Health > 0
             and self:IsModelAllowed(model) then
             kept[#kept + 1] = {Model=model, Humanoid=hum, Root=root}
-            local ok = pcall(function()
-                local rot = root.CFrame.Rotation
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(anchor) * rot
-            end)
-            if ok then
-                VerifiedGatherRoots[root] = now
-                moved = moved + 1
+
+            -- CRITICAL: a successful local CFrame assignment does not prove the
+            -- server accepted the mob move. Only a root we can prove we own is
+            -- allowed to become a verified stacked target.
+            local own = ClientOwnsMob(root)
+            if own == true then
+                local ok = pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = CFrame.new(anchor) * rot
+                end)
+                if ok then
+                    VerifiedGatherRoots[root] = now
+                    moved = moved + 1
+                end
+            else
+                -- Never keep stale verification after ownership is lost.
+                VerifiedGatherRoots[root] = nil
             end
         end
     end
+
     self.LastBatch = kept
     if moved > 0 then state.ClusterLastMoved = now end
     return moved
@@ -3801,9 +3933,9 @@ function ClusterFarmController:Tick()
     self.LastBatchAt = now
     state.ClusterLastSeen = #candidates > 0 and now or (state.ClusterLastSeen or 0)
 
-    -- Ownership is counted only for diagnostics. Every live candidate gets the
-    -- same CFrame write in this pass; otherwise the old code could wait until the
-    -- current target died before the next NPC became locally movable.
+    -- Ownership is both diagnostic and authoritative. Unknown/server-owned
+    -- roots stay in the candidate batch but are NOT marked verified. This lets
+    -- the farm fallback chase a real mob, acquire ownership, then stack the batch.
     local owned, unknown, other = 0, 0, 0
     for _, entry in ipairs(candidates) do
         local own = ClientOwnsMob(entry.Root)
@@ -9672,10 +9804,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.1] Full Script Loaded Successfully!")
-print("[BobonHub v21.1] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.1] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.1] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.1] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.2] Full Script Loaded Successfully!")
+print("[BobonHub v21.2] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.2] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.2] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.2] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.2] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.2] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
