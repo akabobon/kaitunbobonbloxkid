@@ -1,7 +1,24 @@
 -- =================================================================
---         BOBON HUB v18.2 CONFIG COMPLETE | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.3 QUEST GATHER + NEAR SNAP | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
 --         Base: v17.0 FULL PROGRESSION | Version: v18.0 KATAKURI AUDITED
+--
+--  v18.3 FARM MOVEMENT / QUEST GATHER FIXES:
+--  [QG-1] Nearby regular quest mobs use one conservative short CFrame snap to
+--         the hover anchor; long/medium travel still uses TravelManager physics.
+--  [QG-2] Near snap is quest-only, Farm-owner-only, distance/cooldown limited,
+--         never used for bosses/items/Sea/Katakuri or cross-region travel.
+--  [QG-3] Bring requires a currently visible active quest and the canonical
+--         ActiveQuestMob; stale/completed quest state releases the cluster.
+--  [QG-4] BossManager never calls bring; Katakuri bring is disabled so boss
+--         and endgame fights never move surrounding NPCs.
+--  [QG-5] UI is unchanged.
+--
+--  v18.4 DOUGH-GATHER FIX:
+--  [DG-1] Normal level farm bring remains active-quest-only.
+--  [DG-2] Dough King preparation may gather Cake Land kill mobs and Cocoa mobs.
+--  [DG-3] Dough King itself, Elite hunters and all bosses are never gathered.
+--  [DG-4] Bring still requires verified client network ownership.
 --
 --  v18 AUDIT / ENDGAME FIXES:
 --  [K-1] Max level 2800 no longer stays on Grand Devotee forever.
@@ -237,7 +254,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.2 CONFIG COMPLETE] Loading...")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -257,7 +274,7 @@ local CoreGui      = game:GetService("CoreGui")
 local LP      = Players.LocalPlayer
 local Remotes = RS:WaitForChild("Remotes", 10)
 local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v18.2 CONFIG COMPLETE] CommF_ not found!") return end
+if not CommF_ then warn("[BobonHub v18.4 DOUGH GATHER FIXED] CommF_ not found!") return end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -365,6 +382,11 @@ _G.Settings = {
     GatherPersistTolerance = 8,
     GatherVerifiedTTL   = 0.6,
     GatherInterval      = 0.12,
+    -- Core movement optimization: one short snap only for the active quest mob.
+    -- This is intentionally not exposed in Configs; it is part of the farm core.
+    NearQuestSnap        = true,
+    NearQuestSnapDistance= 22,
+    NearQuestSnapCooldown= 0.45,
     -- Optional item failure/timeout must not block level farming forever.
     ItemRetryCooldown   = 300,
     ServerHopCooldown   = 120,
@@ -2942,6 +2964,11 @@ function FarmPositionController:GatherMobCluster(mobName, primary)
 
     if not primary or not mobName then return StopBring("INVALID") end
     local activeQuestMob = _G.State.ActiveQuestMob
+    -- Never bring from a stale cached quest identity. The quest wrapper must
+    -- still be active right now; when it closes/completes, release immediately.
+    if HasQuest() ~= true then
+        return StopBring("NO-ACTIVE-QUEST")
+    end
     if not activeQuestMob
         or string.lower(tostring(activeQuestMob))
             ~= string.lower(tostring(mobName))
@@ -3155,6 +3182,7 @@ TravelManager.AtCombatAnchor = false
 TravelManager.AtCombatTarget = nil
 TravelManager.DodgeOffset = Vector3.zero
 TravelManager.DodgeUntil = 0
+TravelManager.LastNearQuestSnap = 0
 TravelManager.NoclipConn = nil
 TravelManager.PhysicsBV = nil
 TravelManager.PhysicsBG = nil
@@ -3677,6 +3705,48 @@ function TravelManager:Request(targetCF, owner, options)
                 continue
             end
 
+
+            -- v18.3 QUEST-ONLY NEAR SNAP. This is a conservative movement
+            -- shortcut, not an anti-kick/anti-cheat bypass: only the regular Farm
+            -- owner, a currently active canonical quest mob, and a short distance
+            -- are eligible. Boss/item/Sea/Katakuri owners always use normal travel.
+            if isCombatHover and owner == "Farm" and _G.Settings.NearQuestSnap
+                and dist > arrivalThresh
+                and dist <= (_G.Settings.NearQuestSnapDistance or 22)
+                and stepNow - (self.LastNearQuestSnap or 0)
+                    >= (_G.Settings.NearQuestSnapCooldown or 0.45) then
+                local snapModel = self.TargetRef and typeof(self.TargetRef) == "Instance"
+                    and (self.TargetRef:IsA("Model") and self.TargetRef
+                        or self.TargetRef:FindFirstAncestorOfClass("Model")) or nil
+                local activeQuestMob = _G.State.ActiveQuestMob
+                if HasQuest() == true and activeQuestMob and snapModel
+                    and _G.State.FarmTarget == snapModel
+                    and IsEnemyNamed(snapModel, activeQuestMob) then
+                    local look = combatLookPos or targetPos
+                    local flatLook = Vector3.new(look.X, targetPos.Y, look.Z)
+                    local snapCF = (flatLook - targetPos).Magnitude > 0.05
+                        and CFrame.lookAt(targetPos, flatLook)
+                        or (CFrame.new(targetPos) * root.CFrame.Rotation)
+                    local okSnap = pcall(function()
+                        root.CFrame = snapCF
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        bg.CFrame = snapCF
+                    end)
+                    if okSnap then
+                        self.LastNearQuestSnap = stepNow
+                        self.AtCombatAnchor = true
+                        self.AtCombatTarget = self.TargetRef
+                        _G.State.LastMoveTime = os.time()
+                        _G.State.LastPosition = targetPos
+                        lastPos = targetPos
+                        travelStart = os.time()
+                        stuckTimer = 0
+                        task.wait(0.03)
+                        continue
+                    end
+                end
+            end
 
             -- Arrival detection
             if dist <= arrivalThresh then
@@ -5974,39 +6044,67 @@ function KatakuriController:StartAction(status, body)
 end
 
 function KatakuriController:GatherSameMob(primary)
+    -- v18.4: normal leveling bring remains quest-only, but Dough King summon
+    -- preparation is allowed to cluster Cake Land / Cocoa fodder. Bosses and
+    -- Elite hunters are deliberately excluded. Only network-owned NPC roots
+    -- are moved, so this cannot create client-only ghost/dummy enemies.
     if not _G.Settings.GatherMobs or not primary or not _G.State:IsTargetValid(primary) then return 0 end
+    if _G.State.MovementOwner ~= "Katakuri" then return 0 end
+
     local primaryRoot = primary:FindFirstChild("HumanoidRootPart")
     local folder = workspace:FindFirstChild("Enemies")
     if not primaryRoot or not folder or not TravelManager:IsAtCombatAnchor(primaryRoot) then return 0 end
-    if _G.State.MovementOwner ~= "Katakuri" then return 0 end
+
+    local function InList(model, list)
+        for _, wanted in ipairs(list) do
+            if IsEnemyNamed(model, wanted) then return true end
+        end
+        return false
+    end
+
+    local group
+    if InList(primary, CAKE_MOBS) then
+        group = CAKE_MOBS
+    elseif InList(primary, COCOA_MOBS) then
+        group = COCOA_MOBS
+    else
+        -- Dough King, Elite bosses and every other progression target stay
+        -- single-target and are never brought.
+        return 0
+    end
+
     ExpandSimulationRadius()
     local moved, index = 0, 0
+    local maxDistance = math.min(_G.Settings.GatherMaxDistance or 250, 250)
+    local spacing = math.max(_G.Settings.GatherSpacing or 5, 3)
+    local anchor = primaryRoot.Position
+
     for _, mob in ipairs(folder:GetChildren()) do
-        if mob ~= primary and IsEnemyNamed(mob, primary.Name) then
+        if mob ~= primary and InList(mob, group) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and not root.Anchored then
-                local distance = (root.Position - primaryRoot.Position).Magnitude
-                if distance <= math.min(_G.Settings.GatherMaxDistance or 250, 250)
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPos, mobPos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(mobPos) and IsAllowedWorldPosition(mobPos)
+                    and (mobPos - anchor).Magnitude <= maxDistance
                     and ClientOwnsMob(root) == true then
                     index = index + 1
                     local angle = index * 1.7
-                    local spacing = math.max(_G.Settings.GatherSpacing or 5, 3)
-                    local destination = primaryRoot.Position + Vector3.new(
-                        math.cos(angle) * spacing, 0, math.sin(angle) * spacing)
-                    if ClientOwnsMob(root) == true then
-                        local ok = pcall(function()
-                            root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                        end)
-                        if ok then moved = moved + 1 end
-                    end
+                    local destination = anchor + Vector3.new(
+                        math.cos(angle) * spacing,
+                        0,
+                        math.sin(angle) * spacing
+                    )
+                    pcall(function()
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        root.CFrame = CFrame.new(destination, anchor)
+                    end)
+                    moved = moved + 1
                 end
             end
         end
     end
-    if moved > 0 then _G.BobonDiagnostics.Bring = "KATAKURI-OWNED" end
     return moved
 end
 
@@ -6021,6 +6119,8 @@ function KatakuriController:FightModel(model, token, timeout)
         EquipCombatTool()
         TravelManager:Request(root, "Katakuri", {arrivalThreshold=_G.Settings.FarmArrivalThreshold, combatHover=true})
         if TravelManager:IsAtCombatAnchor(root) then
+            -- Only Cake/Cocoa fodder is gathered; GatherSameMob returns 0 for
+            -- Dough King, Elite hunters and every boss target.
             self:GatherSameMob(model)
             Attack(model, model.Name)
         end
@@ -6926,6 +7026,7 @@ task.spawn(function()
                     -- is true. Leaving the anchor immediately stops forcing
                     -- NPC physics instead of retaining a stale cluster.
                     local canGather = _G.Settings.GatherMobs
+                        and HasQuest() == true
                         and _G.State.ActiveQuestMob ~= nil
                         and atAnchor
                         and CombatController:IsDamageReady()
@@ -7122,10 +7223,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v18.2 CONFIG COMPLETE] Full Script Loaded Successfully!")
-print("[BobonHub v18.2 CONFIG COMPLETE] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v18.2 CONFIG COMPLETE] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
-print("[BobonHub v18.2 CONFIG COMPLETE] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
-print("[BobonHub v18.2 CONFIG COMPLETE] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
-print("[BobonHub v18.2 CONFIG COMPLETE] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
-print("[BobonHub v18.2 CONFIG COMPLETE] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Full Script Loaded Successfully!")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
+print("[BobonHub v18.4 DOUGH GATHER FIXED] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
