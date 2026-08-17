@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v21.24.3 LOCAL-LIMIT STARTUP FIX | IMMEDIATE PROGRESSION | ALL-MOB PILE
+--         BOBON HUB v21.25 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.22 CONFIRMED-BOOT + v21.23 PILE FIXES | Version: v21.24.3
+--         Base: v21.24.3 STARTUP-SAFE | Version: v21.25
 --
 --
 --  v21.24.3 STARTUP ROOT-CAUSE FIX:
@@ -641,7 +641,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.24.3 LOCAL-LIMIT STARTUP FIX + IMMEDIATE PROGRESSION] Loading...")
+print("[BobonHub v21.25 FULL PROGRESSION V2 + ALL MELEE + ALL-MOB PILE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -925,7 +925,7 @@ _G.Settings = {
     QuestRetryBackoff   = 6,
     QuestAcceptGrace    = 6,
     RecoveryDelay       = 3,
-    ActionLockTimeout   = 60,   -- [G-9] đứng im tối đa 60s thì token bị force-release
+    ActionLockTimeout   = 240,  -- v21.25 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
     FruitEnabled        = true,
     AutoStats           = true,
@@ -1014,7 +1014,7 @@ _G.Settings = {
     NearQuestSnapDistance= 70,
     NearQuestSnapCooldown= 0.08,
     -- Optional item failure/timeout must not block level farming forever.
-    ItemRetryCooldown   = 300,
+    ItemRetryCooldown   = 15,
     ServerHopCooldown   = 120,
     MaxFarmDistance     = 300,
     StatBatchLimit      = 100,
@@ -1056,7 +1056,7 @@ _G.Settings = {
     AutoRaceV2          = true,
     AutoCDK             = true,
     AutoSoulGuitar      = true,
-    ProgressionRetry    = 45,
+    ProgressionRetry    = 8,
     InventoryCacheTTL   = 5,
     OptionalWorkTimeout = 150,
     -- v21 researched material / puzzle controllers. Core-only; no extra config keys.
@@ -1585,7 +1585,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.24.3", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.25", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -6711,15 +6711,21 @@ local function TravelAndWait(owner, token, cf, opts)
     local timeout = os.time() + (opts.timeout or 60)
     local arrived = false
     while _G.State:IsActionValid(token) and IsAlive() and os.time() < timeout do
+        _G.State:TouchAction(token)
         hrp = HRP()
         if hrp and (hrp.Position - destination).Magnitude <= thresh then
             arrived = true
             break
         end
-        task.wait(0.5)
+        task.wait(0.25)
     end
     if not arrived then return false end
-    task.wait(opts.settle or 1)
+    _G.State:TouchAction(token)
+    local settleUntil = tick() + (opts.settle or 1)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < settleUntil do
+        _G.State:TouchAction(token)
+        task.wait(0.10)
+    end
     return _G.State:IsActionValid(token) and IsAlive()
 end
 -- ══════════════════════════════════════════════════════════════════
@@ -7444,8 +7450,10 @@ end
 -- ══════════════════════════════════════════════════════════════════
 local FightingStyleController = {
     LastProbe = 0,
+    LastPurchaseProbe = 0,
     LastStatus = "idle",
     SanguineKnownOwned = false,
+    KnownPurchased = {},
 }
 
 local function InvokeStyle(remote, ...)
@@ -7462,147 +7470,198 @@ function FightingStyleController:SetPreferred(name, reason)
     DLog("STYLE", "Preferred=" .. tostring(name) .. " | " .. tostring(self.LastStatus))
 end
 
-function FightingStyleController:Tick()
-    if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee or not IsAlive() then
-        _G.State.PreferredCombatTool = nil
-        return false
+function FightingStyleController:Mastery(value)
+    local names = type(value) == "table" and value or {value}
+    local best, bestName = 0, names[1]
+    for _, name in ipairs(names) do
+        local m = EffectiveMastery(name)
+        if m > best then best, bestName = m, name end
     end
-    -- Never change equipment while a puzzle/boss/sea subsystem owns an action.
+    return best, bestName
+end
+
+function FightingStyleController:Live(value)
+    local names = type(value) == "table" and value or {value}
+    for _, name in ipairs(names) do
+        if FindOwnedTool(name) then return true, name end
+    end
+    return false, nil
+end
+
+function FightingStyleController:Known(value)
+    local names = type(value) == "table" and value or {value}
+    for _, name in ipairs(names) do
+        if FindOwnedTool(name) or InventoryHas(name) or EffectiveMastery(name) > 0
+            or self.KnownPurchased[name] then
+            return true, name
+        end
+    end
+    return false, nil
+end
+
+function FightingStyleController:MarkKnown(value)
+    local names = type(value) == "table" and value or {value}
+    for _, name in ipairs(names) do self.KnownPurchased[name] = true end
+    InventoryCache.At = 0
+    WeaponInventoryCache.At = 0
+end
+
+function FightingStyleController:Reequip(value, remote)
+    local names = type(value) == "table" and value or {value}
+    local live, liveName = self:Live(names)
+    if live then return true, liveName end
+    if tick() - (self.LastProbe or 0) < 0.80 then return false, nil end
+    self.LastProbe = tick()
+    if remote == "DragonClaw" then
+        pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
+        pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
+    elseif remote == "BuySharkmanKarate" then
+        InvokeStyle(remote, true); InvokeStyle(remote)
+    elseif remote == "BuyDragonTalon" then
+        InvokeStyle(remote, true); InvokeStyle(remote)
+    elseif remote == "BuyGodhuman" then
+        InvokeStyle(remote, true); InvokeStyle(remote)
+    elseif remote == "BuySanguineArt" then
+        InvokeStyle(remote, true); InvokeStyle(remote)
+    else
+        InvokeStyle(remote)
+    end
+    task.wait(0.08)
+    return self:Live(names)
+end
+
+-- Purchase every fighting style as soon as its real currency/prerequisites permit.
+-- This is deliberately independent from mastery training: buying Dark Step at 150k
+-- must not wait for Saber/quest windows, and already-purchased styles may be re-equipped
+-- by their normal server endpoint without paying again.
+function FightingStyleController:PurchaseTick()
+    if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee or not IsAlive() then return false end
     if _G.State.ActiveActionToken ~= 0 then return false end
-    if FindOwnedTool("Sanguine Art") then self.SanguineKnownOwned = true end
+    if tick() - (self.LastPurchaseProbe or 0) < 0.65 then return false end
 
-    local function aliasList(value)
-        return type(value) == "table" and value or {value}
-    end
-
-    local function ownedAlias(value)
-        for _, name in ipairs(aliasList(value)) do
-            if FindOwnedTool(name) then return true, name end
-        end
-        return false, nil
-    end
-
-    local function aliasMastery(value)
-        local best, bestName = 0, nil
-        for _, name in ipairs(aliasList(value)) do
-            local m = EffectiveMastery(name)
-            if m > best or not bestName then best, bestName = m, name end
-        end
-        return best, bestName
-    end
-
-    local function train(value, target)
-        local owned, liveName = ownedAlias(value)
-        if not owned then return false end
-        local mastery = aliasMastery(value)
-        if mastery < target then
-            self:SetPreferred(liveName, ("Mastery %s %d/%d"):format(liveName, mastery, target))
+    local function buySimple(names, money, remote, label)
+        local known = self:Known(names)
+        if known then return false end
+        if Beli() < money then return false end
+        self.LastPurchaseProbe = tick()
+        local ok = InvokeStyle(remote)
+        if ok then
+            self:MarkKnown(names)
+            _G.BobonStatus = "Melee: Bought/claimed " .. label
             return true
         end
         return false
     end
 
-    -- Current public names are listed first; legacy/internal names remain aliases
-    -- because some server builds/executors still expose the older Tool names.
-    local phase1 = {
-        {names={"Dark Step","Black Leg"}, target=300, remote="BuyBlackLeg"},
-        {names={"Electric","Electro"}, target=300, remote="BuyElectro"},
-        {names={"Water Kung Fu","Fishman Karate"}, target=300, remote="BuyFishmanKarate"},
-        {names={"Dragon Breath","Dragon Claw"}, target=300, remote="DragonClaw"},
-    }
+    if buySimple({"Dark Step","Black Leg"},150000,"BuyBlackLeg","Dark Step") then return true end
+    if buySimple({"Electric","Electro"},500000,"BuyElectro","Electric") then return true end
+    if buySimple({"Water Kung Fu","Fishman Karate"},750000,"BuyFishmanKarate","Water Kung Fu") then return true end
 
-    -- Phase 1: prerequisites for Superhuman.
-    for _, row in ipairs(phase1) do
-        if train(row.names, row.target) then return true end
-        local owned = ownedAlias(row.names)
-        if not owned and tick() - self.LastProbe >= 15 then
-            self.LastProbe = tick()
-            if row.remote == "DragonClaw" then
-                if CanSpendFragments(1500, "Full Melee: Dragon Breath", 100) then
-                    pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
-                    pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
-                end
-            else
-                InvokeStyle(row.remote)
-            end
-            return false
-        end
+    if not self:Known({"Dragon Breath","Dragon Claw"}) and GetSea() >= 2
+        and CanSpendFragments(1500,"Full Melee: Dragon Breath",100) then
+        self.LastPurchaseProbe = tick()
+        pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
+        local ok = pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
+        if ok then self:MarkKnown({"Dragon Breath","Dragon Claw"}); _G.BobonStatus="Melee: Bought/claimed Dragon Breath"; return true end
     end
 
-    if not FindOwnedTool("Superhuman") and tick() - self.LastProbe >= 15 then
-        self.LastProbe = tick()
-        InvokeStyle("BuySuperhuman")
+    local darkM = self:Mastery({"Dark Step","Black Leg"})
+    local electroM = self:Mastery({"Electric","Electro"})
+    local waterM = self:Mastery({"Water Kung Fu","Fishman Karate"})
+    local dragonM = self:Mastery({"Dragon Breath","Dragon Claw"})
+    if not self:Known("Superhuman") and darkM >= 300 and electroM >= 300 and waterM >= 300 and dragonM >= 300
+        and Beli() >= 3000000 then
+        self.LastPurchaseProbe=tick(); local ok=InvokeStyle("BuySuperhuman")
+        if ok then self:MarkKnown("Superhuman"); _G.BobonStatus="Melee: Bought/claimed Superhuman"; return true end
+    end
+
+    -- Direct probes for V2 styles are harmless when their key/quest is not ready;
+    -- the dedicated unlock controller below performs the actual key/Previous-Hero work.
+    if GetSea() >= 2 and darkM >= 400 and not self:Known("Death Step")
+        and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Death Step",100) then
+        self.LastPurchaseProbe=tick(); InvokeStyle("BuyDeathStep",true); local ok=InvokeStyle("BuyDeathStep")
+        if ok and (FindOwnedTool("Death Step") or InventoryHas("Death Step") or EffectiveMastery("Death Step")>0) then self:MarkKnown("Death Step"); return true end
+    end
+    if GetSea() >= 2 and waterM >= 400 and not self:Known("Sharkman Karate")
+        and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Sharkman Karate",100) then
+        self.LastPurchaseProbe=tick(); InvokeStyle("BuySharkmanKarate",true); local ok=InvokeStyle("BuySharkmanKarate")
+        if ok and (FindOwnedTool("Sharkman Karate") or InventoryHas("Sharkman Karate") or EffectiveMastery("Sharkman Karate")>0) then self:MarkKnown("Sharkman Karate"); return true end
+    end
+    if GetSea() == 3 and dragonM >= 400 and (FindOwnedTool("Fire Essence") or InventoryHas("Fire Essence")) and not self:Known("Dragon Talon")
+        and Beli() >= 3000000 and CanSpendFragments(5000,"Full Melee: Dragon Talon",100) then
+        self.LastPurchaseProbe=tick(); InvokeStyle("BuyDragonTalon",true); local ok=InvokeStyle("BuyDragonTalon")
+        if ok and (FindOwnedTool("Dragon Talon") or InventoryHas("Dragon Talon") or EffectiveMastery("Dragon Talon")>0) then self:MarkKnown("Dragon Talon"); return true end
+    end
+
+    local superM=self:Mastery("Superhuman")
+    local deathM=self:Mastery("Death Step")
+    local sharkM=self:Mastery("Sharkman Karate")
+    local clawM=self:Mastery("Electric Claw")
+    local talonM=self:Mastery("Dragon Talon")
+    if GetSea()==3 and not self:Known("Godhuman") and superM>=400 and deathM>=400 and sharkM>=400 and clawM>=400 and talonM>=400
+        and Beli()>=5000000 and CanSpendFragments(5000,"Full Melee: Godhuman",110)
+        and MaterialCount("Fish Tail")>=20 and MaterialCount("Magma Ore")>=20
+        and MaterialCount("Mystic Droplet")>=10 and MaterialCount("Dragon Scale")>=10 then
+        self.LastPurchaseProbe=tick(); InvokeStyle("BuyGodhuman",true); local ok=InvokeStyle("BuyGodhuman")
+        if ok then self:MarkKnown("Godhuman"); _G.BobonStatus="Melee: Bought/claimed Godhuman"; return true end
+    end
+
+    if GetSea()==3 and not self:Known("Sanguine Art") and Beli()>=5000000
+        and CanSpendFragments(5000,"Full Melee: Sanguine Art",105)
+        and MaterialCount("Leviathan Heart")>=1 and MaterialCount("Dark Fragment")>=2
+        and MaterialCount("Demonic Wisp")>=20 and MaterialCount("Vampire Fang")>=20 then
+        self.LastPurchaseProbe=tick(); InvokeStyle("BuySanguineArt",true); local ok=InvokeStyle("BuySanguineArt")
+        if ok then self:MarkKnown("Sanguine Art"); self.SanguineKnownOwned=true; _G.BobonStatus="Melee: Bought/claimed Sanguine Art"; return true end
+    end
+    return false
+end
+
+function FightingStyleController:Tick()
+    if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee or not IsAlive() then
+        _G.State.PreferredCombatTool = nil
         return false
     end
-    if train("Superhuman", 400) then return true end
+    if _G.State.ActiveActionToken ~= 0 then return false end
+    if FindOwnedTool("Sanguine Art") or InventoryHas("Sanguine Art") then self.SanguineKnownOwned = true end
 
-    -- Phase 2: V2 styles required for Godhuman.
-    local advanced = {
-        {base={"Dark Step","Black Leg"}, baseM=400, baseRemote="BuyBlackLeg", name="Death Step", remote="BuyDeathStep"},
-        {base={"Water Kung Fu","Fishman Karate"}, baseM=400, baseRemote="BuyFishmanKarate", name="Sharkman Karate", remote="BuySharkmanKarate"},
-        {base={"Electric","Electro"}, baseM=400, baseRemote="BuyElectro", name="Electric Claw", remote="BuyElectricClaw"},
-        {base={"Dragon Breath","Dragon Claw"}, baseM=400, baseRemote="DragonClaw", name="Dragon Talon", remote="BuyDragonTalon"},
-    }
-    for _, row in ipairs(advanced) do
-        if not FindOwnedTool(row.name) then
-            -- After Superhuman the four base styles are normally no longer live
-            -- in Backpack. Re-equip an already purchased base style before asking
-            -- normal quest farm to raise it from 300 -> 400.
-            local baseMastery = aliasMastery(row.base)
-            if baseMastery < row.baseM then
-                if train(row.base, row.baseM) then return true end
-                if tick() - self.LastProbe >= 15 then
-                    self.LastProbe = tick()
-                    if row.baseRemote == "DragonClaw" then
-                        if CanSpendFragments(1500, "Full Melee: Dragon Breath", 100) then
-                            pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
-                            pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
-                        end
-                    else
-                        InvokeStyle(row.baseRemote)
-                    end
-                end
-                return false
-            end
-            if tick() - self.LastProbe >= 15 and CanSpendFragments(5000, "Full Melee: V2 Fighting Style", 100) then
-                self.LastProbe = tick()
-                if row.name == "Sharkman Karate" then
-                    InvokeStyle(row.remote, true)
-                    InvokeStyle(row.remote)
-                elseif row.name == "Electric Claw" then
-                    local ok, state = InvokeStyle(row.remote, true)
-                    if ok and state == 4 then InvokeStyle(row.remote, "Start") else InvokeStyle(row.remote) end
-                else
-                    InvokeStyle(row.remote)
-                end
-            end
-            return false
+    local function train(names, target, remote, label)
+        local mastery = self:Mastery(names)
+        if mastery >= target then return false end
+        local live, liveName = self:Live(names)
+        if not live then
+            local known = self:Known(names)
+            if not known then return false end
+            self:Reequip(names, remote)
+            live, liveName = self:Live(names)
         end
-        if train(row.name, 400) then return true end
-    end
-
-    if not FindOwnedTool("Godhuman") then
-        if tick() - self.LastProbe >= 20 and CanSpendFragments(5000, "Full Melee: Godhuman", 110) then
-            self.LastProbe = tick()
-            InvokeStyle("BuyGodhuman", true)
-            InvokeStyle("BuyGodhuman")
+        if live and liveName then
+            self:SetPreferred(liveName, ("Mastery %s %d/%d"):format(label or liveName, mastery, target))
+            return true
         end
         return false
     end
 
-    -- Godhuman is the stable default after the mastery chain is complete.
-    self:SetPreferred("Godhuman", "Godhuman ready")
+    -- Superhuman chain: all four V1 styles to 300.
+    if train({"Dark Step","Black Leg"},300,"BuyBlackLeg","Dark Step") then return true end
+    if train({"Electric","Electro"},300,"BuyElectro","Electric") then return true end
+    if train({"Water Kung Fu","Fishman Karate"},300,"BuyFishmanKarate","Water Kung Fu") then return true end
+    if train({"Dragon Breath","Dragon Claw"},300,"DragonClaw","Dragon Breath") then return true end
+    if train("Superhuman",400,"BuySuperhuman","Superhuman") then return true end
 
-    -- Sanguine is an optional end-game purchase. The server validates Heart,
-    -- materials, money and fragments; a failed probe changes no movement/state.
-    if GetSea() == 3 and not self.SanguineKnownOwned and not FindOwnedTool("Sanguine Art")
-        and Level() >= 2400 and tick() - self.LastProbe >= 30 and CanSpendFragments(5000, "Full Melee: Sanguine Art", 105) then
-        self.LastProbe = tick()
-        InvokeStyle("BuySanguineArt", true)
-        InvokeStyle("BuySanguineArt")
+    -- Godhuman chain: raise the four bases to 400, then every V2 to 400.
+    if train({"Dark Step","Black Leg"},400,"BuyBlackLeg","Dark Step") then return true end
+    if train({"Electric","Electro"},400,"BuyElectro","Electric") then return true end
+    if train({"Water Kung Fu","Fishman Karate"},400,"BuyFishmanKarate","Water Kung Fu") then return true end
+    if train({"Dragon Breath","Dragon Claw"},400,"DragonClaw","Dragon Breath") then return true end
+    if train("Death Step",400,"BuyDeathStep","Death Step") then return true end
+    if train("Sharkman Karate",400,"BuySharkmanKarate","Sharkman Karate") then return true end
+    if train("Electric Claw",400,"BuyElectricClaw","Electric Claw") then return true end
+    if train("Dragon Talon",400,"BuyDragonTalon","Dragon Talon") then return true end
+
+    if self:Known("Godhuman") then
+        self:Reequip("Godhuman","BuyGodhuman")
+        self:SetPreferred("Godhuman","Godhuman ready")
     end
-    -- Godhuman/Sanguine purchase probes do not need to monopolize the combat
-    -- preference. Return false so sword mastery can train during normal farm.
     return false
 end
 
@@ -7827,154 +7886,188 @@ function ItemProgression:CheckSaber()
     PrepareClaimedAction("Saber")
     self.NextOptional.Saber = tick() + 5
     _G.State:SetMode("GettingItem")
-    _G.BobonStatus = "Item: Saber Sword"
-
+    _G.BobonStatus = "Saber 1/8 • Jungle plates"
 
     task.spawn(function()
         local ok, err = xpcall(function()
+            local function TouchAction() _G.State:TouchAction(myToken) end
             local function EquipNamed(name)
-                local c = Char()
-                local hum = c and c:FindFirstChildOfClass("Humanoid")
-                local backpack = LP:FindFirstChildOfClass("Backpack")
-                local tool = (c and c:FindFirstChild(name))
-                    or (backpack and backpack:FindFirstChild(name))
+                local c = Char(); local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local tool = FindOwnedTool(name)
                 if not tool or not hum then return false end
-                if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end) end
-                task.wait(0.2)
-                return c and c:FindFirstChild(name) ~= nil
+                if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end); task.wait(0.15) end
+                return tool.Parent == c
             end
-
-            -- Current Saber flow: Jungle plates -> Torch/Burn -> Cup/SickMan
-            -- -> RichSon/Mob Leader -> Relic -> Saber Expert.
-            local map = workspace:FindFirstChild("Map")
-            local jungle = map and map:FindFirstChild("Jungle")
-            local plates = jungle and jungle:FindFirstChild("QuestPlates")
-            local plateDoor = plates and plates:FindFirstChild("Door")
-            if plateDoor and plateDoor.Transparency == 0 then
-                for i = 1, 5 do
-                    local plate = plates:FindFirstChild("Plate" .. i)
-                    local button = plate and plate:FindFirstChild("Button")
-                    if button and _G.State:IsActionValid(myToken) then
-                        TravelAndWait("Saber", myToken, button.CFrame, {
-                            timeout = 60, arrivalThreshold = 5, settle = 0.35,
-                        })
-                    end
+            local function WaitTool(name, seconds)
+                local deadline=tick()+(seconds or 5)
+                while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
+                    TouchAction(); local tool=FindOwnedTool(name); if tool then return tool end; task.wait(0.15)
                 end
+                return nil
             end
-
-            if not _G.State:IsActionValid(myToken) then return end
-            if not HasItem("Torch") then
-                TravelAndWait("Saber", myToken, CFrame.new(-1610,11,164), {
-                    timeout = 90, arrivalThreshold = 6, settle = 1,
-                })
-            end
-            if HasItem("Torch") and EquipNamed("Torch") then
-                TravelAndWait("Saber", myToken, CFrame.new(1114,5,4350), {
-                    timeout = 90, arrivalThreshold = 7, settle = 1,
-                })
-            end
-
-            if not _G.State:IsActionValid(myToken) then return end
-            local sickProgress
-            pcall(function()
-                sickProgress = CommF_:InvokeServer("ProQuestProgress", "SickMan")
-            end)
-            if sickProgress ~= 0 then
-                pcall(function() CommF_:InvokeServer("ProQuestProgress", "GetCup") end)
-                if EquipNamed("Cup") then
-                    local cup = Char() and Char():FindFirstChild("Cup")
-                    if cup then
-                        pcall(function()
-                            CommF_:InvokeServer("ProQuestProgress", "FillCup", cup)
-                        end)
-                    end
+            local function TouchPart(part)
+                if not part or not part:IsA("BasePart") then return false end
+                local root=HRP(); if not root then return false end
+                TouchAction()
+                local fired=false
+                if type(firetouchinterest)=="function" then
+                    fired=pcall(function() firetouchinterest(root,part,0); task.wait(0.08); firetouchinterest(root,part,1) end)
                 end
-                pcall(function() CommF_:InvokeServer("ProQuestProgress", "SickMan") end)
+                pcall(function() root.CFrame=part.CFrame end)
+                task.wait(0.18)
+                return fired or true
             end
 
-            if not _G.State:IsActionValid(myToken) then return end
-            local richProgress
-            pcall(function()
-                richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
-            end)
-            if richProgress == 0 then
-                local boss = FindBoss("Mob Leader")
-                if not boss then
-                    _G.BobonStatus = "Item: Waiting for Mob Leader"
-                    return
-                end
-                local deadline = tick() + 120
-                while boss and _G.State:IsActionValid(myToken) and IsAlive()
-                    and tick() < deadline do
-                    local bh = boss:FindFirstChildOfClass("Humanoid")
-                    local br = boss:FindFirstChild("HumanoidRootPart")
-                    if not bh or bh.Health <= 0 or not br then break end
-                    PrepareCombatTarget(boss)
-                    EquipCombatTool()
-                    TravelManager:Request(br, "Saber", {
-                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                        combatHover = true,
-                    })
-                    if TravelManager:IsAtCombatAnchor(br) then
-                        Attack(boss, "Mob Leader")
+            -- Public kaitun sources use Plate1 -> Plate5 in order. Stream the Jungle
+            -- first, then touch the real button instance; fixed CFrames are only fallback
+            -- if one plate is temporarily absent from the streamed hierarchy.
+            if not TravelAndWait("Saber",myToken,CFrame.new(-1612.56,36.98,148.72),{timeout=90,arrivalThreshold=20,settle=0.25}) then return end
+            local plateFallback={
+                CFrame.new(-1421.87,55.47,21.78),
+                CFrame.new(-1647.20,29.15,438.30),
+                CFrame.new(-1324.10,31.46,-461.40),
+                CFrame.new(-1152.38,9.75,-700.31),
+                CFrame.new(-1180.90,21.00,187.86),
+            }
+            local map=workspace:FindFirstChild("Map")
+            local jungle=map and map:FindFirstChild("Jungle")
+            local plates=jungle and jungle:FindFirstChild("QuestPlates")
+            local door=plates and plates:FindFirstChild("Door")
+            for cycle=1,3 do
+                if door and door.Transparency ~= 0 then break end
+                for i=1,5 do
+                    if not _G.State:IsActionValid(myToken) then return end
+                    TouchAction(); _G.BobonStatus=("Saber 1/8 • Plate %d/5"):format(i)
+                    map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
+                    plates=jungle and jungle:FindFirstChild("QuestPlates")
+                    door=plates and plates:FindFirstChild("Door")
+                    local plate=plates and (plates:FindFirstChild("Plate"..i) or plates:FindFirstChild(tostring(i)))
+                    local button=plate and (plate:FindFirstChild("Button") or plate:FindFirstChildWhichIsA("BasePart",true))
+                    if button and button:IsA("BasePart") then
+                        TravelAndWait("Saber",myToken,button.CFrame,{timeout=35,arrivalThreshold=4,settle=0.05})
+                        TouchPart(button)
+                    else
+                        TravelAndWait("Saber",myToken,plateFallback[i],{timeout=35,arrivalThreshold=3,settle=0.20})
                     end
                     task.wait(0.12)
                 end
-                pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
+                map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
+                plates=jungle and jungle:FindFirstChild("QuestPlates"); door=plates and plates:FindFirstChild("Door")
+                task.wait(0.3)
             end
-
-            pcall(function()
-                richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
-            end)
-            if richProgress == 1 or HasItem("Relic") then
-                pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
-                EquipNamed("Relic")
-                if TravelAndWait("Saber", myToken, CFrame.new(-1405,30,4), {
-                    timeout=90, arrivalThreshold=8, settle=0.5,
-                }) then
-                    pcall(function()
-                        CommF_:InvokeServer("ProQuestProgress", "PlaceRelic")
-                    end)
-                end
-            end
-
-            local saberBoss = FindBoss("Saber Expert")
-            if not saberBoss then
-                _G.BobonStatus = "Item: Waiting for Saber Expert"
+            if door and door.Transparency == 0 then
+                _G.BobonStatus="Saber • plate door still closed; retrying"
+                self.NextOptional.Saber=tick()+2
                 return
             end
-            local timeout = os.time() + 180
-            while _G.State:IsActionValid(myToken) and not InventoryHas("Saber")
-                and os.time() < timeout and IsAlive() do
-                local boss = saberBoss
-                if boss and boss:FindFirstChild("HumanoidRootPart") and boss.Humanoid.Health > 0 then
-                    PrepareCombatTarget(boss)
-                    EquipCombatTool()
-                    TravelManager:Request(boss.HumanoidRootPart, "Saber", {
-                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                        combatHover = true,
-                    })
-                    if TravelManager:IsAtCombatAnchor(boss.HumanoidRootPart) then
-                        Attack(boss, "Saber Expert")
+
+            -- Torch + Desert burn.
+            _G.BobonStatus="Saber 2/8 • Torch"
+            if not FindOwnedTool("Torch") then
+                TravelAndWait("Saber",myToken,CFrame.new(-1610.01,11.50,164.00),{timeout=90,arrivalThreshold=4,settle=0.4})
+                local final=jungle and jungle:FindFirstChild("Final")
+                if final then
+                    local torchPart=final:FindFirstChildWhichIsA("BasePart",true)
+                    if torchPart then TouchPart(torchPart) end
+                end
+            end
+            local torch=WaitTool("Torch",5)
+            if not torch then self.NextOptional.Saber=tick()+2; _G.BobonStatus="Saber • waiting Torch"; return end
+            EquipNamed("Torch")
+            _G.BobonStatus="Saber 3/8 • Burn desert wall"
+            TravelAndWait("Saber",myToken,CFrame.new(1114.61,5.05,4350.23),{timeout=90,arrivalThreshold=4,settle=5.6})
+            map=workspace:FindFirstChild("Map")
+            local desert=map and map:FindFirstChild("Desert")
+            local burn=desert and desert:FindFirstChild("Burn")
+            local burnPart=burn and burn:FindFirstChild("Part")
+            if burnPart and burnPart:IsA("BasePart") then TouchPart(burnPart); task.wait(0.5) end
+
+            -- Cup -> fill at Frozen Village -> Sick Man.
+            _G.BobonStatus="Saber 4/8 • Cup + Sick Man"
+            pcall(function() CommF_:InvokeServer("ProQuestProgress","GetCup") end)
+            if not FindOwnedTool("Cup") then
+                TravelAndWait("Saber",myToken,CFrame.new(1114.27,4.17,4366.15),{timeout=40,arrivalThreshold=4,settle=0.3})
+                pcall(function() CommF_:InvokeServer("ProQuestProgress","GetCup") end)
+            end
+            local cup=WaitTool("Cup",5)
+            if not cup then self.NextOptional.Saber=tick()+2; _G.BobonStatus="Saber • waiting Cup"; return end
+            EquipNamed("Cup")
+            TravelAndWait("Saber",myToken,CFrame.new(1397.06,37.35,-1321.04),{timeout=90,arrivalThreshold=7,settle=0.4})
+            cup=Char() and Char():FindFirstChild("Cup") or FindOwnedTool("Cup")
+            if cup then pcall(function() CommF_:InvokeServer("ProQuestProgress","FillCup",cup) end) end
+            TravelAndWait("Saber",myToken,CFrame.new(1457.88,88.25,-1390.40),{timeout=50,arrivalThreshold=9,settle=0.3})
+            pcall(function() CommF_:InvokeServer("ProQuestProgress","SickMan") end)
+            task.wait(0.3); TouchAction()
+
+            -- Rich Man -> Mob Leader -> Relic. Re-read progress after each server step.
+            _G.BobonStatus="Saber 5/8 • Rich Man"
+            TravelAndWait("Saber",myToken,CFrame.new(-909.11,13.75,4077.35),{timeout=90,arrivalThreshold=10,settle=0.3})
+            local richProgress
+            pcall(function() richProgress=CommF_:InvokeServer("ProQuestProgress","RichSon") end)
+            if richProgress == 0 and not FindOwnedTool("Relic") then
+                _G.BobonStatus="Saber 6/8 • Mob Leader"
+                TravelAndWait("Saber",myToken,CFrame.new(-2852.90,7.56,5367.72),{timeout=90,arrivalThreshold=20,settle=0.2})
+                local waitBoss=tick()+45
+                local boss=FindBoss("Mob Leader")
+                while not boss and _G.State:IsActionValid(myToken) and tick()<waitBoss do TouchAction(); boss=FindBoss("Mob Leader"); task.wait(0.25) end
+                if boss then
+                    local deadline=tick()+150
+                    while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
+                        TouchAction(); boss=FindBoss("Mob Leader")
+                        if not boss then break end
+                        local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
+                        if not bh or bh.Health<=0 or not br then break end
+                        PrepareCombatTarget(boss); EquipCombatTool()
+                        TravelManager:Request(br,"Saber",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                        if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Mob Leader") end
+                        task.wait(0.08)
                     end
                 else
-                    break
+                    self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • Mob Leader respawn"; return
                 end
-                task.wait(0.1)
+                TravelAndWait("Saber",myToken,CFrame.new(-909.11,13.75,4077.35),{timeout=90,arrivalThreshold=10,settle=0.3})
+                pcall(function() CommF_:InvokeServer("ProQuestProgress","RichSon") end)
+                pcall(function() CommF_:InvokeServer("ProQuestProgress") end)
             end
+            if not WaitTool("Relic",5) then
+                pcall(function() CommF_:InvokeServer("ProQuestProgress","RichSon") end)
+                pcall(function() CommF_:InvokeServer("ProQuestProgress") end)
+            end
+            if not WaitTool("Relic",4) then self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • waiting Relic"; return end
+
+            _G.BobonStatus="Saber 7/8 • Place Relic"
+            EquipNamed("Relic")
+            TravelAndWait("Saber",myToken,CFrame.new(-1405.84,29.85,5.05),{timeout=90,arrivalThreshold=6,settle=0.3})
+            pcall(function() CommF_:InvokeServer("ProQuestProgress","PlaceRelic") end)
+            map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
+            local final=jungle and jungle:FindFirstChild("Final")
+            if final then local part=final:FindFirstChildWhichIsA("BasePart",true); if part then TouchPart(part) end end
+
+            _G.BobonStatus="Saber 8/8 • Saber Expert"
+            local boss=FindBoss("Saber Expert"); local waitBoss=tick()+50
+            while not boss and _G.State:IsActionValid(myToken) and tick()<waitBoss do
+                TouchAction(); boss=FindBoss("Saber Expert"); task.wait(0.25)
+            end
+            if not boss then self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • Saber Expert respawn"; return end
+            local timeout=tick()+210
+            while _G.State:IsActionValid(myToken) and IsAlive() and tick()<timeout and not InventoryHas("Saber") do
+                TouchAction(); boss=FindBoss("Saber Expert"); if not boss then break end
+                local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
+                if not bh or bh.Health<=0 or not br then break end
+                PrepareCombatTarget(boss); EquipCombatTool()
+                TravelManager:Request(br,"Saber",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Saber Expert") end
+                task.wait(0.08)
+            end
+            InventoryCache.At=0; WeaponInventoryCache.At=0
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Saber: " .. tostring(err)) end
-        if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
-            TravelManager:Stop("SaberComplete")
-        end
+        if not ok then warn("[BobonHub] Module Error: Saber: "..tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner=="Saber" then TravelManager:Stop("SaberComplete") end
         _G.State:ReleaseAction(myToken)
-        if _G.State.Mode == "GettingItem" then
-            _G.State:SetMode("Idle")
-        end
+        if _G.State.Mode=="GettingItem" then _G.State:SetMode("Idle") end
     end)
     return true
 end
-
 
 function ItemProgression:CheckPoleV1()
     if not _G.Settings.AutoItems then return false end
@@ -8055,43 +8148,47 @@ function ItemProgression:CheckSecondSea()
                 pcall(function() CommF_:InvokeServer("DressrosaQuestProgress","Detective") end)
             end
             local key = HasItem("Key")
+            local keyWait=tick()+8
+            while not key and _G.State:IsActionValid(myToken) and tick()<keyWait do
+                _G.State:TouchAction(myToken); task.wait(0.2); key=HasItem("Key")
+            end
             if key then
                 local c, hum = Char(), Hum()
                 if key.Parent ~= c and hum then pcall(function() hum:EquipTool(key) end) end
             end
             if not TravelAndWait("Sea2", myToken, CFrame.new(1347.71,37.38,-1325.65), {
                 timeout=90, arrivalThreshold=8, settle=1,
-            }) then
-                return
-            end
-            task.wait(1.5)
+            }) then return end
+            task.wait(0.6); _G.State:TouchAction(myToken)
 
             local boss = FindBoss("Ice Admiral")
+            local spawnWait=tick()+60
+            while not boss and _G.State:IsActionValid(myToken) and IsAlive() and tick()<spawnWait do
+                _G.State:TouchAction(myToken); boss=FindBoss("Ice Admiral"); task.wait(0.25)
+            end
+            if not boss then self.NextOptional.Sea2=tick()+4; _G.BobonStatus="Sea 2: waiting Ice Admiral"; return end
             local deadline = tick() + 180
-            while boss and _G.State:IsActionValid(myToken) and IsAlive()
-                and tick() < deadline do
+            while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+                _G.State:TouchAction(myToken); boss=FindBoss("Ice Admiral")
+                if not boss then break end
                 local bh = boss:FindFirstChildOfClass("Humanoid")
                 local br = boss:FindFirstChild("HumanoidRootPart")
                 if not bh or bh.Health <= 0 or not br then break end
-                PrepareCombatTarget(boss)
-                EquipCombatTool()
-                TravelManager:Request(br, "Sea2", {
-                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                    combatHover = true,
-                })
-                if TravelManager:IsAtCombatAnchor(br) then
-                    Attack(boss, "Ice Admiral")
-                end
-                task.wait(0.12)
+                PrepareCombatTarget(boss); EquipCombatTool()
+                TravelManager:Request(br,"Sea2",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Ice Admiral") end
+                task.wait(0.08)
             end
 
             if _G.State:IsActionValid(myToken) and IsAlive() then
-                local traveled = false
-                pcall(function()
-                    CommF_:InvokeServer("TravelDressrosa")
-                    traveled = true
-                end)
-                if traveled then _G.State.LastServerHop = os.time() end
+                _G.State:TouchAction(myToken)
+                pcall(function() CommF_:InvokeServer("TravelDressrosa") end)
+                task.wait(1.2)
+                if GetSea() < 2 then
+                    pcall(function() CommF_:InvokeServer("TravelDressrosa") end)
+                else
+                    _G.State.LastServerHop=os.time()
+                end
             end
         end, debug.traceback)
         if not ok then warn("[BobonHub] Module Error: Sea2: " .. tostring(err)) end
@@ -8133,6 +8230,7 @@ function ItemProgression:CheckBartilo()
                 end
                 local deadline = tick() + 600
                 while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+                    _G.State:TouchAction(myToken)
                     local current
                     pcall(function()
                         current = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
@@ -8156,26 +8254,21 @@ function ItemProgression:CheckBartilo()
                     task.wait(0.12)
                 end
             elseif progress == 1 then
-                local boss = FindBoss("Jeremy")
-                if not boss then
-                    _G.BobonStatus = "Progression: Waiting for Jeremy"
-                    return
+                TravelAndWait("Bartilo",myToken,CFrame.new(2099.88,448.93,648.99),{timeout=90,arrivalThreshold=35,settle=0.2})
+                local boss=FindBoss("Jeremy"); local spawnWait=tick()+45
+                while not boss and _G.State:IsActionValid(myToken) and tick()<spawnWait do
+                    _G.State:TouchAction(myToken); boss=FindBoss("Jeremy"); task.wait(0.25)
                 end
-                local deadline = tick() + 180
-                while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
-                    local bh = boss:FindFirstChildOfClass("Humanoid")
-                    local br = boss:FindFirstChild("HumanoidRootPart")
-                    if not bh or bh.Health <= 0 or not br then break end
-                    PrepareCombatTarget(boss)
-                    EquipCombatTool()
-                    TravelManager:Request(br, "Bartilo", {
-                        arrivalThreshold=_G.Settings.FarmArrivalThreshold,
-                        combatHover=true,
-                    })
-                    if TravelManager:IsAtCombatAnchor(br) then
-                        Attack(boss, "Jeremy")
-                    end
-                    task.wait(0.12)
+                if not boss then self.NextOptional.Bartilo=tick()+4; _G.BobonStatus="Progression: Waiting for Jeremy"; return end
+                local deadline=tick()+180
+                while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
+                    _G.State:TouchAction(myToken); boss=FindBoss("Jeremy"); if not boss then break end
+                    local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
+                    if not bh or bh.Health<=0 or not br then break end
+                    PrepareCombatTarget(boss); EquipCombatTool()
+                    TravelManager:Request(br,"Bartilo",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                    if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Jeremy") end
+                    task.wait(0.08)
                 end
             elseif progress == 2 then
                 local maze = {
@@ -8185,6 +8278,7 @@ function ItemProgression:CheckBartilo()
                     CFrame.new(-1819.26,14.80,1717.91), CFrame.new(-1813.52,14.86,1724.80),
                 }
                 for _, cf in ipairs(maze) do
+                    _G.State:TouchAction(myToken)
                     if not TravelAndWait("Bartilo", myToken, cf, {
                         timeout=30, arrivalThreshold=6, settle=0.25,
                     }) then break end
@@ -8430,6 +8524,7 @@ end
 local function FightNamedForAction(name, owner, token, timeout)
     local deadline = tick() + (timeout or 120)
     while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        _G.State:TouchAction(token)
         local mob = FindBoss(name) or FindMob(name)
         if not mob then return false end
         local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -8602,49 +8697,64 @@ function MaterialPrepController:TryRunCurrentSea()
     return false
 end
 
-FightingStyleUnlockController = { LastBoneRoll = 0 }
+FightingStyleUnlockController = { LastBoneRoll = 0, LastElectricClaw = 0 }
 function FightingStyleUnlockController:TryRun()
     if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee then return false end
 
-    -- Death Step: Library Key from Awakened Ice Admiral permanently opens the door.
-    local darkM = math.max(EffectiveMastery("Dark Step"), EffectiveMastery("Black Leg"))
-    if GetSea() == 2 and darkM >= 400 and not InventoryHas("Death Step") then
+    local darkM=math.max(EffectiveMastery("Dark Step"),EffectiveMastery("Black Leg"))
+    if GetSea()>=2 and darkM>=400 and not FightingStyleController:Known("Death Step") then
         if FindOwnedTool("Library Key") then
-            return StartOptionalAction(ItemProgression, "DeathStepDoor", "StyleUnlock",
-                "Melee: Unlocking Death Step", function(token)
-                EquipNamedTool("Library Key")
-                TravelAndWait("StyleUnlock", token, CFrame.new(6377.09,296.63,-6843.89), {
-                    timeout=90, arrivalThreshold=7, settle=1.2,
-                })
-                InvokeStyle("BuyDeathStep", true)
-                InvokeStyle("BuyDeathStep")
+            return StartOptionalAction(ItemProgression,"DeathStepDoor","StyleUnlock","Melee: Unlocking Death Step",function(token)
+                _G.State:TouchAction(token); EquipNamedTool("Library Key")
+                TravelAndWait("StyleUnlock",token,CFrame.new(6377.09,296.63,-6843.89),{timeout=90,arrivalThreshold=7,settle=1.2})
+                InvokeStyle("BuyDeathStep",true); InvokeStyle("BuyDeathStep")
+                InventoryCache.At=0; WeaponInventoryCache.At=0
             end)
         end
     end
 
-    -- Sharkman Karate: Water Key is consumed/validated by the teacher endpoint.
-    local waterM = math.max(EffectiveMastery("Water Kung Fu"), EffectiveMastery("Fishman Karate"))
-    if GetSea() == 2 and waterM >= 400 and not InventoryHas("Sharkman Karate")
-        and FindOwnedTool("Water Key") then
-        InvokeStyle("BuySharkmanKarate", true)
-        InvokeStyle("BuySharkmanKarate")
+    local waterM=math.max(EffectiveMastery("Water Kung Fu"),EffectiveMastery("Fishman Karate"))
+    if GetSea()>=2 and waterM>=400 and not FightingStyleController:Known("Sharkman Karate") and FindOwnedTool("Water Key") then
+        local ok=InvokeStyle("BuySharkmanKarate",true); InvokeStyle("BuySharkmanKarate")
+        if ok then InventoryCache.At=0; WeaponInventoryCache.At=0 end
         return false
     end
 
-    -- Dragon Talon: Fire Essence comes from Death King's 50-Bone surprise roll.
-    local dragonM = math.max(EffectiveMastery("Dragon Breath"), EffectiveMastery("Dragon Claw"))
-    if GetSea() == 3 and dragonM >= 400 and not InventoryHas("Dragon Talon") then
+    -- Electric Claw is not a simple shop call the first time: Previous Hero sends
+    -- the player to Mansion under a 30-second quest. Public implementations expose
+    -- state 4 from BuyElectricClaw(true), then use the Start endpoint.
+    local electricM=math.max(EffectiveMastery("Electric"),EffectiveMastery("Electro"))
+    if GetSea()==3 and electricM>=400 and not FightingStyleController:Known("Electric Claw")
+        and Beli()>=3000000 and CanSpendFragments(5000,"Full Melee: Electric Claw",100)
+        and tick()-(self.LastElectricClaw or 0)>=2 then
+        self.LastElectricClaw=tick()
+        local ok,state=InvokeStyle("BuyElectricClaw",true)
+        if ok and state==4 then
+            return StartOptionalAction(ItemProgression,"ElectricClawQuest","StyleUnlock","Melee: Electric Claw quest",function(token)
+                local hero=CFrame.new(-10371.47,330.76,-10131.42)
+                local mansion=CFrame.new(-12550.53,336.23,-7510.42)
+                if not TravelAndWait("StyleUnlock",token,hero,{timeout=90,arrivalThreshold=10,settle=0.25}) then return end
+                _G.State:TouchAction(token); InvokeStyle("BuyElectricClaw","Start")
+                if not TravelAndWait("StyleUnlock",token,mansion,{timeout=28,arrivalThreshold=18,settle=0.15}) then return end
+                _G.State:TouchAction(token)
+                TravelAndWait("StyleUnlock",token,hero,{timeout=90,arrivalThreshold=10,settle=0.2})
+                InvokeStyle("BuyElectricClaw"); InventoryCache.At=0; WeaponInventoryCache.At=0
+            end)
+        elseif ok then
+            InvokeStyle("BuyElectricClaw"); InventoryCache.At=0; WeaponInventoryCache.At=0
+        end
+    end
+
+    local dragonM=math.max(EffectiveMastery("Dragon Breath"),EffectiveMastery("Dragon Claw"))
+    if GetSea()==3 and dragonM>=400 and not FightingStyleController:Known("Dragon Talon") then
         if HasFireEssence() then
-            InvokeStyle("BuyDragonTalon", true)
-            InvokeStyle("BuyDragonTalon")
+            InvokeStyle("BuyDragonTalon",true); InvokeStyle("BuyDragonTalon")
+            InventoryCache.At=0; WeaponInventoryCache.At=0
             return false
         end
-        local reserve = SkullBoneReserve()
-        if MaterialCount("Bones") >= reserve + 50
-            and tick() - (self.LastBoneRoll or 0) >= (_G.Settings.DeathKingRollRetry or 2) then
-            self.LastBoneRoll = tick()
-            pcall(function() CommF_:InvokeServer("Bones","Buy",1,1) end)
-            InventoryCache.At = 0
+        local reserve=SkullBoneReserve()
+        if MaterialCount("Bones")>=reserve+50 and tick()-(self.LastBoneRoll or 0)>=(_G.Settings.DeathKingRollRetry or 2) then
+            self.LastBoneRoll=tick(); pcall(function() CommF_:InvokeServer("Bones","Buy",1,1) end); InventoryCache.At=0
         end
     end
     return false
@@ -8765,22 +8875,21 @@ function ItemProgression:CheckTushita()
             local map = workspace:FindFirstChild("Map")
             local turtle = map and map:FindFirstChild("Turtle")
             local torches = turtle and turtle:FindFirstChild("QuestTorches")
-            if torches then
-                for i = 1, 5 do
-                    local t = torches:FindFirstChild("Torch" .. i)
-                    if t and _G.State:IsActionValid(token) then
-                        local lit = false
-                        pcall(function()
-                            local main = t:FindFirstChild("Particles", true)
-                            local light = main and main:FindFirstChild("Main")
-                            lit = light and light.Enabled == true
-                        end)
-                        if not lit then
-                            TravelAndWait("Tushita", token, t.CFrame, {
-                                timeout=60, arrivalThreshold=4, settle=0.8,
-                            })
-                        end
-                    end
+            local fallback = {
+                CFrame.new(-10752.77,412.23,-9366.36), CFrame.new(-11673.41,331.75,-9474.35),
+                CFrame.new(-12133.34,519.48,-10653.19), CFrame.new(-13336.50,485.28,-6983.35),
+                CFrame.new(-13487.41,334.85,-7926.35),
+            }
+            for i=1,5 do
+                if not _G.State:IsActionValid(token) then return end
+                _G.State:TouchAction(token)
+                local t=torches and torches:FindFirstChild("Torch"..i)
+                local cf=(t and t:IsA("BasePart") and t.CFrame) or fallback[i]
+                if t and not t:IsA("BasePart") then local p=t:FindFirstChildWhichIsA("BasePart",true); if p then cf=p.CFrame end end
+                TravelAndWait("Tushita",token,cf,{timeout=75,arrivalThreshold=4,settle=0.55})
+                if t and type(firetouchinterest)=="function" then
+                    local part=t:IsA("BasePart") and t or t:FindFirstChildWhichIsA("BasePart",true)
+                    local root=HRP(); if part and root then pcall(function() firetouchinterest(root,part,0); task.wait(0.05); firetouchinterest(root,part,1) end) end
                 end
             end
             local longma = FindBoss("Longma")
@@ -8796,14 +8905,12 @@ function ItemProgression:CheckTushita()
             local room = waterfall and waterfall:FindFirstChild("SecretRoom")
             local hitbox = room and room:FindFirstChild("Hitbox", true)
             if hitbox and hitbox:IsA("BasePart") then
-                TravelAndWait("Tushita", token, hitbox.CFrame, {
-                    timeout=90, arrivalThreshold=5, settle=1,
-                })
+                TravelAndWait("Tushita", token, hitbox.CFrame, {timeout=90,arrivalThreshold=5,settle=1})
+                if type(firetouchinterest)=="function" and HRP() then pcall(function() firetouchinterest(HRP(),hitbox,0); task.wait(0.05); firetouchinterest(HRP(),hitbox,1) end) end
             else
-                TravelAndWait("Tushita", token, CFrame.new(5152,142,912), {
-                    timeout=90, arrivalThreshold=8, settle=1,
-                })
+                TravelAndWait("Tushita", token, CFrame.new(5152,142,912), {timeout=90,arrivalThreshold=8,settle=1})
             end
+            _G.State:TouchAction(token); task.wait(0.5)
         end)
     end
     -- No rip_indra/Holy Torch in this server: do not steal movement from leveling.
@@ -9436,6 +9543,9 @@ end -- v21.1 Skull Guitar helper scope
 
 function ItemProgression:CheckRaceV2()
     if not _G.Settings.AutoRaceV2 or GetSea() ~= 2 or Level() < 850 then return false end
+    local bartilo
+    pcall(function() bartilo=CommF_:InvokeServer("BartiloQuestProgress","Bartilo") end)
+    if type(bartilo)=="number" and bartilo<3 then return false end
     local data = LP:FindFirstChild("Data")
     local race = data and data:FindFirstChild("Race")
     if not race or race:FindFirstChild("Evolved") then return false end
@@ -9452,7 +9562,7 @@ function ItemProgression:CheckRaceV2()
             return
         end
         if state == 1 then
-            local flower1, flower2 = workspace:FindFirstChild("Flower1"), workspace:FindFirstChild("Flower2")
+            local flower1, flower2 = workspace:FindFirstChild("Flower1",true), workspace:FindFirstChild("Flower2",true)
             if not FindOwnedTool("Flower 1") and flower1 and flower1:IsA("BasePart") then
                 TravelAndWait("RaceV2", token, flower1.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
                 return
@@ -9466,7 +9576,7 @@ function ItemProgression:CheckRaceV2()
                 if swan then FightNamedForAction("Swan Pirate","RaceV2",token,90) end
                 return
             end
-            if FindOwnedTool("Flower 1") and FindOwnedTool("Flower 2") and FindOwnedTool("Flower 3") then
+            if FindOwnedTool("Flower 1") and FindOwnedTool("Flower 2") and FindOwnedTool("Flower 3") and Beli() >= 500000 then
                 if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
                     timeout=90, arrivalThreshold=6, settle=0.8,
                 }) then
@@ -9484,32 +9594,39 @@ end
 -- accidentally send the player to a next-sea quest before unlocking it.
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
-    -- Mandatory world gates first.
+
+    -- v21.25: permanent purchases are cheapest/fastest and must never wait behind a
+    -- long puzzle. This is what makes 150k Dark Step happen immediately at 200k Beli.
+    if allowOptional and FightingStyleController:PurchaseTick() then return true end
+
+    -- Sea-1 permanent milestone before world exit.
+    if allowOptional and self:CheckSaber() then return true end
+    if allowOptional and self:CheckPoleV1() then return true end
     if self:CheckSecondSea() then return true end
+
+    -- Sea-2 hard progression chain. Bartilo gates Race V2/Third Sea; every routine
+    -- re-reads its server progress and relinquishes the token if a spawn is absent.
     if self:CheckBartilo() then return true end
+    if allowOptional and self:CheckRaceV2() then return true end
+
+    if allowOptional then
+        if FightingStyleUnlockController and FightingStyleUnlockController:TryRun() then return true end
+        if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
+
+        local meleeBusy=false
+        pcall(function() meleeBusy=FightingStyleController:Tick()==true end)
+        if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
+
+        if self:CheckKabucha() then return true end
+        if self:CheckRengoku() then return true end
+        if self:CheckMidnightBlade() then return true end
+        if self:CheckAcidumRifle() then return true end
+    end
+
     if self:CheckThirdSea() then return true end
     if not allowOptional then return false end
 
-    -- Permanent milestone first: once Lv.200 Saber is eligible it must preempt level farm.
-    if self:CheckSaber() then return true end
-
-    -- Goal-based material and hard style prerequisites.
-    if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
-    if FightingStyleUnlockController and FightingStyleUnlockController:TryRun() then return true end
-
-    -- Kaitun-only progression.
-    if self:CheckRaceV2() then return true end
-    local meleeBusy = false
-    pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
-    if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
-
-    -- Useful kaitun item queue. Every routine is bounded; missing spawns/keys return
-    -- control to level farming instead of camping indefinitely.
-    if self:CheckPoleV1() then return true end
-    if self:CheckKabucha() then return true end
-    if self:CheckRengoku() then return true end
-    if self:CheckMidnightBlade() then return true end
-    if self:CheckAcidumRifle() then return true end
+    -- Sea-3 permanent item/weapon chain.
     if self:CheckYama() then return true end
     if self:CheckTushita() then return true end
     if self:CheckCDK() then return true end
@@ -9517,7 +9634,7 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     return false
 end
 
--- v21.24.3 IMMEDIATE PROGRESSION WATCHER. This is intentionally its own closure
+-- v21.25 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
 -- instead of adding statements/locals to the already-large MainController function.
 -- Once Saber/Sea/item work claims ActionToken, PrepareClaimedAction stops Farm travel
 -- and the main loop's existing ActiveActionToken gate yields control immediately.
@@ -11972,10 +12089,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.24.3] Full Script Loaded Successfully!")
-print("[BobonHub v21.24.3] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.24.3] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.24.3] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.24.3] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.24.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.24.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.25] Full Script Loaded Successfully!")
+print("[BobonHub v21.25] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.25] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.25] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.25] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.25] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.25] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
