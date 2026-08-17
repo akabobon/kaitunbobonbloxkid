@@ -1,8 +1,42 @@
 -- =================================================================
---         BOBON HUB v21.17 FULL-CONTEXT CLUSTER DAMAGE | REMOTE MAGNET | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.18 AUTHORITY CLUSTER FIX | SERVER-PROVEN STACK | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.16 CLUSTER ROUND-ROBIN FIX | Version: v21.17
+--         Base: v21.17 FULL-CONTEXT CLUSTER DAMAGE | Version: v21.18
 --
+--
+--
+--  v21.18 ROOT-CAUSE / AUTHORITY CLUSTER FIX (Roblox(8).mp4):
+--  [AC-1] The old `stacked` counter was false-positive on executors with no
+--         ownership API: a locally written NPC CFrame could remain visible for
+--         several Heartbeats, then be marked verified even though the server still
+--         kept that NPC at its original position. This exactly explains
+--         `owned 0 / stacked 3` while only one NPC can actually take damage.
+--  [AC-2] VerifiedGatherRoots is now AUTHORITATIVE ONLY:
+--         network-owned roots are trusted after the real move; unknown/server-owned
+--         roots are never promoted merely because a local CFrame stayed visible.
+--  [AC-3] Unknown/server-owned roots are tested ONE AT A TIME at the shared
+--         anchor while the player stays parked there. A temporary local CFrame is
+--         only a PROBE; it is never counted as stacked until that exact Humanoid
+--         produces a causal real HP decrease.
+--  [AC-4] A failed probe is restored/released and cooldowned instead of remaining as
+--         a statue. A successful damage-proven root is pinned with a short TTL; if
+--         real damage stops, its authority is revoked and it must prove itself again.
+--  [AC-5] Quest anchor now uses a minimax/central live-spawn center rather than the
+--         nearest single NPC, minimizing the farthest real mob distance to the
+--         player's ~100-stud valid combat field.
+--  [AC-6] Cluster combat no longer relies on one RegisterAttack being reused for a
+--         multi-target batch. Every verified/probe target gets its own registered
+--         single-target swing, spaced by a tiny bounded gap, matching the current
+--         public tokenized DoHit shape that is known to work on one real NPC.
+--  [AC-7] Normal QUEST mode no longer flies a per-mob ownership tour. SKIP keeps its
+--         physical acquisition path. HUD separates OWNED / PROVEN / STACKED /
+--         TESTING / UNKNOWN so a client-only visual pull cannot masquerade as success.
+--  [AC-8] Exact per-model HP deltas refresh authority for every damaged cluster
+--         member. Aggregate proof no longer falsely promotes the watched primary when
+--         some other mob was the one that actually lost HP.
+--  [AC-9] No anti-cheat/kick bypass is added. If the server refuses both ownership
+--         and real damage for a staged mob, the script reports/retries that truth
+--         instead of fabricating a working stack.
 --
 --  v21.17 FULL-CONTEXT CLUSTER VICTIM FIX (v21.16 still damaged one mob):
 --  [CTX-1] Root cause in v21.16: only dispatchEntries rotated. preferredModel /
@@ -506,7 +540,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.17 CLUSTER ROUND-ROBIN FIX + REMOTE MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.18 AUTHORITY CLUSTER FIX + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -706,6 +740,27 @@ _G.Settings = {
     ClusterReliableRoundRobin = true,
     ClusterRoundRobinMinTargets = 2,
     ClusterContextVictimHold = 0.32,
+    -- v21.18 authority-first cluster.
+    ClusterAuthorityEnabled = true,
+    ClusterAuthorityWarmup = 0.45,
+    ClusterAuthorityProbeRange = 100,
+    -- A damage-proven unknown-owner root stays eligible long enough for a complete
+    -- 3-4 mob independent-swing cycle. It is revoked if real HP stops changing.
+    ClusterAuthorityDamageTTL = 1.50,
+    ClusterAuthorityProbeCooldown = 0.18,
+    ClusterAuthorityProbeWindow = 1.60,
+    ClusterAuthorityProbeMissCooldown = 1.60,
+    ClusterAuthorityMaxProbeAttempts = 3,
+    ClusterAuthorityHardMissCooldown = 5.0,
+    ClusterAuthorityFieldRadius = 180,
+    ClusterQuestPhysicalFallback = false,
+    ClusterSkipPhysicalFallback = true,
+    -- Current live public combat examples register a fresh attack before each
+    -- tokenized single-target hit. Do the same for every proven stack member
+    -- instead of relying on one batch swing being consumed for multiple victims.
+    ClusterIndependentSwingFanout = true,
+    ClusterIndependentSwingGap = 0.022,
+    ClusterIndependentSwingMaxTargets = 8,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -775,7 +830,7 @@ _G.Settings = {
     ClusterAcquireGrace = 0.35,
     -- A quest uses only its current spawn field. GatherMaxDistance remains the
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
-    ClusterQuestRadius  = 900,
+    ClusterQuestRadius  = 180,
     ClusterAcquireSweep = true,
     ClusterAcquireTimeout = 0.55,
     ClusterAcquireMaxTimeout = 2.25,
@@ -1001,6 +1056,10 @@ _G.BobonDiagnostics = {
     Bring = "wait",
     BringCandidates = 0,
     BringOwned = 0,
+    BringDamageProven = 0,
+    BringUnknown = 0,
+    BringServerOwned = 0,
+    BringProbe = 0,
     BringMoved = 0,
 }
 
@@ -1386,7 +1445,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.17", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.18", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -1549,10 +1608,13 @@ do
                     local clusterMode = tostring(state.ClusterMode or "OFF")
                     local candidates = tonumber(diag.BringCandidates) or 0
                     local owned = tonumber(diag.BringOwned) or 0
+                    local proven = tonumber(diag.BringDamageProven) or 0
+                    local probes = tonumber(diag.BringProbe) or 0
+                    local unknown = tonumber(diag.BringUnknown) or 0
                     local moved = tonumber(diag.BringMoved) or 0
                     if clusterMode ~= "OFF" then
-                        ClusterL.Text = ("ALL-MOB %s  •  found %d  •  owned %d  •  stacked %d")
-                            :format(clusterMode, candidates, owned, moved)
+                        ClusterL.Text = ("ALL-MOB %s  • found %d • owned %d • proven %d • stacked %d • testing %d • unknown %d")
+                            :format(clusterMode, candidates, owned, proven, moved, probes, unknown)
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
@@ -1560,6 +1622,8 @@ do
                         FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
                         FlagL.Text = "CONTESTED"
+                    elseif probes > 0 then
+                        FlagL.Text = "VERIFYING ×" .. tostring(probes)
                     elseif clusterMode ~= "OFF" then
                         FlagL.Text = "STACK ×" .. tostring(moved)
                     else
@@ -1569,7 +1633,7 @@ do
                     local ready = packet:find("CONFIRMED",1,true) ~= nil
                     CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
                     CombatL.TextColor3 = ready and READY_GREEN or ACCENT_C
-                    BringL.Text = moved > 0 and ("BRING  ALL ×" .. tostring(moved))
+                    BringL.Text = moved > 0 and ("BRING  VERIFIED ×" .. tostring(moved))
                         or ("BRING  " .. tostring(diag.Bring or "WAITING"))
                     BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
                 end)
@@ -2150,6 +2214,12 @@ local WeaponController
 local ClientOwnsMob
 local ClusterFarmController
 local VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+local DamageProvenGatherRoots = setmetatable({}, { __mode = "k" })
+local GatherAuthorityClass = setmetatable({}, { __mode = "k" })
+local GatherProbeCandidates = setmetatable({}, { __mode = "k" })
+local GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
+local GatherProbeAttempts = setmetatable({}, { __mode = "k" })
+local GatherOriginalPositions = setmetatable({}, { __mode = "k" })
 local GatherGeneration = 0
 
 local function ToolCombatKind(tool)
@@ -2556,7 +2626,8 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= cap then break end
             if enemy ~= preferred and not IsRaidBossModel(enemy)
-                and ClusterFarmController:IsVerified(enemy) then
+                and (ClusterFarmController:IsVerified(enemy)
+                    or ClusterFarmController:IsProbeCandidate(enemy)) then
                 add(enemy)
             end
         end
@@ -2566,7 +2637,8 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= cap then break end
             if enemy ~= preferred and ClusterFarmController:IsModelAllowed(enemy)
-                and ClusterFarmController:IsVerified(enemy) then
+                and (ClusterFarmController:IsVerified(enemy)
+                    or ClusterFarmController:IsProbeCandidate(enemy)) then
                 add(enemy)
             end
         end
@@ -2579,10 +2651,11 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
             if IsEnemyNamed(enemy, mobName) then
                 local allowExtra = true
                 if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
-                    local root = enemy:FindFirstChild("HumanoidRootPart")
-                    local verifiedAt = root and VerifiedGatherRoots[root]
-                    allowExtra = verifiedAt ~= nil
-                        and now - verifiedAt <= (_G.Settings.GatherVerifiedTTL or 2.5)
+                    local verified = ClusterFarmController
+                        and ClusterFarmController:IsVerified(enemy)
+                    local probe = ClusterFarmController
+                        and ClusterFarmController:IsProbeCandidate(enemy)
+                    allowExtra = verified or probe
                 end
                 if allowExtra then add(enemy) end
             end
@@ -2607,8 +2680,8 @@ function CombatController:SnapshotClusterHealth(entries)
     return snapshot
 end
 
-function CombatController:ClusterHealthDelta(snapshot)
-    local delta = 0
+function CombatController:ClusterHealthDelta(snapshot, applyProof)
+    local delta, changed = 0, 0
     for _, row in ipairs(snapshot or {}) do
         local model, hum = row.Model, row.Humanoid
         local before = tonumber(row.Health) or 0
@@ -2620,11 +2693,20 @@ function CombatController:ClusterHealthDelta(snapshot)
             -- Never use a clearly-attributed nearby player's damage to validate
             -- our remote backend. A destroyed/dead mob otherwise counts as 0 HP.
             if not DamageAttributedToOtherPlayer(model, hum) then
-                delta = delta + (before - after)
+                local oneDelta = before - after
+                delta = delta + oneDelta
+                changed = changed + 1
+                if applyProof and ClusterFarmController and model and model.Parent
+                    and hum and hum.Health > 0
+                    and ClusterFarmController:IsModelAllowed(model) then
+                    pcall(function()
+                        ClusterFarmController:ConfirmDamageProof(model)
+                    end)
+                end
             end
         end
     end
-    return delta
+    return delta, changed
 end
 
 function CombatController:ConfirmDamage(backend, delta)
@@ -2719,6 +2801,11 @@ function CombatController:WatchTarget(model, humanoid)
         local clientCausalProof = IsClientInputBackend(self.PendingBackend)
         if oldHealth and newHealth < oldHealth and withinProbe
             and (clientCausalProof or not attributedElsewhere) then
+            if ClusterFarmController and model and model.Parent
+                and ClusterFarmController:IsModelAllowed(model)
+                and humanoid and humanoid.Health > 0 then
+                pcall(function() ClusterFarmController:ConfirmDamageProof(model) end)
+            end
             self:ConfirmDamage(self.PendingBackend, oldHealth - newHealth)
         end
         if oldHealth and newHealth ~= oldHealth then
@@ -2867,7 +2954,14 @@ function CombatController:CheckPending(now)
                     return
                 end
             end
-            self:FailBackend(backend, "NO-HP-DELTA")
+            if ClusterFarmController and self.PendingTarget
+                and ClusterFarmController:IsProbeCandidate(self.PendingTarget)
+                and not ClusterFarmController:IsVerified(self.PendingTarget) then
+                pcall(function() ClusterFarmController:RejectDamageProbe(self.PendingTarget) end)
+                self:AbortPending("AUTHORITY-PROBE-MISS")
+            else
+                self:FailBackend(backend, "NO-HP-DELTA")
+            end
         end
     end
 end
@@ -2892,66 +2986,43 @@ function CombatController:SelectBackend(now)
     local airFarm = IsAirFarmCombat()
     local stackedCount = tonumber(_G.BobonDiagnostics
         and _G.BobonDiagnostics.BringMoved) or 0
-    local clusterBatch = airFarm
-        and _G.Settings.ClusterPreferBatchHit ~= false
+    local clusterMulti = airFarm
         and _G.State and _G.State.ClusterMode ~= "OFF"
-        and stackedCount >= (_G.Settings.ClusterBatchMinTargets or 2)
+        and stackedCount >= 2
 
     if self.PendingBackend then
-        -- v21.15: if TOKEN-4 was proving one target and a real multi-stack becomes
-        -- available, switch to the canonical batched RegisterHit route instead of
-        -- keeping the old single-target swing alive forever.
-        if clusterBatch and self.PendingBackend == "TOKEN-4"
-            and self:BackendAvailable("LEGACY-2") then
-            self:AbortPending("CLUSTER-BATCH-UPGRADE")
+        local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+        local provenAirRemote = airFarm
+            and not IsClientInputBackend(self.PendingBackend)
+            and self.VerifiedBackend == self.PendingBackend
+            and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
+            and not provenAirRemote then
+            return nil
+        end
+        if airFarm and IsClientInputBackend(self.PendingBackend) then
+            self:AbortPending("AIR-FARM-REMOTE-ONLY")
         else
-            local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
-            local provenAirRemote = airFarm
-                and not IsClientInputBackend(self.PendingBackend)
-                and self.VerifiedBackend == self.PendingBackend
-                and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
-            if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
-                and not provenAirRemote then
-                return nil
-            end
-            -- A stale client-input probe must never pull an active farm cluster down.
-            if airFarm and IsClientInputBackend(self.PendingBackend) then
-                self:AbortPending("AIR-FARM-REMOTE-ONLY")
-            else
-                return self.PendingBackend
-            end
+            return self.PendingBackend
         end
     end
     if now < self.NextProbeAt then return nil end
 
-    -- For a real 2+ mob stack, prefer the current public batched hit shape.
-    -- Do this BEFORE returning a previously verified TOKEN-4 route because TOKEN-4
-    -- may be perfectly valid for one target while still consuming only one target
-    -- from a registered swing when called repeatedly.
-    if clusterBatch then
-        if self.VerifiedBackend == "LEGACY-2"
-            and self:BackendAvailable("LEGACY-2") then
-            return "LEGACY-2"
-        end
-        if self:BackendAvailable("LEGACY-2") then
-            return "LEGACY-2"
-        end
-        if self.VerifiedBackend == "CLIENT-HELPER"
-            and self:BackendAvailable("CLIENT-HELPER") then
-            return "CLIENT-HELPER"
-        end
-    end
-
+    -- Never discard a backend that has already caused real HP loss merely because
+    -- the cluster grew from one target to several. v21.18 changes HOW that backend
+    -- fans out: every target gets its own registered swing.
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
         end
     end
 
-    -- During farm/skip/raid only long-range helper/token/legacy paths are valid.
     if airFarm then
-        local order = clusterBatch
-            and {"LEGACY-2", "CLIENT-HELPER", "TOKEN-4"}
+        -- TOKEN-4 is the current single-target shape also seen in public 2026 farm
+        -- code. With independent fan-out we repeat that proven shape per NPC instead
+        -- of converting it into the legacy one-batch payload.
+        local order = clusterMulti
+            and {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"}
             or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}
         for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
@@ -3034,79 +3105,122 @@ end
 
 function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     if #entries == 0 then return false end
+
+    local clusterIndependent = IsAirFarmCombat()
+        and _G.Settings.ClusterIndependentSwingFanout == true
+        and _G.State and _G.State.ClusterMode ~= "OFF"
+        and #entries >= 2
+    local maxFanout = math.max(2,
+        math.floor(tonumber(_G.Settings.ClusterIndependentSwingMaxTargets) or 8))
+    local gap = math.max(0,
+        tonumber(_G.Settings.ClusterIndependentSwingGap) or 0.022)
+
     if IsClientInputBackend(backend) then
         if IsAirFarmCombat() then return false end
         local ok = self:DispatchClientClick(tool, preferredRoot, backend)
         if ok then
-            -- Do not park at melee height waiting for the next M1. One click gets
-            -- a short dip, then TravelManager immediately returns to safe hover.
             self.DesiredClientRange = false
             self.ClientRetreatUntil = tick() + (_G.Settings.ClientRetreatDelay or 0.55)
         end
         return ok
+
     elseif backend == "CLIENT-HELPER" then
         local helper = self:ResolveNativeHelper()
-        local hitList = {}
-        local basePart = nil
+        if type(helper) ~= "function" then return false end
+
+        if clusterIndependent then
+            local anyOk = false
+            local limit = math.min(#entries, maxFanout)
+            for i = 1, limit do
+                local entry = entries[i]
+                local part = entry.Model:FindFirstChild("Head") or entry.Part
+                if part and part:IsA("BasePart") then
+                    pcall(function() self.RegisterAttack:FireServer(0) end)
+                    local ok = pcall(function()
+                        helper(part, {{entry.Model, part}})
+                    end)
+                    anyOk = anyOk or ok
+                    if gap > 0 and i < limit then task.wait(gap) end
+                end
+            end
+            return anyOk
+        end
+
+        local hitList, basePart = {}, nil
         for _, entry in ipairs(entries) do
             local part = entry.Model:FindFirstChild("Head") or entry.Part
             if part and part:IsA("BasePart") then
-                hitList[#hitList + 1] = { entry.Model, part }
+                hitList[#hitList + 1] = {entry.Model, part}
                 basePart = basePart or part
             end
         end
         if not basePart or #hitList == 0 then return false end
         pcall(function() self.RegisterAttack:FireServer(0) end)
-        local hitOk = pcall(function() helper(basePart, hitList) end)
-        return hitOk
+        return pcall(function() helper(basePart, hitList) end)
+
     elseif backend == "TOKEN-4" then
         local token = self:ResolveSessionToken()
+        if not IsCombatToken(token) then return false end
 
-        -- v21.15 TRUE CLUSTER FAN-OUT:
-        -- A RegisterAttack describes ONE swing. Sending several independent
-        -- RegisterHit calls after it can make the server consume only the first.
-        -- When a verified stack has 2+ targets, send ONE batched hit list exactly
-        -- like the native/public melee route. Keep TOKEN-4 only for a genuine
-        -- single-target hit.
-        if #entries >= (_G.Settings.ClusterBatchMinTargets or 2) then
-            local hitList = {}
-            local basePart = nil
-            for _, entry in ipairs(entries) do
-                local part = entry.Model:FindFirstChild("Head") or entry.Part
+        if clusterIndependent then
+            -- Fresh RegisterAttack for EVERY victim. Current public 2026 examples
+            -- use this exact single-target token shape; one registered swing is not
+            -- reused across several NPCs.
+            local anyOk = false
+            local limit = math.min(#entries, maxFanout)
+            for i = 1, limit do
+                local entry = entries[i]
+                local part = entry.Part
                 if part and part:IsA("BasePart") then
-                    hitList[#hitList + 1] = { entry.Model, part }
-                    basePart = basePart or part
+                    pcall(function() self.RegisterAttack:FireServer(0.5) end)
+                    local ok = pcall(function()
+                        self.RegisterHit:FireServer(part, {}, nil, token)
+                    end)
+                    anyOk = anyOk or ok
+                    if gap > 0 and i < limit then task.wait(gap) end
                 end
             end
-            if not basePart or #hitList == 0 then return false end
-            pcall(function() self.RegisterAttack:FireServer(0) end)
-            return pcall(function()
-                self.RegisterHit:FireServer(basePart, hitList)
-            end)
+            return anyOk
         end
 
         pcall(function() self.RegisterAttack:FireServer(0.5) end)
         return pcall(function()
             self.RegisterHit:FireServer(entries[1].Part, {}, nil, token)
         end)
+
     elseif backend == "LEGACY-2" then
-        -- Current public clients commonly use Head as the 2-argument hit part.
-        -- Keep entry.Part as fallback for rigs without Head.
-        local hitList = {}
-        local basePart = nil
+        if clusterIndependent then
+            local anyOk = false
+            local limit = math.min(#entries, maxFanout)
+            for i = 1, limit do
+                local entry = entries[i]
+                local part = entry.Model:FindFirstChild("Head") or entry.Part
+                if part and part:IsA("BasePart") then
+                    pcall(function() self.RegisterAttack:FireServer(0) end)
+                    local ok = pcall(function()
+                        self.RegisterHit:FireServer(part, {{entry.Model, part}})
+                    end)
+                    anyOk = anyOk or ok
+                    if gap > 0 and i < limit then task.wait(gap) end
+                end
+            end
+            return anyOk
+        end
+
+        local hitList, basePart = {}, nil
         for _, entry in ipairs(entries) do
             local part = entry.Model:FindFirstChild("Head") or entry.Part
             if part and part:IsA("BasePart") then
-                hitList[#hitList + 1] = { entry.Model, part }
+                hitList[#hitList + 1] = {entry.Model, part}
                 basePart = basePart or part
             end
         end
         if not basePart or #hitList == 0 then return false end
         pcall(function() self.RegisterAttack:FireServer(0) end)
-        local hitOk = pcall(function()
+        return pcall(function()
             self.RegisterHit:FireServer(basePart, hitList)
         end)
-        return hitOk
+
     elseif backend == "GUN-REMOTE" then
         local remote = tool:FindFirstChild("LeftClickRemote")
         local playerRoot = HRP()
@@ -3136,7 +3250,8 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     local contextRoundRobinActive = false
     local contextRoundRobinIndex, contextRoundRobinCount = 0, 0
     if IsAirFarmCombat() and _G.State and _G.State.ClusterMode ~= "OFF"
-        and mobName and _G.Settings.ClusterReliableRoundRobin ~= false then
+        and mobName and _G.Settings.ClusterReliableRoundRobin ~= false
+        and _G.Settings.ClusterIndependentSwingFanout ~= true then
         local prelim = self:CollectTargets(preferredModel, mobName,
             _G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
         local minTargets = _G.Settings.ClusterRoundRobinMinTargets or 2
@@ -3155,7 +3270,8 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
                 local vh = self.ClusterContextVictim:FindFirstChildOfClass("Humanoid")
                 local vr = self.ClusterContextVictim:FindFirstChild("HumanoidRootPart")
                 victimStillValid = vh and vh.Health > 0 and vr and vr.Parent
-                    and ClusterFarmController and ClusterFarmController:IsVerified(self.ClusterContextVictim)
+                    and ClusterFarmController
+                    and ClusterFarmController:IsAttackEligible(self.ClusterContextVictim)
             end
 
             local observedDamage = false
@@ -3403,6 +3519,7 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     else
         roundRobinActive = clusterFanout
             and _G.Settings.ClusterReliableRoundRobin ~= false
+            and _G.Settings.ClusterIndependentSwingFanout ~= true
             and #entries >= (_G.Settings.ClusterRoundRobinMinTargets or 2)
         if roundRobinActive then
             local generation = tonumber(_G.State and _G.State.ClusterGeneration) or 0
@@ -3434,6 +3551,13 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         for _, dispatchedEntry in ipairs(dispatchEntries) do
             if dispatchedEntry.Model then
                 self.RecentTargets[dispatchedEntry.Model] = now
+                if ClusterFarmController
+                    and ClusterFarmController:IsProbeCandidate(dispatchedEntry.Model)
+                    and _G.State
+                    and _G.State.ClusterAuthorityProbeTarget == dispatchedEntry.Model
+                    and (tonumber(_G.State.ClusterAuthorityProbeFirstAttackAt) or 0) <= 0 then
+                    _G.State.ClusterAuthorityProbeFirstAttackAt = now
+                end
             end
         end
 
@@ -3445,12 +3569,16 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
             local proofBackend = backend
             local proofTarget = preferredModel
             local function checkAggregateProof()
-                if not SessionAlive() or self.PendingBackend ~= proofBackend
-                    or self.PendingTarget ~= proofTarget then
-                    return
+                if not SessionAlive() then return end
+                -- Always apply exact per-model HP proof, even if the first victim's
+                -- HealthChanged already cleared PendingBackend. Otherwise target #2/#3
+                -- can really take damage yet never become authority-verified.
+                local delta, changed = self:ClusterHealthDelta(snapshot, true)
+                if changed and changed > 0 then
+                    _G.BobonDiagnostics.ClusterDamaged = changed
                 end
-                local delta = self:ClusterHealthDelta(snapshot)
-                if delta > 0 then
+                if delta > 0 and self.PendingBackend == proofBackend
+                    and self.PendingTarget == proofTarget then
                     self:ConfirmDamage(proofBackend, delta)
                 end
             end
@@ -4119,8 +4247,28 @@ end
 -- therefore a logical stop plus a diagnostic reset; the server keeps control
 -- of every assembly that is not currently client-owned.
 function FarmPositionController:ReleaseCluster()
+    -- If a not-yet-proven remote probe is visually staged at the anchor, undo
+    -- only that temporary write before dropping the bookkeeping tables.
+    local releaseState = _G.State
+    local probeModel = releaseState and releaseState.ClusterAuthorityProbeTarget
+    local probeRoot = probeModel and probeModel:FindFirstChild("HumanoidRootPart")
+    local probeOriginal = probeRoot and GatherOriginalPositions[probeRoot]
+    if probeRoot and probeRoot.Parent and probeOriginal and IsValidPos(probeOriginal)
+        and not VerifiedGatherRoots[probeRoot] then
+        pcall(function()
+            local rot = probeRoot.CFrame.Rotation
+            probeRoot.CFrame = CFrame.new(probeOriginal) * rot
+        end)
+    end
+
     GatherGeneration = GatherGeneration + 1
     VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+    DamageProvenGatherRoots = setmetatable({}, { __mode = "k" })
+    GatherAuthorityClass = setmetatable({}, { __mode = "k" })
+    GatherProbeCandidates = setmetatable({}, { __mode = "k" })
+    GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
+    GatherProbeAttempts = setmetatable({}, { __mode = "k" })
+    GatherOriginalPositions = setmetatable({}, { __mode = "k" })
     if ClusterFarmController then
         ClusterFarmController.LastBatch = {}
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
@@ -4142,10 +4290,17 @@ function FarmPositionController:ReleaseCluster()
         _G.State.ClusterAcquireStartedAt = 0
         _G.State.ClusterAcquireDeadline = 0
         _G.State.ClusterAcquireCompleted = 0
+        _G.State.ClusterAuthorityProbeTarget = nil
+        _G.State.ClusterAuthorityProbeStartedAt = 0
+        _G.State.ClusterAuthorityProbeFirstAttackAt = 0
     end
     _G.BobonDiagnostics.Bring = "OFF"
     _G.BobonDiagnostics.BringCandidates = 0
     _G.BobonDiagnostics.BringOwned = 0
+    _G.BobonDiagnostics.BringDamageProven = 0
+    _G.BobonDiagnostics.BringUnknown = 0
+    _G.BobonDiagnostics.BringServerOwned = 0
+    _G.BobonDiagnostics.BringProbe = 0
     _G.BobonDiagnostics.BringMoved = 0
 end
 
@@ -4328,6 +4483,12 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
     if changed then
         GatherGeneration = GatherGeneration + 1
         VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+        DamageProvenGatherRoots = setmetatable({}, { __mode = "k" })
+        GatherAuthorityClass = setmetatable({}, { __mode = "k" })
+        GatherProbeCandidates = setmetatable({}, { __mode = "k" })
+        GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
+        GatherProbeAttempts = setmetatable({}, { __mode = "k" })
+        GatherOriginalPositions = setmetatable({}, { __mode = "k" })
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
@@ -4339,6 +4500,9 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         state.ClusterAcquireStartedAt = 0
         state.ClusterAcquireDeadline = 0
         state.ClusterAcquireCompleted = 0
+        state.ClusterAuthorityProbeTarget = nil
+        state.ClusterAuthorityProbeStartedAt = 0
+        state.ClusterAuthorityProbeFirstAttackAt = 0
         DLog("CLUSTER", "Activate " .. tostring(mode) .. " / " .. tostring(list[1]))
     end
     state.ClusterMode = mode
@@ -4362,26 +4526,146 @@ function ClusterFarmController:GetHoverCFrame(height)
     return CFrame.new(p.X + (_G.Settings.FarmOffsetX or 0), y, p.Z)
 end
 
+function ClusterFarmController:IsDamageProven(model)
+    if not model or not self:IsModelAllowed(model) then return false end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false end
+    local at = DamageProvenGatherRoots[root]
+    if not at then return false end
+    if tick() - at > (_G.Settings.ClusterAuthorityDamageTTL or 1.50) then
+        DamageProvenGatherRoots[root] = nil
+        if GatherAuthorityClass[root] == "DAMAGE" then
+            GatherAuthorityClass[root] = nil
+            VerifiedGatherRoots[root] = nil
+        end
+        return false
+    end
+    return true
+end
+
 function ClusterFarmController:IsVerified(model)
     if not model or not self:IsModelAllowed(model) then return false end
     local root = model:FindFirstChild("HumanoidRootPart")
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
+    local authority = GatherAuthorityClass[root]
+    if authority == "OWNED" then
+        if ClientOwnsMob(root) ~= true then
+            GatherAuthorityClass[root] = nil
+            VerifiedGatherRoots[root] = nil
+            return false
+        end
+    elseif authority == "DAMAGE" then
+        if not self:IsDamageProven(model) then return false end
+    else
+        return false
+    end
     local at = VerifiedGatherRoots[root]
     if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 2.5) then
         return false
     end
-    -- Ownership can change after a successful stack. Do not keep attacking a
-    -- root that the server has already snapped away from the shared anchor.
     local anchor = _G.State and _G.State.ClusterAnchor
     local ok, pos = pcall(function() return root.Position end)
     if not anchor or not ok or not IsValidPos(pos)
-        or (pos - anchor.Position).Magnitude
-            > (_G.Settings.ClusterAnchorVerifyRadius or 9) then
+        or (pos - anchor.Position).Magnitude > (_G.Settings.ClusterAnchorVerifyRadius or 9) then
         VerifiedGatherRoots[root] = nil
+        if authority == "DAMAGE" then GatherAuthorityClass[root] = nil end
         return false
     end
     return true
+end
+
+function ClusterFarmController:IsProbeCandidate(model)
+    if _G.Settings.ClusterAuthorityEnabled == false then return false end
+    if not model or not self:IsModelAllowed(model) or self:IsVerified(model) then return false end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false end
+    if (GatherProbeFailedUntil[root] or 0) > tick() then return false end
+    return GatherProbeCandidates[root] == true
+end
+
+function ClusterFarmController:IsAttackEligible(model)
+    return self:IsVerified(model) or self:IsProbeCandidate(model)
+end
+
+function ClusterFarmController:ConfirmDamageProof(model)
+    if not model or not self:IsModelAllowed(model) then return false end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false end
+
+    local now = tick()
+    DamageProvenGatherRoots[root] = now
+    GatherAuthorityClass[root] = "DAMAGE"
+    GatherProbeCandidates[root] = nil
+    GatherProbeFailedUntil[root] = nil
+    GatherProbeAttempts[root] = 0
+
+    local state = _G.State
+    if state and state.ClusterAuthorityProbeTarget == model then
+        state.ClusterAuthorityProbeTarget = nil
+        state.ClusterAuthorityProbeStartedAt = 0
+        state.ClusterAuthorityProbeFirstAttackAt = 0
+    end
+
+    -- Only after a real HP decrease do we keep an unknown-owner root visually at
+    -- the shared anchor. Before this point a local CFrame write is merely a probe,
+    -- never "stacked" authority.
+    local anchorCF = state and state.ClusterAnchor
+    if anchorCF then
+        pcall(function()
+            local rot = root.CFrame.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = CFrame.new(anchorCF.Position) * rot
+        end)
+        VerifiedGatherRoots[root] = now
+    end
+    return true
+end
+
+function ClusterFarmController:RejectDamageProbe(model)
+    if not model then return end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    GatherProbeCandidates[root] = nil
+    GatherProbeAttempts[root] = (GatherProbeAttempts[root] or 0) + 1
+    local tries = GatherProbeAttempts[root]
+    local maxTries = math.max(1,
+        math.floor(tonumber(_G.Settings.ClusterAuthorityMaxProbeAttempts) or 3))
+    local base = tonumber(_G.Settings.ClusterAuthorityProbeMissCooldown) or 1.60
+    local hard = tonumber(_G.Settings.ClusterAuthorityHardMissCooldown) or 5.0
+    GatherProbeFailedUntil[root] = tick()
+        + (tries >= maxTries and hard or base * math.max(1, tries))
+
+    -- Undo only our temporary visual test. The next server replication is still
+    -- authoritative, but restoring the pre-probe position avoids leaving a statue
+    -- under the player after a failed HP test.
+    local original = GatherOriginalPositions[root]
+    if original and IsValidPos(original) then
+        pcall(function()
+            local rot = root.CFrame.Rotation
+            root.CFrame = CFrame.new(original) * rot
+        end)
+    end
+
+    local state = _G.State
+    if state and state.ClusterAuthorityProbeTarget == model then
+        state.ClusterAuthorityProbeTarget = nil
+        state.ClusterAuthorityProbeStartedAt = 0
+        state.ClusterAuthorityProbeFirstAttackAt = 0
+    end
+end
+
+function ClusterFarmController:GetProbeCount()
+    local n = 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        if entry.Model and self:IsProbeCandidate(entry.Model) then n = n + 1 end
+    end
+    return n
 end
 
 function ClusterFarmController:GetVerifiedCount()
@@ -4407,42 +4691,26 @@ function ClusterFarmController:GetAcquireTarget()
         return nil
     end
 
+    if state.ClusterMode == "QUEST"
+        and _G.Settings.ClusterQuestPhysicalFallback ~= true then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+    if state.ClusterMode == "SKIP"
+        and _G.Settings.ClusterSkipPhysicalFallback == false then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
     local now = tick()
-    local verified = self:GetVerifiedCount()
-
-    -- v21.13: once the remote magnet has produced ANY real stack, stay parked
-    -- above that stack. Do not turn the remaining batch into a per-mob flight tour.
-    if verified > 0 then
-        state.ClusterAcquireTarget = nil
-        state.ClusterAcquireStartedAt = 0
-        state.ClusterAcquireDeadline = 0
-        return nil
-    end
-
-    -- Give SimulationRadius + remote position proof a short chance to collapse
-    -- the whole batch before allowing any physical acquisition fallback.
-    local age = now - (state.ClusterActivatedAt or now)
-    local remoteGrace = math.max(0.25, tonumber(_G.Settings.ClusterRemotePullGrace) or 1.20)
-    if _G.Settings.ClusterRemotePullFirst ~= false and age < remoteGrace then
-        state.ClusterAcquireTarget = nil
-        state.ClusterAcquireStartedAt = 0
-        state.ClusterAcquireDeadline = 0
-        return nil
-    end
-
-    if _G.Settings.ClusterPhysicalAcquireFallback == false then
-        state.ClusterAcquireTarget = nil
-        state.ClusterAcquireStartedAt = 0
-        state.ClusterAcquireDeadline = 0
-        return nil
-    end
-
     local current = state.ClusterAcquireTarget
     if current and current.Parent and self:IsModelAllowed(current)
         and not self:IsVerified(current) then
-        if now <= (state.ClusterAcquireDeadline or 0) then
-            return current
-        end
+        if now <= (state.ClusterAcquireDeadline or 0) then return current end
         local attempts = (self.AcquireAttempts[current] or 0) + 1
         self.AcquireAttempts[current] = attempts
         local retryAfter = attempts >= (_G.Settings.ClusterAcquireMaxAttempts or 1)
@@ -4459,30 +4727,17 @@ function ClusterFarmController:GetAcquireTarget()
 
     local me = HRP()
     local best, bestDist
-    local unknownFallbackDelay = math.max(remoteGrace,
-        tonumber(_G.Settings.ClusterUnknownPhysicalFallbackDelay) or 3.0)
     for _, entry in ipairs(self.LastBatch or {}) do
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
             and not self:IsVerified(model)
             and (self.AcquireBlockedUntil[model] or 0) <= now then
-            if (self.AcquireAttempts[model] or 0)
-                >= (_G.Settings.ClusterAcquireMaxAttempts or 1) then
-                self.AcquireAttempts[model] = 0
-            end
             local ownership = ClientOwnsMob(root)
-            -- Explicit false may need one physical visit. Unknown ownership gets a
-            -- longer remote-only window because many mobile executors can still
-            -- replicate the CFrame move even though they cannot expose ownership.
-            local allowPhysical = ownership == false
-                or (ownership == nil and age >= unknownFallbackDelay)
-            if allowPhysical then
+            if ownership ~= true then
                 local ok, pos = pcall(function() return root.Position end)
                 if ok and IsValidPos(pos) then
                     local dist = me and (pos - me.Position).Magnitude or 0
-                    if not bestDist or dist < bestDist then
-                        best, bestDist = model, dist
-                    end
+                    if not bestDist or dist < bestDist then best, bestDist = model, dist end
                 end
             end
         end
@@ -4490,11 +4745,12 @@ function ClusterFarmController:GetAcquireTarget()
     if best then
         state.ClusterAcquireTarget = best
         state.ClusterAcquireStartedAt = now
-        local eta = (bestDist or 0) / math.max(1, _G.Settings.FlySpeed or 180)
-        local budget = math.clamp(eta + (_G.Settings.ClusterAcquireSettle or 0.7),
+        local eta = (bestDist or 0) / math.max(1,
+            _G.Settings.SkipTravelSpeed or _G.Settings.FlySpeed or 180)
+        state.ClusterAcquireDeadline = now + math.clamp(
+            eta + (_G.Settings.ClusterAcquireSettle or 0.7),
             _G.Settings.ClusterAcquireTimeout or 0.9,
             _G.Settings.ClusterAcquireMaxTimeout or 4.0)
-        state.ClusterAcquireDeadline = now + budget
     end
     return best
 end
@@ -4526,37 +4782,58 @@ function ClusterFarmController:SelectPrimary()
     return best
 end
 
+function ClusterFarmController:SelectProbePrimary()
+    if _G.Settings.ClusterAuthorityEnabled == false then return nil end
+    local me = HRP()
+    local best, bestDist
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, hum, root = entry.Model, entry.Humanoid, entry.Root
+        if model and hum and hum.Health > 0 and root and root.Parent
+            and self:IsProbeCandidate(model) then
+            local ok, pos = pcall(function() return root.Position end)
+            if ok and IsValidPos(pos) then
+                local d = me and (pos - me.Position).Magnitude or 0
+                if not bestDist or d < bestDist then best, bestDist = model, d end
+            end
+        end
+    end
+    return best
+end
+
 function ClusterFarmController:RestackBatch()
     if not self:PolicyValid() then return 0 end
     local state = _G.State
     local anchorCF = state and state.ClusterAnchor
     if not anchorCF then return 0 end
+
     local anchor = anchorCF.Position
     local now = tick()
-    local kept, moved = {}, 0
-    local verifyRadius = _G.Settings.ClusterAnchorVerifyRadius or 9
-    local proofTime = math.max(0.10, tonumber(_G.Settings.ClusterRemotePullProofTime)
-        or tonumber(_G.Settings.ClusterUnknownProofTime) or 0.18)
-    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterRemotePullProofChecks)
-        or tonumber(_G.Settings.ClusterUnknownProofChecks) or 2))
-    local remoteRetry = math.max(0.06, tonumber(_G.Settings.ClusterRemotePullRetry) or 0.12)
+    local kept, verifiedCount = {}, 0
+    local me = HRP()
+    local damageTTL = tonumber(_G.Settings.ClusterAuthorityDamageTTL) or 1.50
+    local warmup = math.max(0, tonumber(_G.Settings.ClusterAuthorityWarmup) or 0.45)
+    local warmReady = now - (state.ClusterActivatedAt or now) >= warmup
 
-    local function writeToAnchor(model, root)
+    local playerAtAnchor = false
+    if me then
+        local flat = (Vector3.new(me.Position.X, 0, me.Position.Z)
+            - Vector3.new(anchor.X, 0, anchor.Z)).Magnitude
+        local yGap = math.abs(me.Position.Y - anchor.Y)
+        playerAtAnchor = flat <= math.max(30, (_G.Settings.FarmArrivalThreshold or 7) + 18)
+            and yGap <= math.max(80, (_G.Settings.FarmHeight or 22) + 45)
+    end
+
+    local function writeToAnchor(root)
         return pcall(function()
             local rot = root.CFrame.Rotation
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-            -- Root move is the authoritative path used by the working v21.8 cluster.
-            -- PivotTo is only a protected assist for executors that replicate model pivots
-            -- more reliably; root CFrame is written last to guarantee one exact pocket.
-            pcall(function()
-                if model and type(model.PivotTo) == "function" then
-                    model:PivotTo(CFrame.new(anchor) * rot)
-                end
-            end)
             root.CFrame = CFrame.new(anchor) * rot
         end)
     end
+
+    local probePool = {}
+    local currentProbe = state.ClusterAuthorityProbeTarget
 
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
@@ -4568,77 +4845,119 @@ function ClusterFarmController:RestackBatch()
 
             local own = ClientOwnsMob(root)
             local okPos, rootPos = pcall(function() return root.Position end)
-            local atAnchor = okPos and IsValidPos(rootPos)
-                and (rootPos - anchor).Magnitude <= verifyRadius
+            if okPos and IsValidPos(rootPos) and not GatherOriginalPositions[root] then
+                GatherOriginalPositions[root] = rootPos
+            end
 
             if own == true then
-                -- Best case: SimulationRadius already gave this client ownership.
-                -- Pull it immediately from wherever it is; no player visit required.
-                if writeToAnchor(model, root) then
+                if writeToAnchor(root) then
+                    GatherAuthorityClass[root] = "OWNED"
                     VerifiedGatherRoots[root] = now
-                    self.PositionProof[root] = nil
-                    self.RemotePullRetryAt[root] = nil
-                    moved = moved + 1
+                    DamageProvenGatherRoots[root] = nil
+                    GatherProbeCandidates[root] = nil
+                    GatherProbeFailedUntil[root] = nil
+                    verifiedCount = verifiedCount + 1
+                    if currentProbe == model then
+                        state.ClusterAuthorityProbeTarget = nil
+                        state.ClusterAuthorityProbeStartedAt = 0
+                        state.ClusterAuthorityProbeFirstAttackAt = 0
+                        currentProbe = nil
+                    end
                 end
             else
-                local verifiedAt = VerifiedGatherRoots[root]
-                if verifiedAt and atAnchor then
-                    -- A previously proven remote pull is still physically resident in
-                    -- the pocket. Keep unknown-owner roots pinned; explicit-false roots
-                    -- are refreshed by proof/retry rather than being called owned.
-                    if own == nil then pcall(writeToAnchor, model, root) end
-                    VerifiedGatherRoots[root] = now
-                    moved = moved + 1
-                else
-                    if verifiedAt and not atAnchor then
-                        VerifiedGatherRoots[root] = nil
-                    end
-
-                    local proof = self.PositionProof[root]
-                    if proof then
-                        if atAnchor then
-                            proof.Checks = (proof.Checks or 0) + 1
-                            if now - (proof.StartedAt or now) >= proofTime
-                                and proof.Checks >= proofChecks then
-                                -- The mob stayed at the shared anchor across multiple
-                                -- Heartbeats. This is the server-persistence proof used
-                                -- before group attack eligibility.
-                                VerifiedGatherRoots[root] = now
-                                self.PositionProof[root] = nil
-                                self.RemotePullRetryAt[root] = nil
-                                moved = moved + 1
-                            end
-                        elseif now - (proof.StartedAt or now) >= 0.06 then
-                            -- Server snapped it back: revoke the local test and retry
-                            -- later. Do not mark a visual-only ghost as stacked.
-                            self.PositionProof[root] = nil
-                            VerifiedGatherRoots[root] = nil
-                            self.RemotePullRetryAt[root] = now + remoteRetry
+                local damageAt = DamageProvenGatherRoots[root]
+                local damageFresh = damageAt and now - damageAt <= damageTTL
+                if damageFresh then
+                    if writeToAnchor(root) then
+                        GatherAuthorityClass[root] = "DAMAGE"
+                        VerifiedGatherRoots[root] = now
+                        GatherProbeCandidates[root] = nil
+                        verifiedCount = verifiedCount + 1
+                        if currentProbe == model then
+                            state.ClusterAuthorityProbeTarget = nil
+                            state.ClusterAuthorityProbeStartedAt = 0
+                            state.ClusterAuthorityProbeFirstAttackAt = 0
+                            currentProbe = nil
                         end
                     end
+                else
+                    if GatherAuthorityClass[root] == "DAMAGE" then
+                        GatherAuthorityClass[root] = nil
+                    end
+                    VerifiedGatherRoots[root] = nil
+                    DamageProvenGatherRoots[root] = nil
+                    GatherProbeCandidates[root] = nil
 
-                    -- v21.13 core behavior: remote test from ANY distance. There is no
-                    -- nearPlayer/touch-radius gate here. This is what restores the
-                    -- 'stand at the anchor and mobs collapse into one spot' feel.
-                    if not self.PositionProof[root]
-                        and now >= (self.RemotePullRetryAt[root] or 0) then
-                        if writeToAnchor(model, root) then
-                            self.PositionProof[root] = {
-                                StartedAt = now,
-                                Checks = 0,
-                                OwnerState = own,
+                    if warmReady and playerAtAnchor
+                        and now >= (GatherProbeFailedUntil[root] or 0) then
+                        local original = GatherOriginalPositions[root]
+                        local scorePos = original or (okPos and rootPos or nil)
+                        if scorePos and IsValidPos(scorePos) then
+                            probePool[#probePool + 1] = {
+                                Model=model, Root=root, Humanoid=hum,
+                                Score=(scorePos - anchor).Magnitude,
                             }
                         end
-                        self.RemotePullRetryAt[root] = now + remoteRetry
                     end
                 end
             end
         end
     end
 
+    -- Unknown/server-owned roots are never all declared stacked just because a
+    -- local CFrame assignment "sticks". Test exactly ONE root at a time while the
+    -- player remains at the shared anchor. Only a causal HP decrease promotes it.
+    local activeProbe = nil
+    if currentProbe and currentProbe.Parent then
+        for _, row in ipairs(probePool) do
+            if row.Model == currentProbe then
+                activeProbe = row
+                break
+            end
+        end
+    end
+    if not activeProbe and #probePool > 0 then
+        table.sort(probePool, function(a, b) return a.Score < b.Score end)
+        activeProbe = probePool[1]
+        state.ClusterAuthorityProbeTarget = activeProbe.Model
+        state.ClusterAuthorityProbeStartedAt = now
+        state.ClusterAuthorityProbeFirstAttackAt = 0
+    elseif not activeProbe then
+        state.ClusterAuthorityProbeTarget = nil
+        state.ClusterAuthorityProbeStartedAt = 0
+        state.ClusterAuthorityProbeFirstAttackAt = 0
+    end
+
+    if activeProbe then
+        local probeWindow = math.max(0.8,
+            tonumber(_G.Settings.ClusterAuthorityProbeWindow) or 1.60)
+        local firstAttackAt = tonumber(state.ClusterAuthorityProbeFirstAttackAt) or 0
+        if firstAttackAt > 0 and now - firstAttackAt >= probeWindow then
+            self:RejectDamageProbe(activeProbe.Model)
+            activeProbe = nil
+        elseif firstAttackAt <= 0
+            and now - (state.ClusterAuthorityProbeStartedAt or now) >= 6.0 then
+            -- A backend never became ready; do not leave an unproven statue staged
+            -- forever. Rotate and retry later without blaming the combat backend.
+            self:RejectDamageProbe(activeProbe.Model)
+            activeProbe = nil
+        end
+    end
+
+    if activeProbe then
+        local root = activeProbe.Root
+        GatherProbeCandidates[root] = true
+        local rewriteGap = math.max(0.08,
+            tonumber(_G.Settings.ClusterAuthorityProbeCooldown) or 0.18)
+        if now >= (self.RemotePullRetryAt[root] or 0) then
+            writeToAnchor(root)
+            self.RemotePullRetryAt[root] = now + rewriteGap
+        end
+    end
+
     self.LastBatch = kept
-    if moved > 0 then state.ClusterLastMoved = now end
-    return moved
+    if verifiedCount > 0 then state.ClusterLastMoved = now end
+    return verifiedCount
 end
 
 function ClusterFarmController:Tick()
@@ -4665,17 +4984,21 @@ function ClusterFarmController:Tick()
 
     local ttl = _G.Settings.GatherVerifiedTTL or 2.5
     for root, at in pairs(VerifiedGatherRoots) do
-        if not root.Parent or now - at > ttl then VerifiedGatherRoots[root] = nil end
+        if not root.Parent or now - at > ttl then
+            VerifiedGatherRoots[root] = nil
+            if GatherAuthorityClass[root] == "OWNED" then GatherAuthorityClass[root] = nil end
+        end
     end
 
-    -- Snapshot the WHOLE active spawn before moving anything. No primary-target
-    -- gate, no network-owner gate, no per-mob queue and no gather limit.
     local candidates = {}
+    local questFieldRadius = tonumber(_G.Settings.ClusterAuthorityFieldRadius)
+        or tonumber(_G.Settings.ClusterQuestRadius) or 180
     local maxDistance = state.ClusterMode == "RAID"
         and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
         or (state.ClusterMode == "QUEST"
-            and math.max(100, tonumber(_G.Settings.ClusterQuestRadius) or 900)
+            and math.max(80, questFieldRadius)
             or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000))
+
     for _, mob in ipairs(folder:GetChildren()) do
         if self:IsModelAllowed(mob) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -4685,7 +5008,11 @@ function ClusterFarmController:Tick()
                 if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                     and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
                     and (pos - anchor).Magnitude <= maxDistance then
-                    candidates[#candidates + 1] = {Model=mob, Humanoid=hum, Root=root, Position=pos}
+                    if not GatherOriginalPositions[root] then GatherOriginalPositions[root] = pos end
+                    candidates[#candidates + 1] = {
+                        Model=mob, Humanoid=hum, Root=root,
+                        Position=GatherOriginalPositions[root] or pos
+                    }
                 end
             end
         end
@@ -4695,28 +5022,46 @@ function ClusterFarmController:Tick()
     self.LastBatchAt = now
     state.ClusterLastSeen = #candidates > 0 and now or (state.ClusterLastSeen or 0)
 
-    -- Ownership is both diagnostic and authoritative. Unknown/server-owned
-    -- roots stay in the candidate batch but are NOT marked verified. This lets
-    -- the farm fallback chase a real mob, acquire ownership, then stack the batch.
     local owned, unknown, other = 0, 0, 0
     for _, entry in ipairs(candidates) do
         local own = ClientOwnsMob(entry.Root)
-        if own == true then owned = owned + 1 elseif own == nil then unknown = unknown + 1 else other = other + 1 end
+        if own == true then owned = owned + 1
+        elseif own == nil then unknown = unknown + 1
+        else other = other + 1 end
     end
 
-    local moved = self:RestackBatch()
+    local stacked = self:RestackBatch()
+    local proven, probes = 0, 0
+    for _, entry in ipairs(candidates) do
+        if entry.Model and self:IsDamageProven(entry.Model) then proven = proven + 1 end
+        if entry.Model and self:IsProbeCandidate(entry.Model) then probes = probes + 1 end
+    end
+
     local primary = self:SelectPrimary()
     state.ClusterPrimary = primary
-    state.ClusterAcquireCompleted = self:GetVerifiedCount()
+    state.ClusterAcquireCompleted = stacked
     _G.BobonDiagnostics.BringCandidates = #candidates
     _G.BobonDiagnostics.BringOwned = owned
-    _G.BobonDiagnostics.BringMoved = moved
-    _G.BobonDiagnostics.Bring = moved > 0 and ("TRUE-ALL-" .. state.ClusterMode)
-        or (#candidates == 0 and "WAIT-SPAWN")
-        or (unknown > 0 and "STACK-NO-OWNER-API")
-        or (other > 0 and "STACK-RETRY-NET")
-        or "WAIT-STACK"
-    return moved
+    _G.BobonDiagnostics.BringDamageProven = proven
+    _G.BobonDiagnostics.BringUnknown = unknown
+    _G.BobonDiagnostics.BringServerOwned = other
+    _G.BobonDiagnostics.BringProbe = probes
+    _G.BobonDiagnostics.BringMoved = stacked
+
+    if stacked > 0 then
+        _G.BobonDiagnostics.Bring = "AUTHORITY-STACK"
+    elseif probes > 0 then
+        _G.BobonDiagnostics.Bring = "PROBING-REAL-HP"
+    elseif #candidates == 0 then
+        _G.BobonDiagnostics.Bring = "WAIT-SPAWN"
+    elseif unknown > 0 then
+        _G.BobonDiagnostics.Bring = "NO-OWNER-API"
+    elseif other > 0 then
+        _G.BobonDiagnostics.Bring = "WAIT-NET-OWNERSHIP"
+    else
+        _G.BobonDiagnostics.Bring = "WAIT-AUTHORITY"
+    end
+    return stacked
 end
 
 -- Compatibility wrapper for old callers. Quest mode now persists at the
@@ -10154,23 +10499,17 @@ end
 
 local function ResolveQuestClusterAnchor(q, mobName)
     local state = _G.State
-    -- Once an anchor for this quest mob exists, keep it stable across kills.
     if state.ClusterMode == "QUEST" and state.ClusterAnchor
         and state.ClusterMobName and string.lower(tostring(state.ClusterMobName))
             == string.lower(tostring(mobName)) then
         return state.ClusterAnchor
     end
 
-    -- v21.6 VIDEO STYLE: seed a new cluster from a REAL live same-name mob in
-    -- the canonical spawn field. This avoids parking at a stale QDB midpoint and
-    -- makes the first acquisition/gather happen where the actual batch is visible.
     local base = q and q.MC
     local folder = workspace:FindFirstChild("Enemies")
-    local bestPos, bestScore
-    local me = HRP()
-    local fieldRadius = math.max(150,
-        math.min(tonumber(_G.Settings.ClusterQuestRadius) or 900,
-            (tonumber(_G.Settings.MaxFarmDistance) or 300) + 250))
+    local positions = {}
+    local fieldRadius = math.max(120,
+        tonumber(_G.Settings.ClusterAuthorityFieldRadius) or 180)
 
     if folder then
         for _, mob in ipairs(folder:GetChildren()) do
@@ -10181,24 +10520,57 @@ local function ResolveQuestClusterAnchor(q, mobName)
                     local ok, pos = pcall(function() return root.Position end)
                     if ok and IsAllowedWorldPosition(pos) then
                         local inField = not base or typeof(base) ~= "CFrame"
-                            or (pos - base.Position).Magnitude <= fieldRadius
-                        if inField then
-                            local score = me and (pos - me.Position).Magnitude
-                                or (base and typeof(base) == "CFrame"
-                                    and (pos - base.Position).Magnitude or 0)
-                            if not bestScore or score < bestScore then
-                                bestPos, bestScore = pos, score
-                            end
-                        end
+                            or (pos - base.Position).Magnitude <= math.max(fieldRadius * 2.5, 260)
+                        if inField then positions[#positions + 1] = pos end
                     end
                 end
             end
         end
     end
 
-    if bestPos then
-        DLog("FARM", "Video cluster anchor -> live " .. tostring(mobName))
-        return CFrame.new(bestPos)
+    if #positions > 0 then
+        -- Choose a center that minimizes the FARTHEST live mob distance, not the
+        -- nearest single mob. This is important for 100-stud server-valid hit/probe
+        -- range: parking on one mob can leave the other two outside the real range.
+        local sum = Vector3.zero
+        local minX, maxX = math.huge, -math.huge
+        local minY, maxY = math.huge, -math.huge
+        local minZ, maxZ = math.huge, -math.huge
+        for _, p in ipairs(positions) do
+            sum = sum + p
+            minX, maxX = math.min(minX, p.X), math.max(maxX, p.X)
+            minY, maxY = math.min(minY, p.Y), math.max(maxY, p.Y)
+            minZ, maxZ = math.min(minZ, p.Z), math.max(maxZ, p.Z)
+        end
+        local centroid = sum / #positions
+        local boxCenter = Vector3.new(
+            (minX + maxX) * 0.5,
+            (minY + maxY) * 0.5,
+            (minZ + maxZ) * 0.5
+        )
+        local centers = {centroid, boxCenter}
+        if base and typeof(base) == "CFrame" then centers[#centers + 1] = base.Position end
+        for _, p in ipairs(positions) do centers[#centers + 1] = p end
+
+        local bestCenter, bestMax, bestAvg
+        for _, center in ipairs(centers) do
+            local maxDist, total = 0, 0
+            for _, p in ipairs(positions) do
+                local d = (p - center).Magnitude
+                maxDist = math.max(maxDist, d)
+                total = total + d
+            end
+            local avg = total / #positions
+            if not bestCenter or maxDist < bestMax - 0.01
+                or (math.abs(maxDist - bestMax) <= 0.01 and avg < bestAvg) then
+                bestCenter, bestMax, bestAvg = center, maxDist, avg
+            end
+        end
+        if bestCenter then
+            DLog("FARM", ("Authority minimax anchor -> %s (%d mobs, max %.1f)")
+                :format(tostring(mobName), #positions, bestMax or 0))
+            return CFrame.new(bestCenter)
+        end
     end
     return base
 end
@@ -10568,10 +10940,20 @@ task.spawn(function()
                 and IsFarmTargetContested(_G.State.FarmTarget)
             if not contested then
                 local promoted = ClusterFarmController:SelectPrimary()
-                if promoted then
-                    _G.State.FarmTarget = promoted
-                    _G.State.CurrentTarget = promoted
+                local probeTarget = not promoted and ClusterFarmController:SelectProbePrimary() or nil
+                local chosen = promoted or probeTarget
+                if chosen then
+                    _G.State.FarmTarget = chosen
+                    _G.State.CurrentTarget = chosen
                     _G.State.ClusterPrimary = promoted
+                elseif _G.Settings.ClusterAuthorityEnabled ~= false
+                    and _G.State.ClusterMode == "QUEST" then
+                    -- Authority mode never chases a merely visible same-name NPC.
+                    -- If it is neither verified nor the one active HP probe, clear
+                    -- the stale target and keep the player on the shared field anchor.
+                    _G.State.FarmTarget = nil
+                    _G.State.CurrentTarget = nil
+                    _G.State.ClusterPrimary = nil
                 elseif not _G.State:IsTargetValid(_G.State.FarmTarget)
                     or not IsEnemyNamed(_G.State.FarmTarget, questMobName) then
                     _G.State.FarmTarget = nil
@@ -10586,13 +10968,16 @@ task.spawn(function()
             -- Keep player parked above the stable anchor whenever a clustered
             -- target exists. This is the fast path observed in the showcase.
             local verifiedClusterTarget = target and ClusterFarmController:IsVerified(target)
+            local authorityProbeTarget = target
+                and ClusterFarmController:IsProbeCandidate(target)
+                and not verifiedClusterTarget
             -- An acquisition request above must survive this tick. Without this
             -- branch, MOVE_TO_CLUSTER immediately retargeted the same owner back
             -- to hoverCF and the sweep never reached the remaining spawn roots.
             if acquiring then
                 _G.State.FState = "GATHER_AND_ATTACK"
-            elseif hoverCF and verifiedClusterTarget and not contested then
-                _G.State.FState = "MOVE_TO_CLUSTER"
+            elseif hoverCF and (verifiedClusterTarget or authorityProbeTarget) and not contested then
+                _G.State.FState = authorityProbeTarget and "AUTHORITY_PROBE" or "MOVE_TO_CLUSTER"
                 if _G.State:CanRequestTravel() then
                     TravelManager:Request(hoverCF, "Farm", {
                         arrivalThreshold = _G.Settings.FarmArrivalThreshold,
@@ -10672,9 +11057,14 @@ task.spawn(function()
                 -- mob. A locally stacked-looking root is not allowed to trap the
                 -- farm forever. A live acquisition root uses CombatController's
                 -- own per-target HP proof because its position is still changing.
-                if not hybridAcquireAttack and TravelManager:IsAtCombatAnchor()
+                if not hybridAcquireAttack and not authorityProbeTarget
+                    and ClusterFarmController:GetVerifiedCount() <= 1
+                    and ClusterFarmController:GetProbeCount() == 0
+                    and TravelManager:IsAtCombatAnchor()
                     and ObserveFarmDamage(target) then
                     VerifiedGatherRoots[targetRoot] = nil
+                    DamageProvenGatherRoots[targetRoot] = nil
+                    GatherAuthorityClass[targetRoot] = nil
                     if _G.State.ClusterPrimary == target then _G.State.ClusterPrimary = nil end
                     -- A full three-second batch stall is stronger evidence than
                     -- a single missed packet. Rotate the actual backend instead
@@ -10697,10 +11087,11 @@ task.spawn(function()
                     - Vector3.new(targetRoot.Position.X,0,targetRoot.Position.Z)).Magnitude
                 local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
                 if flatDist <= _G.Settings.AttackRange and farmHolds
-                    and (hybridAcquireAttack or hybridClusterAttack
+                    and (authorityProbeTarget or hybridAcquireAttack or hybridClusterAttack
                         or TravelManager:IsAtCombatAnchor()) then
-                    _G.State.FState = (hybridAcquireAttack or hybridClusterAttack)
-                        and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER"
+                    _G.State.FState = authorityProbeTarget and "AUTHORITY_PROBE_ATTACK"
+                        or ((hybridAcquireAttack or hybridClusterAttack)
+                            and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER")
                     EquipCombatTool()
                     Attack(target, questMobName)
                     if os.time() - lastAttackLog >= 5 then
@@ -10920,10 +11311,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.17] Full Script Loaded Successfully!")
-print("[BobonHub v21.17] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.17] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.17] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.17] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.17] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.17] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.18] Full Script Loaded Successfully!")
+print("[BobonHub v21.18] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.18] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.18] Modules: QuestFarm | Authority Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.18] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.18] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.18] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
