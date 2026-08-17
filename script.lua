@@ -1,7 +1,20 @@
 -- =================================================================
---         BOBON HUB v18.7 FULL-BATCH CLUSTER + GLASS NEON HUD V2.1 SAFE | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.8 BOOT-SAFE + MELEE/SWORD/TTK + GLASS NEON V2.2 | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v18.4 DOUGH GATHER FIXED | Version: v18.7 FULL-BATCH CLUSTER + TEDDY SKIP
+--         Base: v18.7 FULL-BATCH CLUSTER + TEDDY SKIP | Version: v18.8
+--
+--  v18.8 BOOT / MELEE / SWORD AUDIT:
+--  [B-1] Remove silent 10s CommF_ return: bootstrap HUD appears first and waits
+--        for the live RemoteFunction instead of killing the entire kaitun.
+--  [B-2] UI remains isolated by pcall; UI failure cannot terminate farm core.
+--  [B-3] Auto Buy Melee drives the real fighting-style progression chain.
+--  [B-4] Auto Buy Swords probes all normal BuyItem swords without first-item lock.
+--  [B-5] Legendary Sword Dealer supports current Saishi/Shizu/Oroshi plus legacy
+--        Saddi/Shisui/Wando aliases; TTK trains each prerequisite to 300 mastery.
+--  [B-6] True Triple Katana purchase uses MysteriousMan only after all three
+--        legendary swords + mastery + Beli gates are locally verified.
+--  [B-7] Missing live boss-drop swords are opportunistically hunted in safe
+--        progression windows; current Chef/Orbitus/rip_indra True Form aliases added.
 --
 --  v18.3 FARM MOVEMENT / QUEST GATHER FIXES:
 --  [QG-1] Nearby regular quest mobs use one conservative short CFrame snap to
@@ -261,7 +274,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.7 GLASS NEON HUD V2.1 SAFE] Loading...")
+print("[BobonHub v18.8 BOOT-SAFE + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -278,10 +291,92 @@ local HttpService  = game:GetService("HttpService")
 local CoreGui      = game:GetService("CoreGui")
 
 
-local LP      = Players.LocalPlayer
-local Remotes = RS:WaitForChild("Remotes", 10)
-local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v18.7 GLASS NEON HUD V2.1 SAFE] CommF_ not found!") return end
+local LP = Players.LocalPlayer
+while not LP and SessionAlive() do
+    task.wait(0.10)
+    LP = Players.LocalPlayer
+end
+if not LP then error("[BobonHub] LocalPlayer unavailable") end
+
+-- v18.8 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
+-- had not replicated within 10 seconds.  Show a tiny bootstrap HUD immediately
+-- and keep resolving the authoritative RemoteFunction instead of silently dying.
+local BootGui, BootLabel
+pcall(function()
+    local parent = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+    -- PlayerGui is the broadest compatibility target. gethui/CoreGui are fallbacks
+    -- for executors that intentionally isolate injected GUI from PlayerGui.
+    if not parent and type(gethui) == "function" then
+        local ok, hui = pcall(gethui)
+        if ok and hui then parent = hui end
+    end
+    if not parent then
+        local ok = pcall(function() return CoreGui.Name end)
+        if ok then parent = CoreGui end
+    end
+    if parent then
+        local old = parent:FindFirstChild("BobonBootUI")
+        if old then old:Destroy() end
+        BootGui = Instance.new("ScreenGui")
+        BootGui.Name = "BobonBootUI"
+        BootGui.ResetOnSpawn = false
+        BootGui.DisplayOrder = 20000
+        BootGui.Parent = parent
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(0, 330, 0, 56)
+        card.Position = UDim2.new(0, 18, 0, 18)
+        card.BackgroundColor3 = Color3.fromRGB(10, 18, 31)
+        card.BackgroundTransparency = 0.08
+        card.BorderSizePixel = 0
+        card.Parent = BootGui
+        local corner = Instance.new("UICorner")
+        corner.CornerRadius = UDim.new(0, 12)
+        corner.Parent = card
+        local stroke = Instance.new("UIStroke")
+        stroke.Color = Color3.fromRGB(72, 223, 255)
+        stroke.Transparency = 0.25
+        stroke.Thickness = 1.2
+        stroke.Parent = card
+        BootLabel = Instance.new("TextLabel")
+        BootLabel.BackgroundTransparency = 1
+        BootLabel.Size = UDim2.new(1, -24, 1, 0)
+        BootLabel.Position = UDim2.new(0, 12, 0, 0)
+        BootLabel.Font = Enum.Font.GothamBold
+        BootLabel.TextSize = 13
+        BootLabel.TextColor3 = Color3.fromRGB(235, 248, 255)
+        BootLabel.TextXAlignment = Enum.TextXAlignment.Left
+        BootLabel.Text = "BOBON HUB  •  BOOTING..."
+        BootLabel.Parent = card
+    end
+end)
+
+local function SetBootText(value)
+    pcall(function() if BootLabel then BootLabel.Text = tostring(value) end end)
+end
+
+local function ResolveCommF()
+    local attempts = 0
+    while SessionAlive() do
+        local remotes = RS:FindFirstChild("Remotes")
+        local remote = remotes and remotes:FindFirstChild("CommF_")
+        if not remote then remote = RS:FindFirstChild("CommF_", true) end
+        if remote and remote:IsA("RemoteFunction") then
+            return remotes or remote.Parent, remote
+        end
+        attempts = attempts + 1
+        if attempts % 20 == 0 then
+            SetBootText("BOBON HUB  •  waiting for game remotes...")
+            warn("[BobonHub] Waiting for ReplicatedStorage.Remotes.CommF_ ...")
+        end
+        task.wait(0.25)
+    end
+    return nil, nil
+end
+
+local Remotes, CommF_ = ResolveCommF()
+if not CommF_ then error("[BobonHub] Session ended before CommF_ became ready") end
+SetBootText("BOBON HUB  •  CORE READY")
+task.delay(0.8, function() pcall(function() if BootGui then BootGui:Destroy() end end) end)
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -426,6 +521,12 @@ _G.Settings = {
     -- freezes the level farm; the controller retries only in safe quest windows.
     AutoAdvancedItems   = true,
     AutoFightingStyles  = true,
+    AutoBuyMelee        = true,
+    AutoBuySwords       = true,
+    AutoTrueTripleKatana= true,
+    SwordBuyProbe       = 12,
+    LegendarySwordProbe = 8,
+    TTKMasteryTarget    = 300,
     AutoRaceV2          = true,
     AutoCDK             = true,
     AutoSoulGuitar      = true,
@@ -496,6 +597,10 @@ do
         _G.Settings.AutoCDK = bool(cfg["Cursed Dual Katana"], _G.Settings.AutoCDK)
         _G.Settings.AutoSoulGuitar = bool(cfg["Skull Guitar"], _G.Settings.AutoSoulGuitar)
         _G.Settings.AutoRaceV2 = bool(cfg["Auto Race V2"], _G.Settings.AutoRaceV2)
+        _G.Settings.AutoBuyMelee = bool(cfg["Auto Buy Melee"], _G.Settings.AutoBuyMelee)
+        _G.Settings.AutoFightingStyles = _G.Settings.AutoBuyMelee
+        _G.Settings.AutoBuySwords = bool(cfg["Auto Buy Swords"], _G.Settings.AutoBuySwords)
+        _G.Settings.AutoTrueTripleKatana = bool(cfg["True Triple Katana"], _G.Settings.AutoTrueTripleKatana)
         _G.Settings.GetFruits = bool(cfg["Get Fruits"], _G.Settings.GetFruits)
         _G.Settings.FruitEnabled = _G.Settings.GetFruits
         _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
@@ -755,7 +860,7 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---             UI — GLASS NEON HUD V2.1 SAFE
+--             UI — GLASS NEON HUD V2.2 BOOT-SAFE
 --   Self-contained + protected: UI failure must NEVER stop kaitun core.
 -- ══════════════════════════════════════════════════════════════════
 do
@@ -770,13 +875,15 @@ do
         end
 
         local function ResolveUIParent()
+            local pg = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+            if pg then return pg end
             if type(gethui) == "function" then
                 local ok, hui = pcall(gethui)
                 if ok and hui then return hui end
             end
             local okCore = pcall(function() return CoreGui.Name end)
             if okCore then return CoreGui end
-            return LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+            return nil
         end
 
         local uiParent = ResolveUIParent()
@@ -905,7 +1012,7 @@ do
         Brand.Position = UDim2.new(0,0,0,0)
         Brand.Size = UDim2.new(0.58,0,0,24)
 
-        local Sub = Text(Header, "GLASS NEON  •  KAITUN", 10, ACCENT_A, true)
+        local Sub = Text(Header, "GLASS NEON V2.2  •  KAITUN", 10, ACCENT_A, true)
         Sub.Position = UDim2.new(0,27,0,24)
         Sub.Size = UDim2.new(0.60,0,0,18)
 
@@ -921,7 +1028,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,6)
         OnlineL.Size = UDim2.new(0,55,0,20)
-        local Ver = Text(Header, "v18.7", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
+        local Ver = Text(Header, "v18.8", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
         Ver.AnchorPoint = Vector2.new(1,0)
         Ver.Position = UDim2.new(1,0,0,27)
         Ver.Size = UDim2.new(0,55,0,16)
@@ -2560,7 +2667,7 @@ local MeleeList = {
     "Godhuman","Superhuman","Death Step","Electric Claw",
     "Dragon Talon","Sharkman Karate","Dragon Claw",
     "Fishman Karate","Water Kung Fu","Dark Step","Black Leg",
-    "Electro","Combat","Dragon Breath","Sanguine Art"
+    "Electric","Electro","Combat","Dragon Breath","Sanguine Art"
 }
 
 
@@ -2664,12 +2771,12 @@ local SwordList = {
     "Cutlass","Katana","Dual Katana","Triple Katana","Iron Mace",
     "Pipe","Dual-Headed Blade","Shark Saw","Soul Cane","Bisento",
     "Saber","Pole (1st Form)","Pole (2nd Form)","Jitte","Longsword",
-    "Dragon Trident","Gravity Cane","Koko","Dark Blade",
-    "True Triple Katana","Saddi","Shisui","Wando",
+    "Dragon Trident","Gravity Cane","Gravity Blade","Koko","Dark Blade",
+    "True Triple Katana","Saishi","Shizu","Oroshi","Saddi","Shisui","Wando",
+    "Flail",
     "Rengoku","Midnight Blade","Yama","Tushita","Buddy Sword",
     "Canvander","Twin Hooks","Spikey Trident","Cursed Dual Katana",
-    "Dark Dagger","Hallow Scythe","Shark Anchor","Fox Lamp",
-    "Gravity Blade","Dragonheart",
+    "Dark Dagger","Hallow Scythe","Shark Anchor","Fox Lamp","Dragonheart",
 }
 local GunList = {
     "Slingshot","Musket","Flintlock","Refined Flintlock","Cannon",
@@ -4993,6 +5100,7 @@ end
 local FightingStyleController = {
     LastProbe = 0,
     LastStatus = "idle",
+    SanguineKnownOwned = false,
 }
 
 local function InvokeStyle(remote, ...)
@@ -5010,39 +5118,67 @@ function FightingStyleController:SetPreferred(name, reason)
 end
 
 function FightingStyleController:Tick()
-    if not _G.Settings.AutoFightingStyles or not IsAlive() then
+    if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee or not IsAlive() then
         _G.State.PreferredCombatTool = nil
         return false
     end
     -- Never change equipment while a puzzle/boss/sea subsystem owns an action.
     if _G.State.ActiveActionToken ~= 0 then return false end
+    if FindOwnedTool("Sanguine Art") then self.SanguineKnownOwned = true end
 
-    local function train(name, target)
-        local tool = FindOwnedTool(name)
-        if tool and ToolMastery(name) < target then
-            self:SetPreferred(name, ("Mastery %s %d/%d"):format(name, ToolMastery(name), target))
+    local function aliasList(value)
+        return type(value) == "table" and value or {value}
+    end
+
+    local function ownedAlias(value)
+        for _, name in ipairs(aliasList(value)) do
+            if FindOwnedTool(name) then return true, name end
+        end
+        return false, nil
+    end
+
+    local function aliasMastery(value)
+        local best, bestName = 0, nil
+        for _, name in ipairs(aliasList(value)) do
+            local m = EffectiveMastery(name)
+            if m > best or not bestName then best, bestName = m, name end
+        end
+        return best, bestName
+    end
+
+    local function train(value, target)
+        local owned, liveName = ownedAlias(value)
+        if not owned then return false end
+        local mastery = aliasMastery(value)
+        if mastery < target then
+            self:SetPreferred(liveName, ("Mastery %s %d/%d"):format(liveName, mastery, target))
             return true
         end
         return false
     end
 
+    -- Current public names are listed first; legacy/internal names remain aliases
+    -- because some server builds/executors still expose the older Tool names.
+    local phase1 = {
+        {names={"Dark Step","Black Leg"}, target=300, remote="BuyBlackLeg"},
+        {names={"Electric","Electro"}, target=300, remote="BuyElectro"},
+        {names={"Water Kung Fu","Fishman Karate"}, target=300, remote="BuyFishmanKarate"},
+        {names={"Dragon Breath","Dragon Claw"}, target=300, remote="DragonClaw"},
+    }
+
     -- Phase 1: prerequisites for Superhuman.
-    for _, row in ipairs({
-        {"Black Leg",300,"BuyBlackLeg"},
-        {"Electro",300,"BuyElectro"},
-        {"Fishman Karate",300,"BuyFishmanKarate"},
-        {"Dragon Claw",300,"DragonClaw"},
-    }) do
-        if train(row[1], row[2]) then return true end
-        if not FindOwnedTool(row[1]) and tick() - self.LastProbe >= 15 then
+    for _, row in ipairs(phase1) do
+        if train(row.names, row.target) then return true end
+        local owned = ownedAlias(row.names)
+        if not owned and tick() - self.LastProbe >= 15 then
             self.LastProbe = tick()
-            if row[3] == "DragonClaw" then
+            if row.remote == "DragonClaw" then
                 if CanSpendFragments(1500) then
                     pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
                     pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
                 end
             else
-                InvokeStyle(row[3])
+                InvokeStyle(row.remote)
             end
             return false
         end
@@ -5057,14 +5193,32 @@ function FightingStyleController:Tick()
 
     -- Phase 2: V2 styles required for Godhuman.
     local advanced = {
-        {base="Black Leg", baseM=400, name="Death Step", remote="BuyDeathStep"},
-        {base="Fishman Karate", baseM=400, name="Sharkman Karate", remote="BuySharkmanKarate"},
-        {base="Electro", baseM=400, name="Electric Claw", remote="BuyElectricClaw"},
-        {base="Dragon Claw", baseM=400, name="Dragon Talon", remote="BuyDragonTalon"},
+        {base={"Dark Step","Black Leg"}, baseM=400, baseRemote="BuyBlackLeg", name="Death Step", remote="BuyDeathStep"},
+        {base={"Water Kung Fu","Fishman Karate"}, baseM=400, baseRemote="BuyFishmanKarate", name="Sharkman Karate", remote="BuySharkmanKarate"},
+        {base={"Electric","Electro"}, baseM=400, baseRemote="BuyElectro", name="Electric Claw", remote="BuyElectricClaw"},
+        {base={"Dragon Breath","Dragon Claw"}, baseM=400, baseRemote="DragonClaw", name="Dragon Talon", remote="BuyDragonTalon"},
     }
     for _, row in ipairs(advanced) do
         if not FindOwnedTool(row.name) then
-            if train(row.base, row.baseM) then return true end
+            -- After Superhuman the four base styles are normally no longer live
+            -- in Backpack. Re-equip an already purchased base style before asking
+            -- normal quest farm to raise it from 300 -> 400.
+            local baseMastery = aliasMastery(row.base)
+            if baseMastery < row.baseM then
+                if train(row.base, row.baseM) then return true end
+                if tick() - self.LastProbe >= 15 then
+                    self.LastProbe = tick()
+                    if row.baseRemote == "DragonClaw" then
+                        if CanSpendFragments(1500) then
+                            pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
+                            pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
+                        end
+                    else
+                        InvokeStyle(row.baseRemote)
+                    end
+                end
+                return false
+            end
             if tick() - self.LastProbe >= 15 and CanSpendFragments(5000) then
                 self.LastProbe = tick()
                 if row.name == "Sharkman Karate" then
@@ -5096,19 +5250,179 @@ function FightingStyleController:Tick()
 
     -- Sanguine is an optional end-game purchase. The server validates Heart,
     -- materials, money and fragments; a failed probe changes no movement/state.
-    if GetSea() == 3 and not FindOwnedTool("Sanguine Art")
+    if GetSea() == 3 and not self.SanguineKnownOwned and not FindOwnedTool("Sanguine Art")
         and Level() >= 2400 and tick() - self.LastProbe >= 30 and CanSpendFragments(5000) then
         self.LastProbe = tick()
         InvokeStyle("BuySanguineArt", true)
         InvokeStyle("BuySanguineArt")
     end
+    -- Godhuman/Sanguine purchase probes do not need to monopolize the combat
+    -- preference. Return false so sword mastery can train during normal farm.
+    return false
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--   v18.8 SWORD PROGRESSION — BUY ALL + TRUE TRIPLE KATANA
+--   Direct shop purchases are server-validated. Legendary dealer and TTK
+--   remotes follow current public implementations; no fake inventory state.
+-- ══════════════════════════════════════════════════════════════════
+local SwordProgressionController = {
+    LastShopProbe = 0,
+    LastLegendaryProbe = 0,
+    LastTTKProbe = 0,
+    LastStatus = "idle",
+}
+
+local DirectBuySwords = {
+    "Cutlass", "Katana", "Dual Katana", "Iron Mace", "Triple Katana",
+    "Pipe", "Dual-Headed Blade", "Soul Cane", "Bisento",
+}
+
+local LegendarySwordAliases = {
+    {"Saishi", "Saddi"},
+    {"Shizu", "Shisui"},
+    {"Oroshi", "Wando"},
+}
+
+local function InventoryHasAny(names)
+    for _, name in ipairs(names) do
+        if InventoryHas(name) then return true, name end
+    end
+    return false, nil
+end
+
+local function LiveOwnedAlias(names)
+    for _, name in ipairs(names) do
+        local tool = FindOwnedTool(name)
+        if tool then return tool, name end
+    end
+    return nil, nil
+end
+
+local function AliasMastery(names)
+    local best, bestName = 0, names[1]
+    for _, name in ipairs(names) do
+        local m = EffectiveMastery(name)
+        if m > best then best, bestName = m, name end
+    end
+    return best, bestName
+end
+
+function SwordProgressionController:InvalidateInventory()
+    InventoryCache.At = 0
+    WeaponInventoryCache.At = 0
+end
+
+function SwordProgressionController:TryDirectShop()
+    if not _G.Settings.AutoBuySwords then return false end
+    if tick() - self.LastShopProbe < (_G.Settings.SwordBuyProbe or 12) then return false end
+    self.LastShopProbe = tick()
+    -- Probe every still-missing ordinary shop sword in one bounded pass.
+    -- This avoids getting stuck forever on the first unavailable item. The
+    -- server remains authoritative for price, sea/NPC entitlement and ownership.
+    local attempted = false
+    for _, name in ipairs(DirectBuySwords) do
+        if not InventoryHas(name) then
+            attempted = true
+            pcall(function() CommF_:InvokeServer("BuyItem", name) end)
+        end
+    end
+    if attempted then
+        self:InvalidateInventory()
+        self.LastStatus = "Ordinary sword shop pass"
+        DLog("SWORD", self.LastStatus)
+    end
+    return attempted
+end
+
+function SwordProgressionController:TryLegendaryDealer()
+    if not _G.Settings.AutoBuySwords or GetSea() ~= 2 or Level() < 850 then return false end
+    local missing = false
+    for _, aliases in ipairs(LegendarySwordAliases) do
+        if not InventoryHasAny(aliases) then missing = true break end
+    end
+    if not missing or Beli() < 2000000 then return false end
+    if tick() - self.LastLegendaryProbe < (_G.Settings.LegendarySwordProbe or 8) then return false end
+    self.LastLegendaryProbe = tick()
+    -- The dealer sells exactly one of the three per spawn. Public current
+    -- implementations probe choices 1/2/3; the server accepts only the live one.
+    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "1") end)
+    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "2") end)
+    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "3") end)
+    self:InvalidateInventory()
+    self.LastStatus = "Legendary Sword Dealer probe"
+    DLog("SWORD", self.LastStatus)
     return true
+end
+
+function SwordProgressionController:TrainTTKPrerequisite()
+    if not _G.Settings.AutoBuySwords or not _G.Settings.AutoTrueTripleKatana then return false end
+    local target = _G.Settings.TTKMasteryTarget or 300
+    for _, aliases in ipairs(LegendarySwordAliases) do
+        local owned = InventoryHasAny(aliases)
+        if owned then
+            local mastery, masteryName = AliasMastery(aliases)
+            if mastery < target then
+                local tool, liveName = LiveOwnedAlias(aliases)
+                local equipName = liveName or masteryName
+                if tool and equipName then
+                    _G.State.PreferredCombatTool = equipName
+                    self.LastStatus = ("TTK mastery %s %d/%d"):format(equipName, mastery, target)
+                    DLog("SWORD", self.LastStatus)
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+function SwordProgressionController:TryTrueTripleKatana()
+    if not _G.Settings.AutoBuySwords or not _G.Settings.AutoTrueTripleKatana then return false end
+    if InventoryHas("True Triple Katana") then return false end
+    if GetSea() ~= 2 or Level() < 850 or Beli() < 2000000 then return false end
+    local target = _G.Settings.TTKMasteryTarget or 300
+    for _, aliases in ipairs(LegendarySwordAliases) do
+        local owned = InventoryHasAny(aliases)
+        local mastery = AliasMastery(aliases)
+        if not owned or mastery < target then return false end
+    end
+    if tick() - self.LastTTKProbe < 8 then return false end
+    self.LastTTKProbe = tick()
+    -- Mysterious Man purchase flow: check/claim then buy. Server validates
+    -- possession + 300 mastery on all three swords + 2,000,000 Beli.
+    pcall(function() CommF_:InvokeServer("MysteriousMan", "1") end)
+    pcall(function() CommF_:InvokeServer("MysteriousMan", "2") end)
+    self:InvalidateInventory()
+    self.LastStatus = "True Triple Katana purchase probe"
+    DLog("SWORD", self.LastStatus)
+    return true
+end
+
+function SwordProgressionController:Tick()
+    if not _G.Settings.AutoBuySwords or not IsAlive() then return false end
+    if _G.State.ActiveActionToken ~= 0 then return false end
+
+    -- Cheap ordinary purchases first, then dealer acquisition, then mastery.
+    -- Training never owns movement: normal quest/cluster farm supplies the kills.
+    self:TryDirectShop()
+    self:TryLegendaryDealer()
+    if self:TrainTTKPrerequisite() then return true end
+    self:TryTrueTripleKatana()
+    return false
 end
 
 task.spawn(function()
     while SessionAlive() and task.wait(3) do
-        if _G.Settings.AutoFightingStyles and _G.State.ActiveActionToken == 0 then
-            pcall(function() FightingStyleController:Tick() end)
+        if _G.State.ActiveActionToken == 0 then
+            local meleeTraining = false
+            if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
+                local ok, result = pcall(function() return FightingStyleController:Tick() end)
+                meleeTraining = ok and result == true
+            end
+            if not meleeTraining and _G.Settings.AutoBuySwords then
+                pcall(function() SwordProgressionController:Tick() end)
+            end
         end
     end
 end)
@@ -5150,6 +5464,7 @@ local ItemCatalog = {
     {Name="Kabucha",Sea=2,MinLevel=700,Method="1,500 fragments",Auto="CheckKabucha"},
     {Name="Acidum Rifle",Sea=2,MinLevel=700,Method="Factory Core drop",Auto="CheckAcidumRifle"},
     {Name="Soul Guitar",Sea=3,MinLevel=2300,Method="Full Moon puzzle + materials",Auto="CheckSoulGuitar"},
+    {Name="True Triple Katana",Sea=2,MinLevel=850,Method="Saishi/Shizu/Oroshi 300 mastery + 2M",Auto="SwordProgression"},
     {Name="Godhuman",Sea=3,MinLevel=1500,Method="style mastery + materials",Auto="FightingStyles"},
     {Name="Sanguine Art",Sea=3,MinLevel=2400,Method="Leviathan Heart + materials",Auto="FightingStyles"},
 }
@@ -6027,7 +6342,9 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
 
     -- Cheap/non-blocking progression before long item hunts.
     if self:CheckRaceV2() then return true end
-    pcall(function() FightingStyleController:Tick() end)
+    local meleeBusy = false
+    pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
+    if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
     if self:CheckKabucha() then return true end
 
     -- Weapons and puzzles. Every routine is bounded; missing spawn/event simply
@@ -6062,7 +6379,7 @@ local BossManager = {
 -- bằng instance sống trong Enemies trước khi di chuyển.
 local BossDatabase = {
     -- Sea 1
-    {N="Gorilla King",Sea=1,MinLevel=20}, {N="Bobby",Sea=1,MinLevel=55},
+    {N="Gorilla King",Sea=1,MinLevel=20}, {N="Chef",Sea=1,MinLevel=55}, {N="Bobby",Sea=1,MinLevel=55},
     {N="The Saw",Sea=1,MinLevel=100}, {N="Mob Leader",Sea=1,MinLevel=120},
     {N="Vice Admiral",Sea=1,MinLevel=130}, {N="Saber Expert",Sea=1,MinLevel=200},
     {N="Warden",Sea=1,MinLevel=220}, {N="Chief Warden",Sea=1,MinLevel=230},
@@ -6072,7 +6389,7 @@ local BossDatabase = {
     {N="Greybeard",Sea=1,MinLevel=750},
     -- Sea 2
     {N="Diamond",Sea=2,MinLevel=750}, {N="Jeremy",Sea=2,MinLevel=850},
-    {N="Fajita",Sea=2,MinLevel=925}, {N="Don Swan",Sea=2,MinLevel=1000},
+    {N="Orbitus",Sea=2,MinLevel=925}, {N="Fajita",Sea=2,MinLevel=925}, {N="Don Swan",Sea=2,MinLevel=1000},
     {N="Smoke Admiral",Sea=2,MinLevel=1150},
     {N="Awakened Ice Admiral",Sea=2,MinLevel=1400},
     {N="Tide Keeper",Sea=2,MinLevel=1475}, {N="Darkbeard",Sea=2,MinLevel=1000},
@@ -6086,7 +6403,7 @@ local BossDatabase = {
     {N="Soul Reaper",Sea=3,MinLevel=2000}, {N="Cake Prince",Sea=3,MinLevel=2200},
     {N="Dough King",Sea=3,MinLevel=2300},
     {N="Tyrant of the Skies",Sea=3,MinLevel=2600},
-    {N="rip_indra",Sea=3,MinLevel=1500},
+    {N="rip_indra True Form",Sea=3,MinLevel=1500}, {N="rip_indra",Sea=3,MinLevel=1500},
     {N="Diablo",Sea=3,MinLevel=1500}, {N="Deandre",Sea=3,MinLevel=1500}, {N="Urban",Sea=3,MinLevel=1500},
 }
 
@@ -6094,10 +6411,42 @@ local BossDatabase = {
 -- completed quest for unrelated bosses. Level-skip bosses are handled by the
 -- dedicated SkipRouteController; this manager targets missing useful drops.
 local BossDropItems = {
-    ["Thunder God"] = "Pole (1st Form)",
-    ["Awakened Ice Admiral"] = "Rengoku",
-    ["Cake Queen"] = "Buddy Sword",
+    -- Sea 1 sword drops
+    ["The Saw"] = {"Shark Saw"},
+    ["Chief Warden"] = {"Wardens Sword"},
+    ["Fishman Lord"] = {"Trident"},
+    ["Thunder God"] = {"Pole (1st Form)"},
+
+    -- Sea 2 sword drops. Keep legacy aliases where Update renames changed names.
+    ["Diamond"] = {"Longsword"},
+    ["Orbitus"] = {"Gravity Blade", "Gravity Cane"},
+    ["Fajita"] = {"Gravity Blade", "Gravity Cane"},
+    ["Smoke Admiral"] = {"Flail", "Jitte"},
+    ["Awakened Ice Admiral"] = {"Rengoku"},
+    ["Tide Keeper"] = {"Dragon Trident"},
+    ["Order"] = {"Koko"},
+
+    -- Sea 3 sword drops
+    ["Captain Elephant"] = {"Twin Hooks"},
+    ["Beautiful Pirate"] = {"Canvander"},
+    ["Cake Queen"] = {"Buddy Sword"},
+    ["Soul Reaper"] = {"Hallow Scythe"},
+    ["Cake Prince"] = {"Spikey Trident"},
+    ["Dough King"] = {"Spikey Trident"},
+    ["rip_indra True Form"] = {"Dark Dagger"},
+    ["rip_indra"] = {"Dark Dagger"},
 }
+
+local function BossDropMissing(spec)
+    if type(spec) == "string" then return not InventoryHas(spec) end
+    if type(spec) == "table" then
+        for _, name in ipairs(spec) do
+            if InventoryHas(name) then return false end
+        end
+        return #spec > 0
+    end
+    return false
+end
 
 local function HasActive2xExp()
     local data = LP:FindFirstChild("Data")
@@ -6128,13 +6477,15 @@ function BossManager:FindLiveBoss()
         if hum and hum.Health > 0 and mobRoot then
             for _, entry in ipairs(BossDatabase) do
                 local wantedItem = BossDropItems[entry.N]
+                local wantedSwordDrop = _G.Settings.AutoBuySwords == true
+                    and BossDropMissing(wantedItem)
                 local progressionBoss = entry.N == "Tyrant of the Skies"
                     and level >= 2600 and not SubmergedAccessController.Confirmed
                 local styleKeyBoss = _G.Settings.AutoFightingStyles and (
                     (entry.N == "Awakened Ice Admiral" and not InventoryHas("Death Step")
-                        and ToolMastery("Black Leg") >= 400)
+                        and math.max(EffectiveMastery("Dark Step"), EffectiveMastery("Black Leg")) >= 400)
                     or (entry.N == "Tide Keeper" and not InventoryHas("Sharkman Karate")
-                        and ToolMastery("Fishman Karate") >= 400)
+                        and math.max(EffectiveMastery("Water Kung Fu"), EffectiveMastery("Fishman Karate")) >= 400)
                 )
                 local farmDrops = _G.Settings.FarmBossDrops
                     and (not _G.Settings.BossDropsWhen2xExpired or not HasActive2xExp())
@@ -6147,7 +6498,7 @@ function BossManager:FindLiveBoss()
                         or (_G.Settings.HopFindTushita and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Tushita"))
                         or (_G.Settings.HopFindValkyrieHelm and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Valkyrie Helm"))
                 end
-                if ((wantedItem and not InventoryHas(wantedItem)) or progressionBoss or styleKeyBoss or farmDrops or hopTarget)
+                if (wantedSwordDrop or progressionBoss or styleKeyBoss or farmDrops or hopTarget)
                     and entry.Sea == sea and level >= entry.MinLevel
                     and IsEnemyNamed(mob, entry.N) then
                     local p = mobRoot.Position
@@ -7042,7 +7393,9 @@ task.spawn(function()
                     return BossManager:TryFightBoss()
                 end)
                 if okBossEnd and bossEnd then return end
-                pcall(function() FightingStyleController:Tick() end)
+                local meleeBusy = false
+                pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
+                if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
                 _G.State:SetMode("Idle")
                 _G.BobonStatus = "Max Level: Progression waiting"
                 return
