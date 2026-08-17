@@ -1,17 +1,7 @@
 -- =================================================================
---         BOBON HUB v21.8 FAST MOVEMENT | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.7 SKIP SWEEP FIX | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.7 SKIP SWEEP FIX | Version: v21.8
---
---
---  v21.8 FAST MOVEMENT TUNING:
---  [FM-1] Global travel speed raised moderately; skip Floor 1/2 uses a faster
---         dedicated speed so ownership sweeps do not crawl between mobs.
---  [FM-2] Near-target deceleration shortened and given a minimum approach speed;
---         arrival threshold is wider so the bot settles quickly instead of easing
---         for a long time during the final descent.
---  [FM-3] No anti-kick/anti-cheat bypass is added. Existing validation, movement
---         ownership, fallback and recovery logic are preserved.
+--         Base: v21.6 VIDEO SWEEP GATHER | Version: v21.7
 --
 --  v21.7 EARLY SKIP FLOOR 1/2 SWEEP FIX:
 --  [SF-1] Fixed the shared Floor 1 / Floor 2 deadlock where SKIP first requested
@@ -428,7 +418,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.8 FAST MOVEMENT + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.7 SKIP SWEEP FIX + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -574,15 +564,12 @@ _G.Settings = {
     FarmOffsetX         = 1.5,
     -- Retained for compatibility only; enemy roots are no longer resized.
     HitboxSize          = 0,
-    FlySpeed            = 240,
-    SkipTravelSpeed      = 320,
-    NearMoveDecelDistance= 18,
-    NearMoveMinSpeed     = 110,
+    FlySpeed            = 180,
     MinY                = 10,
     -- Submerged Island (Sea 3) dùng tọa độ âm dưới mặt biển.
     UnderwaterMinY      = -2300,
     CloseThreshold      = 35,
-    FarmArrivalThreshold= 5.5,
+    FarmArrivalThreshold= 2.5,
     HoverConfirmRadius  = 5,
     -- [A-4] Farm position / gom mob config (điều chỉnh theo game physics)
     MobGatherRadius     = 50,
@@ -684,7 +671,7 @@ _G.Settings = {
     ClusterAcquireRetry = 0.25,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 3.0,
-    ClusterAcquireArrivalThreshold = 6.0,
+    ClusterAcquireArrivalThreshold = 4.5,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -1275,7 +1262,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.8", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.7", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4917,19 +4904,12 @@ function TravelManager:Request(targetCF, owner, options)
             end
 
 
-            -- v21.8 FAST APPROACH: only ease during the final few studs. The old
-            -- 60-stud slowdown made both horizontal travel and vertical descent feel
-            -- sluggish. Keep a bounded minimum speed, while the wider arrival gate
-            -- stops the mover before it can oscillate around the target.
+            -- Movement with deceleration
             self.AtCombatAnchor = false
             self.AtCombatTarget = nil
             local direction = (targetPos - currentPos).Unit
             local speed = flySpeed
-            local decelDistance = math.max(8, tonumber(_G.Settings.NearMoveDecelDistance) or 18)
-            if dist < decelDistance then
-                local minNear = math.min(speed, tonumber(_G.Settings.NearMoveMinSpeed) or 110)
-                speed = math.max(minNear, speed * (dist / decelDistance))
-            end
+            if dist < 60 then speed = speed * math.max(dist / 60, 0.15) end
 
 
             bv.Velocity = direction * speed
@@ -5850,7 +5830,6 @@ function SkipRouteController:Run()
                     or _G.Settings.FarmArrivalThreshold,
                 fallback = hoverCF or route.Fallback,
                 combatHover = true,
-                speed = _G.Settings.SkipTravelSpeed or 320,
             })
         end
 
@@ -5868,7 +5847,6 @@ function SkipRouteController:Run()
                 arrivalThreshold = _G.Settings.FarmArrivalThreshold,
                 fallback = route.Fallback,
                 combatHover = true,
-                speed = _G.Settings.SkipTravelSpeed or 320,
                 persistent = true,
             })
         end
@@ -5894,7 +5872,6 @@ function SkipRouteController:Run()
                         or _G.Settings.FarmArrivalThreshold,
                     fallback = hoverCF or route.Fallback,
                     combatHover = true,
-                    speed = _G.Settings.SkipTravelSpeed or 320,
                 })
             end
             _G.BobonStatus = "Skip: Acquiring " .. tostring(nearestName or route.Display)
@@ -5907,7 +5884,6 @@ function SkipRouteController:Run()
                     arrivalThreshold = _G.Settings.FarmArrivalThreshold,
                     fallback = route.Fallback,
                     combatHover = true,
-                    speed = _G.Settings.SkipTravelSpeed or 320,
                     persistent = true,
                 })
             end
@@ -10402,10 +10378,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.8] Full Script Loaded Successfully!")
-print("[BobonHub v21.8] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.8] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.8] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.8] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.8] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.8] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.7] Full Script Loaded Successfully!")
+print("[BobonHub v21.7] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.7] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.7] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.7] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.7] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.7] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
