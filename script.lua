@@ -1,9 +1,20 @@
 -- =================================================================
---         BOBON HUB v21.24.2 MINIMAL PRIORITY BOOTSAFE | ALL-MOB PERSISTENT PILE | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.24.3 LOCAL-LIMIT STARTUP FIX | IMMEDIATE PROGRESSION | ALL-MOB PILE
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24.2
+--         Base: v21.22 CONFIRMED-BOOT + v21.23 PILE FIXES | Version: v21.24.3
 --
---  v21.24.2 MINIMAL PRIORITY / BOOT-SAFE FIX:
+--
+--  v21.24.3 STARTUP ROOT-CAUSE FIX:
+--  [BOOT-1] v21.23 added two long-lived top-level locals (damage lease + move trial).
+--           This source was already close to Luau's per-function local/register limits;
+--           v21.24/24.1/24.2 inherited those extra top-level slots and could fail before
+--           the first print/UI. The two tables now live on _G and consume ZERO main-chunk locals.
+--  [BOOT-2] Immediate progression is NOT injected into the huge MainController closure.
+--           A small independent watcher calls the existing ItemProgression controller; once
+--           an action claims ActionToken, the existing main loop naturally pauses next tick.
+--  [BOOT-3] Top-level `local` declaration count is restored to the v21.22 baseline.
+--
+--  v21.24.3 MINIMAL PRIORITY / BOOT-SAFE FIX:
 --  [MP-1] Rebased directly on v21.23 (last known booting build). No new controller/function block.
 --  [MP-2] Existing ItemProgression:RunChecks(true,true) now runs before level quest/farm.
 --         An eligible progression action claims ActionToken and PrepareClaimedAction stops Farm travel.
@@ -630,7 +641,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.24.2 MINIMAL PRIORITY BOOTSAFE + ALL-MOB PILE] Loading...")
+print("[BobonHub v21.24.3 LOCAL-LIMIT STARTUP FIX + IMMEDIATE PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1574,7 +1585,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.24.2", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.24.3", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2368,8 +2379,8 @@ local GatherOriginalPositions = setmetatable({}, { __mode = "k" })
 local GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
 -- v21.23 unknown-owner fallback. These tables never grant permanent authority;
 -- leases are short, damage-backed and revoked on server snap-back.
-local GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
-local GatherMoveTrial = setmetatable({}, { __mode = "k" })
+_G.BobonGatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+_G.BobonGatherMoveTrial = setmetatable({}, { __mode = "k" })
 local GatherGeneration = 0
 
 local function ToolCombatKind(tool)
@@ -4545,8 +4556,8 @@ function FarmPositionController:ReleaseCluster()
     GatherProbeAttempts = setmetatable({}, { __mode = "k" })
     GatherOriginalPositions = setmetatable({}, { __mode = "k" })
     GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
-    GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
-    GatherMoveTrial = setmetatable({}, { __mode = "k" })
+    _G.BobonGatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+    _G.BobonGatherMoveTrial = setmetatable({}, { __mode = "k" })
     if ClusterFarmController then
         ClusterFarmController.LastBatch = {}
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
@@ -4798,8 +4809,8 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         GatherProbeAttempts = setmetatable({}, { __mode = "k" })
         GatherOriginalPositions = setmetatable({}, { __mode = "k" })
         GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
-    GatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
-    GatherMoveTrial = setmetatable({}, { __mode = "k" })
+    _G.BobonGatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+    _G.BobonGatherMoveTrial = setmetatable({}, { __mode = "k" })
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
@@ -4907,8 +4918,8 @@ function ClusterFarmController:IsDamageProven(model)
         if GatherAuthorityClass[root] == "DAMAGE"
             or GatherAuthorityClass[root] == "DAMAGE-LEASE" then
             GatherAuthorityClass[root] = nil
-            GatherDamageLeaseUntil[root] = nil
-            GatherMoveTrial[root] = nil
+            _G.BobonGatherDamageLeaseUntil[root] = nil
+            _G.BobonGatherMoveTrial[root] = nil
             VerifiedGatherRoots[root] = nil
         end
         return false
@@ -4930,10 +4941,10 @@ function ClusterFarmController:IsVerified(model)
             return false
         end
     elseif authority == "DAMAGE-LEASE" then
-        if (GatherDamageLeaseUntil[root] or 0) <= tick()
+        if (_G.BobonGatherDamageLeaseUntil[root] or 0) <= tick()
             or not self:IsDamageProven(model) then
             GatherAuthorityClass[root] = nil
-            GatherDamageLeaseUntil[root] = nil
+            _G.BobonGatherDamageLeaseUntil[root] = nil
             VerifiedGatherRoots[root] = nil
             return false
         end
@@ -5179,8 +5190,8 @@ function ClusterFarmController:ConfirmDamageProof(model)
     end
 
     if GatherAuthorityClass[root] == "DAMAGE-LEASE"
-        and (GatherDamageLeaseUntil[root] or 0) > now then
-        GatherDamageLeaseUntil[root] = now
+        and (_G.BobonGatherDamageLeaseUntil[root] or 0) > now then
+        _G.BobonGatherDamageLeaseUntil[root] = now
             + (tonumber(_G.Settings.ClusterDamageLeaseTTL) or 1.80)
         VerifiedGatherRoots[root] = now
     end
@@ -5197,8 +5208,8 @@ function ClusterFarmController:ConfirmDamageProof(model)
             end)
             if ok then
                 GatherAuthorityClass[root] = "OWNED"
-                GatherDamageLeaseUntil[root] = nil
-                GatherMoveTrial[root] = nil
+                _G.BobonGatherDamageLeaseUntil[root] = nil
+                _G.BobonGatherMoveTrial[root] = nil
                 VerifiedGatherRoots[root] = now
                 return true
             end
@@ -5218,7 +5229,7 @@ function ClusterFarmController:ConfirmDamageProof(model)
             and (pos - me.Position).Magnitude <= acquireRadius then
             local pile = self:GetPileAnchorPosition()
                 or (state.ClusterAnchor and state.ClusterAnchor.Position)
-            if pile and not GatherMoveTrial[root] then
+            if pile and not _G.BobonGatherMoveTrial[root] then
                 local okMove = pcall(function()
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
@@ -5227,7 +5238,7 @@ function ClusterFarmController:ConfirmDamageProof(model)
                 if okMove then
                     -- One write only. RestackBatch will intentionally NOT rewrite this root
                     -- until enough Heartbeats prove the position did not snap back.
-                    GatherMoveTrial[root] = {
+                    _G.BobonGatherMoveTrial[root] = {
                         StartedAt = now,
                         Anchor = pile,
                         Checks = 0,
@@ -5331,7 +5342,7 @@ function ClusterFarmController:GetAcquireTarget()
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
             and not self:IsVerified(model)
-            and not GatherMoveTrial[root]
+            and not _G.BobonGatherMoveTrial[root]
             and (self.AcquireBlockedUntil[model] or 0) <= now
             and ClientOwnsMob(root) ~= true then
             local ok, livePos = pcall(function() return root.Position end)
@@ -5494,15 +5505,15 @@ function ClusterFarmController:RestackBatch()
             if own == true then
                 if writeRoot(root) then
                     GatherAuthorityClass[root] = "OWNED"
-                    GatherDamageLeaseUntil[root] = nil
-                    GatherMoveTrial[root] = nil
+                    _G.BobonGatherDamageLeaseUntil[root] = nil
+                    _G.BobonGatherMoveTrial[root] = nil
                     VerifiedGatherRoots[root] = now
                     GatherProbeCandidates[root] = nil
                     GatherProbeFailedUntil[root] = nil
                     verifiedCount = verifiedCount + 1
                 end
             else
-                local trial = GatherMoveTrial[root]
+                local trial = _G.BobonGatherMoveTrial[root]
                 if trial then
                     -- IMPORTANT: do not rewrite during proof. A server-owned root must get
                     -- a chance to snap back; otherwise a local-only statue could pass.
@@ -5514,22 +5525,22 @@ function ClusterFarmController:RestackBatch()
                             if now - (trial.StartedAt or now) >= proofWindow
                                 and trial.Checks >= proofChecks
                                 and self:IsDamageProven(model) then
-                                GatherMoveTrial[root] = nil
+                                _G.BobonGatherMoveTrial[root] = nil
                                 GatherAuthorityClass[root] = "DAMAGE-LEASE"
-                                GatherDamageLeaseUntil[root] = now + leaseTTL
+                                _G.BobonGatherDamageLeaseUntil[root] = now + leaseTTL
                                 VerifiedGatherRoots[root] = now
                                 verifiedCount = verifiedCount + 1
                             end
                         elseif dist >= rejectRadius
                             or now - (trial.StartedAt or now) > proofWindow + 0.35 then
-                            GatherMoveTrial[root] = nil
-                            GatherDamageLeaseUntil[root] = nil
+                            _G.BobonGatherMoveTrial[root] = nil
+                            _G.BobonGatherDamageLeaseUntil[root] = nil
                             GatherAuthorityClass[root] = nil
                             VerifiedGatherRoots[root] = nil
                         end
                     end
                 elseif GatherAuthorityClass[root] == "DAMAGE-LEASE"
-                    and (GatherDamageLeaseUntil[root] or 0) > now
+                    and (_G.BobonGatherDamageLeaseUntil[root] or 0) > now
                     and self:IsDamageProven(model) then
                     -- Damage-backed lease has already survived a no-rewrite persistence
                     -- test. Keep the root in the moving underfoot pile until damage goes
@@ -5546,7 +5557,7 @@ function ClusterFarmController:RestackBatch()
                         or GatherAuthorityClass[root] == "DAMAGE-TRIAL" then
                         GatherAuthorityClass[root] = nil
                     end
-                    GatherDamageLeaseUntil[root] = nil
+                    _G.BobonGatherDamageLeaseUntil[root] = nil
                     VerifiedGatherRoots[root] = nil
                     GatherProbeCandidates[root] = nil
                 end
@@ -9505,6 +9516,25 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if self:CheckSoulGuitar() then return true end
     return false
 end
+
+-- v21.24.3 IMMEDIATE PROGRESSION WATCHER. This is intentionally its own closure
+-- instead of adding statements/locals to the already-large MainController function.
+-- Once Saber/Sea/item work claims ActionToken, PrepareClaimedAction stops Farm travel
+-- and the main loop's existing ActiveActionToken gate yields control immediately.
+task.spawn(function()
+    while SessionAlive() do
+        task.wait(0.25)
+        if IsAlive() and _G.State and _G.State:CanAct() then
+            local ok, started = pcall(function()
+                return ItemProgression:RunChecks(true, true)
+            end)
+            if not ok then
+                warn("[BobonHub] Module Error: ProgressionWatcher: " .. tostring(started))
+            end
+        end
+    end
+end)
+
 -- ══════════════════════════════════════════════════════════════════
 --              BOSSMANAGER v16.4 — DATA-DRIVEN
 --   Boss không dùng tọa độ cứng để tránh bay ra biển khi map thay đổi.
@@ -11228,14 +11258,8 @@ task.spawn(function()
             end
 
 
-            -- v21.24.2 PRIORITY: run the EXISTING progression controller before level farm.
-            -- No new scheduler/function is introduced: this is intentionally a one-line
-            -- reordering on top of the known-booting v21.23 architecture.
-            if ItemProgression:RunChecks(true, true) then
-                return
-            end
-
-            -- LEVEL FARM FALLBACK: runs only if no progression action claimed this tick.
+            -- LEVEL FARM FALLBACK. Immediate permanent progression is handled by
+            -- the small watcher outside this large closure to keep compile pressure low.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
             if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
@@ -11725,7 +11749,7 @@ task.spawn(function()
                     -- persistence trial, stop spamming that unstacked mob for a moment.
                     -- This keeps the NPC alive long enough to join the pile instead of
                     -- killing it at its original spawn before the gather proof finishes.
-                    local moveTrialInFlight = targetRoot and GatherMoveTrial[targetRoot] ~= nil
+                    local moveTrialInFlight = targetRoot and _G.BobonGatherMoveTrial[targetRoot] ~= nil
                     if not moveTrialInFlight then
                         Attack(target, questMobName)
                     else
@@ -11948,10 +11972,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.24.2] Full Script Loaded Successfully!")
-print("[BobonHub v21.24.2] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.24.2] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.24.2] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.24.2] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.24.2] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.24.2] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.24.3] Full Script Loaded Successfully!")
+print("[BobonHub v21.24.3] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.24.3] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.24.3] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.24.3] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.24.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.24.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
