@@ -1,18 +1,33 @@
 -- =================================================================
---         BOBON HUB v21.12 | v21.7 GATHER+ATTACK RESTORE | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.13 REMOTE MAGNET RESTORE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.7 SKIP SWEEP FIX | Version: v21.12
+--         Base: v21.8 FAST MOVEMENT | Version: v21.13
 --
---  v21.12 RESTORE POLICY:
---  [R7-1] Gather/Cluster/Attack logic is taken directly from the supplied v21.7 source.
---         RestackBatch, acquisition sweep, target collection, attack backend and main
---         farm/skip attack flow are intentionally not rewritten by this patch.
---  [R7-2] Movement-only tuning: faster normal travel, dedicated skip speed and a fast
---         vertical descent when already horizontally near a combat-hover target.
---  [R7-3] Armament Haki is kept ON silently with state-check + cooldown/grace. It never
---         writes Status and never sends Buso while the live HasBuso marker says ON.
---  [R7-4] No v21.9 RestackBatch/backstep workaround is carried over, because that changed
---         the gather feel the user wants preserved from v21.7.
+--  v21.13 FULL FARM REVIEW / REMOTE MAGNET RESTORE:
+--  [RM-1] Reviewed v21.5 -> v21.12. The mandatory per-mob fly came from v21.6:
+--         ownership false OR unknown was queued for physical acquisition, and unknown
+--         roots were only test-moved after the player reached touch radius.
+--  [RM-2] Remote-pull-first: every same-name mob in the active field is attempted at
+--         the shared anchor immediately after SimulationRadius expansion. No near-player
+--         gate is required for the remote test. Position persistence still proves the
+--         move before the mob becomes a verified multi-hit target.
+--  [RM-3] Physical acquisition is now FALLBACK ONLY when zero mobs have been remotely
+--         verified after a grace window. Once any verified stack exists, Farm stays on
+--         the anchor instead of flying to every remaining mob.
+--  [RM-4] Removed the v21.9/v21.10 anti-backstep restack delay; it fixed a rare jerk by
+--         waiting near each acquire target, which directly conflicts with remote magnet.
+--  [RM-5] Attack/CollectTargets stays v21.8: verified same-name roots at one anchor are
+--         attacked as a group. Fast descent is TravelManager-only. Armament Haki is
+--         silently held ON with state-check/cooldown and never writes Status.
+--
+--  v21.8 FAST MOVEMENT TUNING:
+--  [FM-1] Global travel speed raised moderately; skip Floor 1/2 uses a faster
+--         dedicated speed so ownership sweeps do not crawl between mobs.
+--  [FM-2] Near-target deceleration shortened and given a minimum approach speed;
+--         arrival threshold is wider so the bot settles quickly instead of easing
+--         for a long time during the final descent.
+--  [FM-3] No anti-kick/anti-cheat bypass is added. Existing validation, movement
+--         ownership, fallback and recovery logic are preserved.
 --
 --  v21.7 EARLY SKIP FLOOR 1/2 SWEEP FIX:
 --  [SF-1] Fixed the shared Floor 1 / Floor 2 deadlock where SKIP first requested
@@ -429,7 +444,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.12 | v21.7 GATHER+ATTACK + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.13 REMOTE MAGNET RESTORE + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -577,9 +592,9 @@ _G.Settings = {
     HitboxSize          = 0,
     FlySpeed            = 240,
     SkipTravelSpeed      = 320,
-    -- Movement-only tuning. Cluster/gather/attack timings below remain v21.7.
-    NearMoveDecelDistance= 12,
-    NearMoveMinSpeed     = 150,
+    NearMoveDecelDistance= 18,
+    NearMoveMinSpeed     = 110,
+    -- v21.13: accelerate only the final vertical combat-hover descent.
     FastDescendEnabled   = true,
     FastDescendRadius    = 70,
     FastDescendMinGap    = 7,
@@ -691,7 +706,7 @@ _G.Settings = {
     ClusterAcquireRetry = 0.25,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 3.0,
-    ClusterAcquireArrivalThreshold = 4.5,
+    ClusterAcquireArrivalThreshold = 6.0,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -700,9 +715,17 @@ _G.Settings = {
     -- A root is moved only after Farm physically approaches it, then it must remain
     -- at the anchor for several Heartbeats before it becomes a verified attack target.
     ClusterUnknownOwnerFallback = true,
-    ClusterOwnershipTouchRadius = 85,
+    ClusterOwnershipTouchRadius = 85, -- compatibility only; remote pull no longer requires touch
     ClusterUnknownProofTime = 0.28,
     ClusterUnknownProofChecks = 3,
+    -- v21.13 remote-magnet-first policy.
+    ClusterRemotePullFirst = true,
+    ClusterRemotePullRetry = 0.12,
+    ClusterRemotePullProofTime = 0.18,
+    ClusterRemotePullProofChecks = 2,
+    ClusterRemotePullGrace = 1.20,
+    ClusterPhysicalAcquireFallback = true,
+    ClusterUnknownPhysicalFallbackDelay = 3.00,
     -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
     AutoFragmentRaid     = true,
     RaidPreferredNames   = {"Flame","Dark","Ice","Sand","Smoke"},
@@ -748,7 +771,7 @@ _G.Settings = {
     -- Server validates level/money/ownership; probes are throttled and never own movement.
     AutoCoreAbilities   = true,
     CoreAbilityRetry    = 45,
-    -- Silent always-on Armament keeper; read state often, remote itself is gated.
+    -- Silent always-on Armament watcher. Remote itself is state/cooldown gated.
     ArmamentWatchInterval = 0.15,
     ArmamentRetryCooldown = 0.45,
     ArmamentConfirmGrace  = 0.80,
@@ -1286,7 +1309,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.12", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.13", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -3710,6 +3733,7 @@ function FarmPositionController:ReleaseCluster()
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         ClusterFarmController.AcquireAttempts = setmetatable({}, { __mode = "k" })
         ClusterFarmController.PositionProof = setmetatable({}, { __mode = "k" })
+        ClusterFarmController.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
     end
     if _G.State then
         _G.State.ClusterMode = "OFF"
@@ -3823,6 +3847,8 @@ ClusterFarmController = {
     -- server has had time to snap them back. Only roots that stay at the anchor
     -- become verified group targets.
     PositionProof = setmetatable({}, { __mode = "k" }),
+    -- v21.13: bounded remote-pull retries; weak keys avoid retaining dead NPC roots.
+    RemotePullRetryAt = setmetatable({}, { __mode = "k" }),
 }
 
 local function NormalizeClusterNames(names)
@@ -3912,6 +3938,7 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
+        self.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
         state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
         state.ClusterActivatedAt = tick()
         state.ClusterPrimary = nil
@@ -3977,9 +4004,6 @@ end
 -- after ClientOwnsMob becomes true. Unknown ownership is never treated as safe.
 function ClusterFarmController:GetAcquireTarget()
     local state = _G.State
-    -- v21.7: the same bounded ownership-acquisition sweep is valid for normal
-    -- QUEST clusters and the two early SKIP floors. Other modes keep their
-    -- dedicated movement policies.
     if not state or (state.ClusterMode ~= "QUEST" and state.ClusterMode ~= "SKIP")
         or _G.Settings.ClusterAcquireSweep == false or not self:PolicyValid() then
         if state then
@@ -3991,6 +4015,35 @@ function ClusterFarmController:GetAcquireTarget()
     end
 
     local now = tick()
+    local verified = self:GetVerifiedCount()
+
+    -- v21.13: once the remote magnet has produced ANY real stack, stay parked
+    -- above that stack. Do not turn the remaining batch into a per-mob flight tour.
+    if verified > 0 then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
+    -- Give SimulationRadius + remote position proof a short chance to collapse
+    -- the whole batch before allowing any physical acquisition fallback.
+    local age = now - (state.ClusterActivatedAt or now)
+    local remoteGrace = math.max(0.25, tonumber(_G.Settings.ClusterRemotePullGrace) or 1.20)
+    if _G.Settings.ClusterRemotePullFirst ~= false and age < remoteGrace then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
+    if _G.Settings.ClusterPhysicalAcquireFallback == false then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
     local current = state.ClusterAcquireTarget
     if current and current.Parent and self:IsModelAllowed(current)
         and not self:IsVerified(current) then
@@ -4013,6 +4066,8 @@ function ClusterFarmController:GetAcquireTarget()
 
     local me = HRP()
     local best, bestDist
+    local unknownFallbackDelay = math.max(remoteGrace,
+        tonumber(_G.Settings.ClusterUnknownPhysicalFallbackDelay) or 3.0)
     for _, entry in ipairs(self.LastBatch or {}) do
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
@@ -4022,12 +4077,13 @@ function ClusterFarmController:GetAcquireTarget()
                 >= (_G.Settings.ClusterAcquireMaxAttempts or 1) then
                 self.AcquireAttempts[model] = 0
             end
-            -- v21.6: false = server/other owner, nil = executor cannot query it.
-            -- Both states need a physical visit. RestackBatch remains the authority:
-            -- false roots are never moved, while nil roots use the bounded
-            -- position-proof fallback only after the player reaches them.
             local ownership = ClientOwnsMob(root)
-            if ownership ~= true then
+            -- Explicit false may need one physical visit. Unknown ownership gets a
+            -- longer remote-only window because many mobile executors can still
+            -- replicate the CFrame move even though they cannot expose ownership.
+            local allowPhysical = ownership == false
+                or (ownership == nil and age >= unknownFallbackDelay)
+            if allowPhysical then
                 local ok, pos = pcall(function() return root.Position end)
                 if ok and IsValidPos(pos) then
                     local dist = me and (pos - me.Position).Magnitude or 0
@@ -4085,12 +4141,29 @@ function ClusterFarmController:RestackBatch()
     local anchor = anchorCF.Position
     local now = tick()
     local kept, moved = {}, 0
-    local me = HRP()
     local verifyRadius = _G.Settings.ClusterAnchorVerifyRadius or 9
-    local touchRadius = math.max(verifyRadius + (_G.Settings.FarmHeight or 22),
-        tonumber(_G.Settings.ClusterOwnershipTouchRadius) or 85)
-    local proofTime = math.max(0.12, tonumber(_G.Settings.ClusterUnknownProofTime) or 0.28)
-    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterUnknownProofChecks) or 3))
+    local proofTime = math.max(0.10, tonumber(_G.Settings.ClusterRemotePullProofTime)
+        or tonumber(_G.Settings.ClusterUnknownProofTime) or 0.18)
+    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterRemotePullProofChecks)
+        or tonumber(_G.Settings.ClusterUnknownProofChecks) or 2))
+    local remoteRetry = math.max(0.06, tonumber(_G.Settings.ClusterRemotePullRetry) or 0.12)
+
+    local function writeToAnchor(model, root)
+        return pcall(function()
+            local rot = root.CFrame.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            -- Root move is the authoritative path used by the working v21.8 cluster.
+            -- PivotTo is only a protected assist for executors that replicate model pivots
+            -- more reliably; root CFrame is written last to guarantee one exact pocket.
+            pcall(function()
+                if model and type(model.PivotTo) == "function" then
+                    model:PivotTo(CFrame.new(anchor) * rot)
+                end
+            end)
+            root.CFrame = CFrame.new(anchor) * rot
+        end)
+    end
 
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
@@ -4106,37 +4179,23 @@ function ClusterFarmController:RestackBatch()
                 and (rootPos - anchor).Magnitude <= verifyRadius
 
             if own == true then
-                -- Authoritative fast path: confirmed client ownership.
-                local ok = pcall(function()
-                    local rot = root.CFrame.Rotation
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = CFrame.new(anchor) * rot
-                end)
-                if ok then
+                -- Best case: SimulationRadius already gave this client ownership.
+                -- Pull it immediately from wherever it is; no player visit required.
+                if writeToAnchor(model, root) then
                     VerifiedGatherRoots[root] = now
                     self.PositionProof[root] = nil
+                    self.RemotePullRetryAt[root] = nil
                     moved = moved + 1
                 end
-
-            elseif own == nil and _G.Settings.ClusterUnknownOwnerFallback ~= false then
-                -- Some mobile executors do not expose isnetworkowner/GetNetworkOwner.
-                -- Do NOT treat nil as ownership. Instead, after Farm physically reaches
-                -- this mob, perform exactly one test move and then stop rewriting it
-                -- while the server has time to snap the root back.
+            else
                 local verifiedAt = VerifiedGatherRoots[root]
                 if verifiedAt and atAnchor then
-                    -- It already passed the persistence proof. Keep the batch pinned.
-                    local ok = pcall(function()
-                        local rot = root.CFrame.Rotation
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        root.CFrame = CFrame.new(anchor) * rot
-                    end)
-                    if ok then
-                        VerifiedGatherRoots[root] = now
-                        moved = moved + 1
-                    end
+                    -- A previously proven remote pull is still physically resident in
+                    -- the pocket. Keep unknown-owner roots pinned; explicit-false roots
+                    -- are refreshed by proof/retry rather than being called owned.
+                    if own == nil then pcall(writeToAnchor, model, root) end
+                    VerifiedGatherRoots[root] = now
+                    moved = moved + 1
                 else
                     if verifiedAt and not atAnchor then
                         VerifiedGatherRoots[root] = nil
@@ -4144,44 +4203,42 @@ function ClusterFarmController:RestackBatch()
 
                     local proof = self.PositionProof[root]
                     if proof then
-                        if not atAnchor then
-                            -- Server rejected/snapped the test move. Re-acquire later.
-                            self.PositionProof[root] = nil
-                            VerifiedGatherRoots[root] = nil
-                        else
+                        if atAnchor then
                             proof.Checks = (proof.Checks or 0) + 1
                             if now - (proof.StartedAt or now) >= proofTime
                                 and proof.Checks >= proofChecks then
+                                -- The mob stayed at the shared anchor across multiple
+                                -- Heartbeats. This is the server-persistence proof used
+                                -- before group attack eligibility.
                                 VerifiedGatherRoots[root] = now
                                 self.PositionProof[root] = nil
+                                self.RemotePullRetryAt[root] = nil
                                 moved = moved + 1
                             end
-                        end
-                    else
-                        local nearPlayer = me and okPos and IsValidPos(rootPos)
-                            and (rootPos - me.Position).Magnitude <= touchRadius
-                        if nearPlayer then
-                            local ok = pcall(function()
-                                local rot = root.CFrame.Rotation
-                                root.AssemblyLinearVelocity = Vector3.zero
-                                root.AssemblyAngularVelocity = Vector3.zero
-                                root.CFrame = CFrame.new(anchor) * rot
-                            end)
-                            if ok then
-                                self.PositionProof[root] = {
-                                    StartedAt = now,
-                                    Checks = 0,
-                                }
-                            end
+                        elseif now - (proof.StartedAt or now) >= 0.06 then
+                            -- Server snapped it back: revoke the local test and retry
+                            -- later. Do not mark a visual-only ghost as stacked.
+                            self.PositionProof[root] = nil
+                            VerifiedGatherRoots[root] = nil
+                            self.RemotePullRetryAt[root] = now + remoteRetry
                         end
                     end
-                end
 
-            else
-                -- A reliable ownership API explicitly says this root is not ours.
-                -- Never create a local-only dummy; acquisition travel will approach it.
-                VerifiedGatherRoots[root] = nil
-                self.PositionProof[root] = nil
+                    -- v21.13 core behavior: remote test from ANY distance. There is no
+                    -- nearPlayer/touch-radius gate here. This is what restores the
+                    -- 'stand at the anchor and mobs collapse into one spot' feel.
+                    if not self.PositionProof[root]
+                        and now >= (self.RemotePullRetryAt[root] or 0) then
+                        if writeToAnchor(model, root) then
+                            self.PositionProof[root] = {
+                                StartedAt = now,
+                                Checks = 0,
+                                OwnerState = own,
+                            }
+                        end
+                        self.RemotePullRetryAt[root] = now + remoteRetry
+                    end
+                end
             end
         end
     end
@@ -4928,18 +4985,16 @@ function TravelManager:Request(targetCF, owner, options)
             end
 
 
-            -- v21.12 MOVEMENT-ONLY FAST DESCEND. Gather/Attack remains v21.7.
-            -- Transit keeps vector flight; when already horizontally over a combat
-            -- hover target, vertical descent gets a higher bounded speed so the final
-            -- drop does not crawl. No cluster root/target is modified here.
+            -- v21.13: preserve v21.8 horizontal approach exactly; only accelerate
+            -- the final vertical combat-hover descent. No cluster/root state is touched.
             self.AtCombatAnchor = false
             self.AtCombatTarget = nil
             local delta = targetPos - currentPos
             local direction = delta.Unit
             local speed = flySpeed
-            local decelDistance = math.max(8, tonumber(_G.Settings.NearMoveDecelDistance) or 12)
+            local decelDistance = math.max(8, tonumber(_G.Settings.NearMoveDecelDistance) or 18)
             if dist < decelDistance then
-                local minNear = math.min(speed, tonumber(_G.Settings.NearMoveMinSpeed) or 150)
+                local minNear = math.min(speed, tonumber(_G.Settings.NearMoveMinSpeed) or 110)
                 speed = math.max(minNear, speed * (dist / decelDistance))
             end
 
@@ -5031,10 +5086,7 @@ function TravelManager:Request(targetCF, owner, options)
 end
 
 
--- v21.12 SILENT ALWAYS-ON ARMAMENT HAKI.
--- Never call Buso blindly: when HasBuso is readable it is authoritative. If it
--- disappears/turns false after being observed, request once and wait for replication.
--- If the marker is unavailable, fall back to one successful request per character.
+-- v21.13 SILENT ALWAYS-ON ARMAMENT HAKI. Never call Buso blindly.
 local HakiController = {
     Character = nil,
     Enabled = false,
@@ -5065,9 +5117,7 @@ function HakiController:ReadArmamentState(character)
         return true, true
     end
     local okAttr, attr = pcall(function() return character:GetAttribute("HasBuso") end)
-    if okAttr and type(attr) == "boolean" then
-        return attr, true
-    end
+    if okAttr and type(attr) == "boolean" then return attr, true end
     return nil, false
 end
 
@@ -5086,7 +5136,6 @@ function HakiController:EnableForCharacter()
 
     local active, observableNow = self:ReadArmamentState(character)
     if observableNow then self.ArmamentObservable = true end
-
     if active == true then
         self.Enabled = true
         self.PendingBusoAt = 0
@@ -5977,46 +6026,22 @@ function SkipRouteController:Run()
         end
 
     else
-        -- Tick() normally populates LastBatch immediately. Keep a direct live-mob
-        -- fallback for replication gaps so SKIP cannot become an anchor-only wait.
-        local nearest, nearestName = self:FindTarget(route)
-        local nearestRoot = nearest and nearest:FindFirstChild("HumanoidRootPart")
-
-        if nearest and nearestRoot and _G.State:IsTargetValid(nearest) then
-            _G.State.FState = "SKIP_FARM"
-            _G.State.FarmTarget = nearest
-            _G.State.CurrentTarget = nearest
-            target = nearest
-            targetRoot = nearestRoot
-            acquiring = true
-            PrepareCombatTarget(nearest)
-
-            if _G.State:CanRequestTravel() then
-                TravelManager:Request(nearestRoot, "Farm", {
-                    arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
-                        or _G.Settings.FarmArrivalThreshold,
-                    fallback = hoverCF or route.Fallback,
-                    combatHover = true,
-                    speed = _G.Settings.SkipTravelSpeed or 320,
-                })
-            end
-            _G.BobonStatus = "Skip: Acquiring " .. tostring(nearestName or route.Display)
-        else
-            -- No live mob exists yet. Waiting at the real floor anchor is correct.
-            _G.State.FarmTarget = nil
-            _G.State.CurrentTarget = nil
-            if hoverCF and _G.State:CanRequestTravel() then
-                TravelManager:Request(hoverCF, "Farm", {
-                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                    fallback = route.Fallback,
-                    combatHover = true,
-                    speed = _G.Settings.SkipTravelSpeed or 320,
-                    persistent = true,
-                })
-            end
-            _G.BobonStatus = "Skip: Waiting for " .. tostring(route.Display) .. " spawn"
-            return true
+        -- v21.13: no immediate nearest-mob chase here. RestackBatch gets the first
+        -- chance to remote-pull the whole floor; GetAcquireTarget becomes the single
+        -- bounded fallback only if zero mobs can be proven at the anchor.
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        if hoverCF and _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                fallback = route.Fallback,
+                combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
+                persistent = true,
+            })
         end
+        _G.BobonStatus = "Skip: Remote gathering " .. tostring(route.Display)
+        return true
     end
 
     -- HYBRID ATTACK: while acquiring, damage the exact real floor mob as soon as
@@ -6043,6 +6068,7 @@ function SkipRouteController:Run()
 
     return true
 end
+
 
 -- ══════════════════════════════════════════════════════════════════
 --          FIGHTING STYLE PROGRESSION v17 — FARM-COOPERATIVE
@@ -10205,8 +10231,11 @@ task.spawn(function()
                     end
                 end
             else
-                -- Give the anchor a short ownership-acquisition window before
-                -- chasing a spawn. The anchor itself is never released here.
+                -- v21.13 REMOTE-MAGNET FIRST: stay on the shared hover anchor.
+                -- GetAcquireTarget is now the ONLY physical-acquisition fallback, and
+                -- it activates only after the remote-pull grace with zero verified mobs.
+                -- This removes the second independent path that used to chase a spawn
+                -- even while the remote magnet was still trying to collapse the batch.
                 if hoverCF and _G.State:CanRequestTravel() then
                     TravelManager:Request(hoverCF, "Farm", {
                         arrivalThreshold = _G.Settings.FarmArrivalThreshold,
@@ -10214,24 +10243,6 @@ task.spawn(function()
                         combatHover = true,
                         persistent = true,
                     })
-                end
-                if tick() - (_G.State.ClusterActivatedAt or 0)
-                    > (_G.Settings.ClusterAcquireGrace or 1.75) then
-                    local mob, dist = FindNearestMob(questMobName)
-                    if mob and mob:FindFirstChild("HumanoidRootPart") then
-                        _G.State.FarmTarget = mob
-                        _G.State.CurrentTarget = mob
-                        PrepareCombatTarget(mob)
-                        if (_G.State.ClusterLastMoved or 0) == 0
-                            and dist <= QuestChaseLimit()
-                            and _G.State:CanRequestTravel() then
-                            TravelManager:Request(mob.HumanoidRootPart, "Farm", {
-                                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                                fallback = hoverCF or q.MC,
-                                combatHover = true,
-                            })
-                        end
-                    end
                 end
             end
 
@@ -10338,8 +10349,8 @@ task.spawn(function()
         DLog("TEAM", "Verified team: " .. LP.Team.Name)
     end
     task.wait(0.5)
-    -- Silent Haki init: do not overwrite farm/status text.
-    HakiController:EnableForCharacter()
+    -- Silent: never overwrite farm/skip/boss Status with Haki text.
+    pcall(function() HakiController:EnableForCharacter() end)
     task.wait(0.5)
     _G.State:SetMode("Idle")
 end)
@@ -10352,10 +10363,11 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 
 
--- v21.12 silent Armament keeper. State is read frequently; Buso itself is
--- cooldown/grace gated and is never sent while Armament is observed ON.
+-- Silent Armament keeper. Polling is cheap; Buso itself is sent only after
+-- ReadArmamentState reports OFF and cooldown/grace permits it.
 task.spawn(function()
-    while SessionAlive() and task.wait(_G.Settings.ArmamentWatchInterval or 0.15) do
+    while SessionAlive() do
+        task.wait(_G.Settings.ArmamentWatchInterval or 0.15)
         pcall(function() HakiController:WatchTick() end)
     end
 end)
@@ -10509,10 +10521,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.12] Full Script Loaded Successfully!")
-print("[BobonHub v21.12] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.12] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.12] Modules: v21.7 Gather+Attack | Fast Descend | Haki Hold | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.12] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.12] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.12] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.13] Full Script Loaded Successfully!")
+print("[BobonHub v21.13] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.13] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.13] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.13] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.13] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.13] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
