@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v21.25 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
+--         BOBON HUB v21.26 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.24.3 STARTUP-SAFE | Version: v21.25
+--         Base: v21.24.3 STARTUP-SAFE | Version: v21.26
 --
 --
 --  v21.24.3 STARTUP ROOT-CAUSE FIX:
@@ -641,7 +641,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.25 FULL PROGRESSION V2 + ALL MELEE + ALL-MOB PILE] Loading...")
+print("[BobonHub v21.26 ANYWHERE AUTO GACHA + FULL PROGRESSION + ALL-MOB PILE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -915,9 +915,12 @@ _G.Settings = {
     CruiseAltitude      = 60,
     ApproachThreshold   = 120,
     TravelTimeoutMargin = 20,
-    RandomFruitInterval = 120,
-    RandomFruitSea2Cost = 100000,
-    RandomFruitSea3Cost = 250000,
+    -- v21.26: Blox Fruit Gacha is available from Lv50 in every sea.
+    -- The server owns the real level-scaled price/cooldown; do not hard-code Sea2/3 prices.
+    RandomFruitInterval = 30,      -- retry only when a roll was NOT confirmed
+    RandomFruitSuccessCooldown = 7200, -- confirmed roll: 2-hour server cooldown
+    RandomFruitMinLevel = 50,
+    RandomFruitResultWait = 4.0,
     FruitStoreInterval  = 8,
     AttackDelay         = 0.08,
     QuestDelay          = 1.5,
@@ -925,7 +928,7 @@ _G.Settings = {
     QuestRetryBackoff   = 6,
     QuestAcceptGrace    = 6,
     RecoveryDelay       = 3,
-    ActionLockTimeout   = 240,  -- v21.25 progression puzzles refresh token; 4m hard safety only
+    ActionLockTimeout   = 240,  -- v21.26 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
     FruitEnabled        = true,
     AutoStats           = true,
@@ -1585,7 +1588,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.25", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.26", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -9595,7 +9598,7 @@ end
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
 
-    -- v21.25: permanent purchases are cheapest/fastest and must never wait behind a
+    -- v21.26: permanent purchases are cheapest/fastest and must never wait behind a
     -- long puzzle. This is what makes 150k Dark Step happen immediately at 200k Beli.
     if allowOptional and FightingStyleController:PurchaseTick() then return true end
 
@@ -9634,7 +9637,7 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     return false
 end
 
--- v21.25 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
+-- v21.26 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
 -- instead of adding statements/locals to the already-large MainController function.
 -- Once Saber/Sea/item work claims ActionToken, PrepareClaimedAction stops Farm travel
 -- and the main loop's existing ActiveActionToken gate yields control immediately.
@@ -10268,14 +10271,19 @@ function KatakuriController:TryRun()
 end
 
 -- ══════════════════════════════════════════════════════════════════
---              FRUIT MANAGER v16.7 — RANDOM + SAFE STORE
---   FruitEnabled existed in config but had no implementation in v16.6.
---   This manager never owns movement and never interrupts quest/combat.
---   Sea 2/3 beli gates prevent pointless Cousin spam; storing is best-effort.
+--              FRUIT MANAGER v21.26 — ANYWHERE GACHA + SAFE STORE
+--   Internal server endpoint remains CommF_("Cousin","Buy") in current public hubs.
+--   No CFrame/NPC proximity/MovementOwner is required by this client path: the server
+--   validates level, money and the real gacha cooldown.  This manager therefore works
+--   while normal farm/progression keeps the character wherever it already is.
 -- ══════════════════════════════════════════════════════════════════
 local FruitManager = {
     LastStore = 0,
     Busy = false,
+    NextRollAt = 0,
+    LastAttemptAt = 0,
+    LastSuccessAt = 0,
+    LastResult = "idle",
 }
 
 local FruitIdFallback = {
@@ -10306,7 +10314,6 @@ local function FruitOriginalName(tool)
     local name = tostring(tool.Name or "")
     if name == "" then return nil end
     name = name:gsub("%s+[Ff]ruit$", ""):gsub("%-[Ff]ruit$", "")
-    -- Already canonical IDs should pass through untouched.
     if name:find("%-") and not FruitIdFallback[name] then return name end
     return FruitIdFallback[name] or (name .. "-" .. name)
 end
@@ -10316,28 +10323,50 @@ local function LooksLikeFruitTool(tool)
     local original
     pcall(function() original = tool:GetAttribute("OriginalName") end)
     if type(original) == "string" and original ~= "" then return true end
+    if tool:FindFirstChild("Fruit") then return true end
     local n = string.lower(tostring(tool.Name or ""))
     return n:find("fruit", 1, true) ~= nil
 end
 
-function FruitManager:StoreBackpackFruits()
+function FruitManager:CountPhysicalFruits()
+    local count = 0
+    local c = Char()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    if c then
+        for _, tool in ipairs(c:GetChildren()) do
+            if LooksLikeFruitTool(tool) then count = count + 1 end
+        end
+    end
+    if backpack then
+        for _, tool in ipairs(backpack:GetChildren()) do
+            if LooksLikeFruitTool(tool) then count = count + 1 end
+        end
+    end
+    return count
+end
+
+function FruitManager:StoreBackpackFruits(force)
     if not _G.Settings.FruitEnabled then return false end
     if _G.State and _G.State.ActionOwner == "Raid" then return false end
     local now = tick()
-    if now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
+    if not force and now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
     self.LastStore = now
-    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
-    if not backpack then return false end
     local storedAny = false
-    for _, tool in ipairs(backpack:GetChildren()) do
-        if LooksLikeFruitTool(tool) then
-            local fruitName = FruitOriginalName(tool)
-            if fruitName then
-                local ok = pcall(function()
-                    CommF_:InvokeServer("StoreFruit", fruitName, tool)
-                end)
-                storedAny = storedAny or ok
-                task.wait(0.12)
+    local c = Char()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    for _, container in ipairs({c, backpack}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if LooksLikeFruitTool(tool) then
+                    local fruitName = FruitOriginalName(tool)
+                    if fruitName then
+                        local ok, result = pcall(function()
+                            return CommF_:InvokeServer("StoreFruit", fruitName, tool)
+                        end)
+                        storedAny = storedAny or (ok and result ~= false)
+                        task.wait(0.10)
+                    end
+                end
             end
         end
     end
@@ -10346,37 +10375,70 @@ end
 
 function FruitManager:TryRandomFruit()
     if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or self.Busy or not IsAlive() then return false end
-    local sea = GetSea()
-    if sea < 2 then return false end
-    local now = tick()
-    if now - (_G.State.LastRandomFruit or 0) < (_G.Settings.RandomFruitInterval or 120) then
+    if Level() < (_G.Settings.RandomFruitMinLevel or 50) then
+        self.LastResult = "level<50"
         return false
     end
-    local required = sea >= 3 and (_G.Settings.RandomFruitSea3Cost or 250000)
-        or (_G.Settings.RandomFruitSea2Cost or 100000)
-    if Beli() < required then return false end
+
+    local now = tick()
+    if now < (self.NextRollAt or 0) then return false end
 
     self.Busy = true
-    -- Mark the attempt before invoking so an error cannot turn into a remote-spam loop.
+    self.LastAttemptAt = now
     _G.State.LastRandomFruit = now
+
+    -- Do NOT travel to Jungle/Cafe/Mansion. Current public implementations invoke
+    -- the same server endpoint directly from any position and let the server validate it.
+    local beforeBeli = Beli()
+    local beforeFruitCount = self:CountPhysicalFruits()
     local ok, result = pcall(function()
         return CommF_:InvokeServer("Cousin", "Buy")
     end)
+
     if not ok then
-        DLog("FRUIT", "Random fruit request failed: " .. tostring(result))
-    else
-        DLog("FRUIT", "Random fruit request sent")
+        self.LastResult = "invoke-error:" .. tostring(result)
+        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 30)
+        DLog("FRUIT", "Gacha invoke failed: " .. tostring(result))
+        self.Busy = false
+        return false
     end
-    task.wait(0.25)
-    pcall(function() self:StoreBackpackFruits() end)
+
+    -- Update 27 added a roll animation, so do not assume InvokeServer returning means
+    -- a purchase succeeded. Confirm through an actual money decrease or a new fruit tool.
+    local confirmed = false
+    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 4.0)
+    repeat
+        task.wait(0.20)
+        if Beli() < beforeBeli or self:CountPhysicalFruits() > beforeFruitCount then
+            confirmed = true
+            break
+        end
+    until tick() >= deadline or not SessionAlive()
+
+    if confirmed then
+        self.LastSuccessAt = tick()
+        self.LastResult = "rolled"
+        _G.State.LastRandomFruit = self.LastSuccessAt
+        self.NextRollAt = self.LastSuccessAt + (_G.Settings.RandomFruitSuccessCooldown or 7200)
+        DLog("FRUIT", "Random fruit confirmed from anywhere; server cooldown started")
+        -- Force a store pass after the animation; also scans Character, not Backpack only.
+        pcall(function() self:StoreBackpackFruits(true) end)
+    else
+        -- Most commonly: server's 2h cooldown, insufficient level-scaled Beli, or another
+        -- server-side restriction. Retry periodically without moving the player or spamming.
+        self.LastResult = "server-rejected-or-cooldown:" .. tostring(result)
+        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 30)
+        DLog("FRUIT", "Gacha not confirmed; retry scheduled | " .. tostring(result))
+    end
+
     self.Busy = false
-    return ok
+    return confirmed
 end
 
--- Fruit is a background economy action only: no CFrame, no MovementOwner,
--- no ActionToken. That keeps it from racing Farm/Boss/Sea progression.
+-- Background economy worker: completely movement-independent.  It can roll while farming,
+-- doing Saber, travelling between islands, or standing anywhere in Sea 1/2/3.
 task.spawn(function()
-    while SessionAlive() and task.wait(2) do
+    while SessionAlive() and task.wait(1) do
         if _G.Settings.GetFruits and _G.Settings.FruitEnabled then
             pcall(function()
                 FruitManager:StoreBackpackFruits()
@@ -12089,10 +12151,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.25] Full Script Loaded Successfully!")
-print("[BobonHub v21.25] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.25] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.25] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.25] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.25] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.25] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.26] Full Script Loaded Successfully!")
+print("[BobonHub v21.26] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.26] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.26] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.26] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.26] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.26] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
