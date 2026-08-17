@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v18.3 QUEST GATHER + NEAR SNAP | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.6 PERSISTENT CLUSTER + TEDDY SKIP | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v17.0 FULL PROGRESSION | Version: v18.0 KATAKURI AUDITED
+--         Base: v18.4 DOUGH GATHER FIXED | Version: v18.6 PERSISTENT CLUSTER + TEDDY SKIP
 --
 --  v18.3 FARM MOVEMENT / QUEST GATHER FIXES:
 --  [QG-1] Nearby regular quest mobs use one conservative short CFrame snap to
@@ -10,8 +10,8 @@
 --         never used for bosses/items/Sea/Katakuri or cross-region travel.
 --  [QG-3] Bring requires a currently visible active quest and the canonical
 --         ActiveQuestMob; stale/completed quest state releases the cluster.
---  [QG-4] BossManager never calls bring; Katakuri bring is disabled so boss
---         and endgame fights never move surrounding NPCs.
+--  [QG-4] BossManager never calls quest-bring; boss fights remain single-target.
+--         v18.4 separately permits Cake/Cocoa fodder gather for Dough King prep.
 --  [QG-5] UI is unchanged.
 --
 --  v18.4 DOUGH-GATHER FIX:
@@ -19,6 +19,13 @@
 --  [DG-2] Dough King preparation may gather Cake Land kill mobs and Cocoa mobs.
 --  [DG-3] Dough King itself, Elite hunters and all bosses are never gathered.
 --  [DG-4] Bring still requires verified client network ownership.
+--
+--  v18.5 CONTEST / NO-SURRENDER FIXES:
+--  [CF-1] Other-player damage on the same quest mob marks it contested but never clears it.
+--  [CF-2] Contested targets use a faster bounded attack cadence and rotate unproven backends.
+--  [CF-3] PvP/NPC damage to the player never pauses farm at low HP; only actual death waits respawn.
+--  [CF-4] Hop Player Near is suppressed while actively fighting the current quest mob.
+--  [CF-5] A contested live quest mob can be chased farther instead of being surrendered at 350 studs.
 --
 --  v18 AUDIT / ENDGAME FIXES:
 --  [K-1] Max level 2800 no longer stays on Grand Devotee forever.
@@ -254,7 +261,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Loading...")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -274,7 +281,7 @@ local CoreGui      = game:GetService("CoreGui")
 local LP      = Players.LocalPlayer
 local Remotes = RS:WaitForChild("Remotes", 10)
 local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v18.4 DOUGH GATHER FIXED] CommF_ not found!") return end
+if not CommF_ then warn("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] CommF_ not found!") return end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -341,6 +348,14 @@ _G.Settings = {
     KeepTargetOnDamage  = true,
     KeepActionOnDamage  = true,
     KeepMovementOnDamage= true,
+    -- v18.5: contested quest mobs stay sticky. Another player damaging the
+    -- same mob or attacking this character never makes the kaitun give up.
+    ContestQuestMobs    = true,
+    ContestRadius       = 65,
+    ContestGrace        = 3.0,
+    ContestAttackDelay  = 0.045,
+    ContestChaseDistance= 900,
+    ContestSuppressPlayerHop = true,
     EquipSettle         = 0.35,
     StuckTimeout        = 8,
     HoverStuckTimeout   = 30,
@@ -375,13 +390,14 @@ _G.Settings = {
     SkipLevelRoute      = true,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
-    GatherAllQuestMobs  = true,
     GatherMaxDistance   = 250,
     GatherSimulationRefresh = 0.75,
-    GatherSpacing       = 5,
-    GatherPersistTolerance = 8,
-    GatherVerifiedTTL   = 0.6,
-    GatherInterval      = 0.12,
+    GatherVerifiedTTL   = 0.9,
+    -- v18.6 persistent cluster: NPC magnet owns no player movement.
+    ClusterRefresh      = 0.08,
+    ClusterStackRadius  = 1.10,
+    ClusterAcquireGrace = 1.75,
+    ClusterAnchorMaxDrift = 18,
     -- Core movement optimization: one short snap only for the active quest mob.
     -- This is intentionally not exposed in Configs; it is part of the farm core.
     NearQuestSnap        = true,
@@ -594,6 +610,16 @@ _G.State = {
     -- Quest UI may be localized, so gathering must not infer a mob name from
     -- the visible translated text on every frame.
     ActiveQuestMob   = nil,
+    -- v18.6 persistent cluster state. Anchor is independent from FarmTarget.
+    ClusterMode      = "OFF",
+    ClusterAnchor    = nil,
+    ClusterMobName   = nil,
+    ClusterMobNames  = nil,
+    ClusterPrimary   = nil,
+    ClusterGeneration= 0,
+    ClusterActivatedAt = 0,
+    ClusterLastSeen  = 0,
+    ClusterLastMoved = 0,
     IsTraveling      = false,
     IsRecovering     = false,
     ActionToken      = 0,
@@ -606,6 +632,9 @@ _G.State = {
     LastPosition     = nil,
     LastAttackTime   = 0,
     LastIncomingDamage = 0,
+    LastTargetContested = 0,
+    ContestedTarget  = nil,
+    ContestedBy      = nil,
     ConsecutiveFails = 0,
     Sea              = 1,
 }
@@ -676,6 +705,9 @@ end
 function _G.State:ClearTargets()
     self.CurrentTarget = nil
     self.FarmTarget = nil
+    self.ContestedTarget = nil
+    self.ContestedBy = nil
+    self.LastTargetContested = 0
 end
 
 
@@ -1513,6 +1545,7 @@ end
 
 local WeaponController
 local ClientOwnsMob
+local ClusterFarmController
 local VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
 local GatherGeneration = 0
 
@@ -1549,6 +1582,60 @@ local function IsClientInputBackend(name)
         or name == "CLIENT-TOOL"
 end
 
+-- v18.5 CONTEST FARM: a quest target is sticky while another player is
+-- actively near/tagging it. This only affects the current level-quest mob;
+-- bosses and unrelated NPCs are never treated as contested farm targets.
+local LastContestScanAt = 0
+local LastContestScanModel = nil
+local LastContestScanResult = false
+local function MarkFarmTargetContested(model, player)
+    if not (_G.Settings and _G.Settings.ContestQuestMobs) then return false end
+    if not model or not _G.State or _G.State.FarmTarget ~= model then return false end
+    local wanted = _G.State.ActiveQuestMob
+    if not wanted or not IsEnemyNamed(model, wanted) then return false end
+    _G.State.LastTargetContested = tick()
+    _G.State.ContestedTarget = model
+    _G.State.ContestedBy = player and player.Name or _G.State.ContestedBy
+    return true
+end
+
+local function IsFarmTargetContested(model)
+    if not (_G.Settings and _G.Settings.ContestQuestMobs) then return false end
+    if not model or not _G.State or _G.State.FarmTarget ~= model then return false end
+    if not _G.State:IsTargetValid(model) then return false end
+    local wanted = _G.State.ActiveQuestMob
+    if not wanted or not IsEnemyNamed(model, wanted) then return false end
+    local now = tick()
+    if _G.State.ContestedTarget == model
+        and now - (_G.State.LastTargetContested or 0) <= (_G.Settings.ContestGrace or 3) then
+        return true
+    end
+    if LastContestScanModel == model and now - LastContestScanAt < 0.25 then
+        return LastContestScanResult
+    end
+    LastContestScanAt = now
+    LastContestScanModel = model
+    LastContestScanResult = false
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LP then
+            local otherRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if otherRoot then
+                local ok, distance = pcall(function()
+                    return (root.Position - otherRoot.Position).Magnitude
+                end)
+                if ok and distance <= (_G.Settings.ContestRadius or 65) then
+                    MarkFarmTargetContested(model, player)
+                    LastContestScanResult = true
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
 -- Some NPC controllers attach a creator/last-hit marker. When it explicitly
 -- names another player, that HP change cannot prove this controller worked.
 local function DamageAttributedToOtherPlayer(model, humanoid)
@@ -1573,7 +1660,10 @@ local function DamageAttributedToOtherPlayer(model, humanoid)
                         local okPositions, distance = pcall(function()
                             return (targetRoot.Position - otherRoot.Position).Magnitude
                         end)
-                        if okPositions and distance <= 60 then return true end
+                        if okPositions and distance <= 60 then
+                            MarkFarmTargetContested(model, player)
+                            return true
+                        end
                     end
                 end
             end
@@ -1722,6 +1812,8 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         and mobName ~= nil
         and string.lower(tostring(activeQuestMob))
             == string.lower(tostring(mobName))
+    local clusterGatherActive = ClusterFarmController
+        and ClusterFarmController:IsAttackCluster(mobName) == true
     local now = tick()
     local function add(enemy)
         if not enemy or seen[enemy] then return end
@@ -1742,12 +1834,12 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
             if #results >= (_G.Settings.FastAttackMaxTargets or 12) then break end
             if IsEnemyNamed(enemy, mobName) then
                 local allowExtra = true
-                if questGatherActive and enemy ~= preferred then
+                if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
                     local root = enemy:FindFirstChild("HumanoidRootPart")
                     local verifiedAt = root and VerifiedGatherRoots[root]
                     allowExtra = verifiedAt ~= nil
                         and now - verifiedAt
-                            <= (_G.Settings.GatherVerifiedTTL or 0.6)
+                            <= (_G.Settings.GatherVerifiedTTL or 0.9)
                         and type(ClientOwnsMob) == "function"
                         and ClientOwnsMob(root) == true
                 end
@@ -1842,6 +1934,9 @@ function CombatController:WatchTarget(model, humanoid)
         -- For a real client-input click, the short causal window is stronger
         -- evidence than that stale marker; remote/helper probes stay strict.
         local attributedElsewhere = DamageAttributedToOtherPlayer(model, humanoid)
+        if oldHealth and newHealth < oldHealth and attributedElsewhere then
+            MarkFarmTargetContested(model, nil)
+        end
         local clientCausalProof = IsClientInputBackend(self.PendingBackend)
         if oldHealth and newHealth < oldHealth and withinProbe
             and (clientCausalProof or not attributedElsewhere) then
@@ -1923,6 +2018,23 @@ function CombatController:CheckPending(now)
             self.PendingSettleUntil = now + (_G.Settings.CombatLateGrace or 0.35)
             _G.BobonDiagnostics.Packet = "WAIT-LATE-DAMAGE"
         elseif now >= self.PendingSettleUntil then
+            -- If another player is contesting the same quest mob, never use that
+            -- mixed HP stream as a reason to abandon the target. A verified
+            -- backend is retried immediately; an unverified backend is rotated
+            -- quickly so the real client-input fallback can still secure damage.
+            if IsFarmTargetContested(self.PendingTarget) then
+                local contestBackend = self.PendingBackend
+                local contestProven = self.VerifiedBackend == contestBackend
+                    and (self.BackendProofs[contestBackend] or 0)
+                        >= (_G.Settings.CombatProofsRequired or 2)
+                if not contestProven and contestBackend then
+                    self.FailedUntil[contestBackend] = now + 0.45
+                end
+                self:AbortPending(contestProven
+                    and ("CONTEST-RETRY:" .. tostring(contestBackend))
+                    or ("CONTEST-ROTATE:" .. tostring(contestBackend)))
+                return
+            end
             -- Continuous PvP/NPC interference is not evidence that the backend
             -- failed. Extend the probe window without changing target/job.
             if HasRecentExternalInterference() then
@@ -2226,7 +2338,13 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self:AbortPending("NO-TARGETS")
         return false
     end
-    if now - _G.State.LastAttackTime < (_G.Settings.AttackDelay or 0.08) then
+    local effectiveAttackDelay = _G.Settings.AttackDelay or 0.08
+    if IsFarmTargetContested(preferredModel) then
+        effectiveAttackDelay = math.min(effectiveAttackDelay,
+            _G.Settings.ContestAttackDelay or 0.045)
+        _G.BobonDiagnostics.Packet = "CONTEST-ATTACK"
+    end
+    if now - _G.State.LastAttackTime < effectiveAttackDelay then
         return false
     end
     _G.State.LastAttackTime = now
@@ -2890,6 +3008,17 @@ end
 function FarmPositionController:ReleaseCluster()
     GatherGeneration = GatherGeneration + 1
     VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+    if _G.State then
+        _G.State.ClusterMode = "OFF"
+        _G.State.ClusterAnchor = nil
+        _G.State.ClusterMobName = nil
+        _G.State.ClusterMobNames = nil
+        _G.State.ClusterPrimary = nil
+        _G.State.ClusterGeneration = (_G.State.ClusterGeneration or 0) + 1
+        _G.State.ClusterActivatedAt = 0
+        _G.State.ClusterLastSeen = 0
+        _G.State.ClusterLastMoved = 0
+    end
     _G.BobonDiagnostics.Bring = "OFF"
     _G.BobonDiagnostics.BringCandidates = 0
     _G.BobonDiagnostics.BringOwned = 0
@@ -2951,214 +3080,258 @@ ClientOwnsMob = function(root)
     return nil
 end
 
--- Gather only the canonical mob of the quest that this session can identify.
--- Public bring scripts commonly request SimulationRadius and then CFrame every
--- NPC; that produces a client-only dummy whenever ownership was not granted.
--- Here `ClientOwnsMob(root) == true` is a hard precondition for every write.
-function FarmPositionController:GatherMobCluster(mobName, primary)
-    local function StopBring(mode)
-        self:ReleaseCluster()
-        _G.BobonDiagnostics.Bring = mode
-        return 0
-    end
+-- ══════════════════════════════════════════════════════════════════
+--   v18.6 PERSISTENT CLUSTER FARM CONTROLLER
+--   Player movement remains owned exclusively by TravelManager.
+--   This controller only repositions network-owned NPC assemblies.
+--   The farm anchor survives individual mob deaths, so the player does not
+--   chase a new NPC every time the primary target disappears.
+-- ══════════════════════════════════════════════════════════════════
+ClusterFarmController = {
+    LastTick = 0,
+    LastReason = "OFF",
+}
 
-    if not primary or not mobName then return StopBring("INVALID") end
-    local activeQuestMob = _G.State.ActiveQuestMob
-    -- Never bring from a stale cached quest identity. The quest wrapper must
-    -- still be active right now; when it closes/completes, release immediately.
-    if HasQuest() ~= true then
-        return StopBring("NO-ACTIVE-QUEST")
-    end
-    if not activeQuestMob
-        or string.lower(tostring(activeQuestMob))
-            ~= string.lower(tostring(mobName))
-        or not IsEnemyNamed(primary, activeQuestMob) then
-        return StopBring(activeQuestMob and "QUEST-MISMATCH" or "QUEST-UNKNOWN")
-    end
-
-    local primaryRoot = primary:FindFirstChild("HumanoidRootPart")
-    if _G.State.Mode ~= "Farming"
-        or _G.State.ActiveActionToken ~= 0
-        or not CombatController:IsDamageReady()
-        or not _G.State:IsTargetValid(primary)
-        or _G.State.FarmTarget ~= primary
-        or not _G.State.IsTraveling
-        or _G.State.MovementOwner ~= "Farm"
-        or not TravelManager
-        or TravelManager.TargetRef ~= primaryRoot
-        or not TravelManager:IsAtCombatAnchor(primaryRoot) then
-        return StopBring("WAIT-FARM-ANCHOR")
-    end
-
-    local now = tick()
-    local verifiedTTL = _G.Settings.GatherVerifiedTTL or 0.6
-    for root, verifiedAt in pairs(VerifiedGatherRoots) do
-        if not root.Parent or now - verifiedAt > verifiedTTL then
-            VerifiedGatherRoots[root] = nil
+local function NormalizeClusterNames(names)
+    if type(names) == "string" then return {names} end
+    local out = {}
+    if type(names) == "table" then
+        for _, name in ipairs(names) do
+            if type(name) == "string" and name ~= "" then out[#out + 1] = name end
         end
     end
-    if now - self.LastGather < (_G.Settings.GatherInterval or 0.15) then
+    return out
+end
+
+function ClusterFarmController:IsName(name)
+    if type(name) ~= "string" then return false end
+    local names = _G.State and _G.State.ClusterMobNames
+    if type(names) ~= "table" then return false end
+    for _, wanted in ipairs(names) do
+        if string.lower(wanted) == string.lower(name) then return true end
+    end
+    return false
+end
+
+function ClusterFarmController:IsModelAllowed(model)
+    local names = _G.State and _G.State.ClusterMobNames
+    if type(names) ~= "table" or not model then return false end
+    for _, wanted in ipairs(names) do
+        if IsEnemyNamed(model, wanted) then return true end
+    end
+    return false
+end
+
+function ClusterFarmController:IsAttackCluster(mobName)
+    if not _G.State or _G.State.ClusterMode == "OFF" then return false end
+    return self:IsName(tostring(mobName or ""))
+end
+
+function ClusterFarmController:PolicyValid()
+    local state = _G.State
+    if not state or state.ClusterMode == "OFF" or not state.ClusterAnchor then return false end
+    if state.ClusterMode == "QUEST" then
+        if state.Mode ~= "Farming" then return false end
+        if state.ActiveActionToken ~= 0 then return false end
+        if not state.ActiveQuestMob or not self:IsName(state.ActiveQuestMob) then return false end
+        -- nil can happen while the quest UI rebuilds; only an explicit false closes it.
+        if HasQuest() == false then return false end
+        return true
+    elseif state.ClusterMode == "SKIP" then
+        return state.Mode == "Farming" and state.FState == "SKIP_FARM"
+            and GetSea() == 1 and Level() >= 10 and Level() <= 70
+    end
+    return false
+end
+
+function ClusterFarmController:Activate(mode, names, anchorCF, owner)
+    if not _G.Settings.GatherMobs then return false end
+    local list = NormalizeClusterNames(names)
+    if #list == 0 or (typeof(anchorCF) ~= "CFrame" and typeof(anchorCF) ~= "Vector3") then return false end
+    local cf = typeof(anchorCF) == "Vector3" and CFrame.new(anchorCF) or anchorCF
+    if not IsValidPos(cf.Position) or not IsAllowedWorldPosition(cf.Position) then return false end
+    local state = _G.State
+    local changed = state.ClusterMode ~= mode or state.ClusterMobName ~= list[1]
+        or not state.ClusterAnchor
+        or (state.ClusterAnchor.Position - cf.Position).Magnitude > (_G.Settings.ClusterAnchorMaxDrift or 18)
+    if changed then
+        GatherGeneration = GatherGeneration + 1
+        VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+        state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
+        state.ClusterActivatedAt = tick()
+        state.ClusterPrimary = nil
+        DLog("CLUSTER", "Activate " .. tostring(mode) .. " / " .. tostring(list[1]))
+    end
+    state.ClusterMode = mode
+    state.ClusterAnchor = CFrame.new(cf.Position)
+    state.ClusterMobNames = list
+    state.ClusterMobName = list[1]
+    state.ClusterOwner = owner or "Farm"
+    return true
+end
+
+function ClusterFarmController:GetHoverCFrame(height)
+    local anchor = _G.State and _G.State.ClusterAnchor
+    if not anchor then return nil end
+    local p = anchor.Position
+    local h = height or _G.Settings.FarmHeight or 15
+    local y = math.max(p.Y + h,
+        IsSubmergedPosition(p) and (_G.Settings.UnderwaterMinY + 25) or _G.Settings.MinY)
+    return CFrame.new(p.X + (_G.Settings.FarmOffsetX or 0), y, p.Z)
+end
+
+function ClusterFarmController:IsVerified(model)
+    if not model or not self:IsModelAllowed(model) then return false end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    if not root or not hum or hum.Health <= 0 then return false end
+    local at = VerifiedGatherRoots[root]
+    return at ~= nil and tick() - at <= (_G.Settings.GatherVerifiedTTL or 0.9)
+        and ClientOwnsMob(root) == true
+end
+
+function ClusterFarmController:SelectPrimary()
+    local state = _G.State
+    local folder = workspace:FindFirstChild("Enemies")
+    local anchor = state and state.ClusterAnchor
+    if not folder or not anchor then return nil end
+    if state.ClusterPrimary and state.ClusterPrimary.Parent
+        and state.ClusterPrimary:FindFirstChildOfClass("Humanoid")
+        and state.ClusterPrimary:FindFirstChildOfClass("Humanoid").Health > 0
+        and self:IsModelAllowed(state.ClusterPrimary)
+        and self:IsVerified(state.ClusterPrimary) then
+        return state.ClusterPrimary
+    end
+    local best, bestDist
+    for _, mob in ipairs(folder:GetChildren()) do
+        if self:IsModelAllowed(mob) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and self:IsVerified(mob) then
+                local d = (root.Position - anchor.Position).Magnitude
+                if not bestDist or d < bestDist then best, bestDist = mob, d end
+            end
+        end
+    end
+    state.ClusterPrimary = best
+    return best
+end
+
+function ClusterFarmController:Tick()
+    if not self:PolicyValid() then
+        if _G.State and _G.State.ClusterMode ~= "OFF" then
+            FarmPositionController:ReleaseCluster()
+        end
         return 0
     end
-    self.LastGather = now
+    local now = tick()
+    if now - (self.LastTick or 0) < (_G.Settings.ClusterRefresh or 0.08) then return 0 end
+    self.LastTick = now
 
+    local state = _G.State
+    local anchorCF = state.ClusterAnchor
+    local anchor = anchorCF.Position
     local folder = workspace:FindFirstChild("Enemies")
-    if not primaryRoot or not folder then return StopBring("NO-ENEMIES") end
-    local okOrigin, origin = pcall(function() return primaryRoot.Position end)
-    if not okOrigin or not IsValidPos(origin) then
-        return StopBring("INVALID-ANCHOR")
+    if not folder then return 0 end
+    ExpandSimulationRadius()
+
+    -- Expire stale attack entries, but keep the anchor itself alive.
+    local ttl = _G.Settings.GatherVerifiedTTL or 0.9
+    for root, at in pairs(VerifiedGatherRoots) do
+        if not root.Parent or now - at > ttl then VerifiedGatherRoots[root] = nil end
     end
 
-    local playerRoot = HRP()
-    local activeHeight = (CombatController:IsFastReady()
-        or not CombatController:WantsClientRange())
-        and (_G.Settings.FarmHeight or 15)
-        or (_G.Settings.ClientHoverHeight or 5)
-    local anchorPos = self:GetFarmPos(primary, activeHeight)
-    if not playerRoot or not anchorPos then return StopBring("NO-PLAYER") end
-    local okPlayerPos, playerPos = pcall(function() return playerRoot.Position end)
-    if not okPlayerPos or not IsValidPos(playerPos)
-        or (playerPos - anchorPos).Magnitude
-            > (_G.Settings.HoverConfirmRadius or 5) then
-        return StopBring("WAIT-FARM-ANCHOR")
-    end
-
-    local gatherAll = _G.Settings.GatherAllQuestMobs == true
-    local maxDistance = gatherAll
-        and math.min(_G.Settings.GatherMaxDistance or 250, 250)
-        or math.min(_G.Settings.MobGatherRadius or 50, 250)
-    local spacing = math.max(_G.Settings.GatherSpacing or 5, 3)
-    local simulationRequested = ExpandSimulationRadius()
-    local eligible = {}
-
+    local candidates = {}
+    local maxDistance = math.min(_G.Settings.GatherMaxDistance or 250, 250)
     for _, mob in ipairs(folder:GetChildren()) do
-        local hum = mob:FindFirstChildOfClass("Humanoid")
-        local root = mob:FindFirstChild("HumanoidRootPart")
-        if mob ~= primary and IsEnemyNamed(mob, activeQuestMob)
-            and hum and hum.Health > 0 and root and root.Parent
-            and not root.Anchored then
-            local okPos, mobPos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(mobPos) and IsAllowedWorldPosition(mobPos)
-                and IsSubmergedPosition(mobPos) == IsSubmergedPosition(origin) then
-                local fromAnchor = (mobPos - origin).Magnitude
-                local fromPlayer = (mobPos - playerPos).Magnitude
-                if fromAnchor <= maxDistance and fromPlayer <= maxDistance then
-                    eligible[#eligible + 1] = {
-                        Model = mob,
-                        Humanoid = hum,
-                        Root = root,
-                        Position = mobPos,
-                        Distance = fromAnchor,
-                    }
+        if self:IsModelAllowed(mob) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local ok, pos = pcall(function() return root.Position end)
+                if ok and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+                    and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
+                    and (pos - anchor).Magnitude <= maxDistance then
+                    candidates[#candidates + 1] = {Model=mob, Humanoid=hum, Root=root, Position=pos}
                 end
             end
         end
     end
 
-    table.sort(eligible, function(a, b) return a.Distance < b.Distance end)
-    local candidateLimit = math.max(
-        (_G.Settings.FastAttackMaxTargets or 12) - 1, 0)
-    local candidates = math.min(#eligible, candidateLimit)
-    local ownedCount = 0
-    local moved = 0
-    local sawUnknownOwnership = false
-    local sawUnowned = false
-    local attempted = {}
-    local myGatherGeneration = GatherGeneration
+    state.ClusterLastSeen = #candidates > 0 and now or (state.ClusterLastSeen or 0)
+    table.sort(candidates, function(a,b)
+        return (a.Position - anchor).Magnitude < (b.Position - anchor).Magnitude
+    end)
 
-    for index = 1, candidates do
-        if GatherGeneration ~= myGatherGeneration then return 0 end
-        local entry = eligible[index]
-        local owned = ClientOwnsMob(entry.Root)
-        if owned == nil then
-            VerifiedGatherRoots[entry.Root] = nil
-            sawUnknownOwnership = true
-        elseif owned == false then
-            VerifiedGatherRoots[entry.Root] = nil
-            sawUnowned = true
-        else
-            ownedCount = ownedCount + 1
-            local angle = ((index - 1) / math.max(candidates, 1))
-                * math.pi * 2
-            local destination = origin + Vector3.new(
-                math.cos(angle) * spacing, 0, math.sin(angle) * spacing)
-
-            -- Ownership is dynamic, so check it again immediately before the
-            -- only physics write. Never freeze Humanoid/collision/anchor state.
+    local moved, owned, unknown = 0, 0, false
+    local limit = math.min(#candidates, _G.Settings.FastAttackMaxTargets or 12)
+    local stackRadius = math.max(0, _G.Settings.ClusterStackRadius or 1.10)
+    local generation = GatherGeneration
+    for i = 1, limit do
+        if generation ~= GatherGeneration then return 0 end
+        local entry = candidates[i]
+        local owns = ClientOwnsMob(entry.Root)
+        if owns == true then
+            owned = owned + 1
+            -- A very small deterministic spiral avoids exact same-root physics
+            -- while keeping every hit part inside one fast-attack pocket.
+            local angle = (i - 1) * 2.3999632297
+            local radius = stackRadius == 0 and 0 or math.min(stackRadius, 0.18 + (i - 1) * 0.10)
+            local destination = anchor + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
             if ClientOwnsMob(entry.Root) == true then
                 local okMove = pcall(function()
-                    local rotation = entry.Root.CFrame.Rotation
-                    entry.Root.CFrame = CFrame.new(destination) * rotation
+                    local rot = entry.Root.CFrame.Rotation
+                    entry.Root.CFrame = CFrame.new(destination) * rot
                     entry.Root.AssemblyLinearVelocity = Vector3.zero
                     entry.Root.AssemblyAngularVelocity = Vector3.zero
                 end)
                 if okMove then
-                    attempted[#attempted + 1] = {
-                        Root = entry.Root,
-                        Humanoid = entry.Humanoid,
-                        Destination = destination,
-                    }
-                else
-                    VerifiedGatherRoots[entry.Root] = nil
+                    VerifiedGatherRoots[entry.Root] = now
+                    moved = moved + 1
+                    if not state.ClusterPrimary or not self:IsVerified(state.ClusterPrimary) then
+                        state.ClusterPrimary = entry.Model
+                    end
                 end
-            else
-                VerifiedGatherRoots[entry.Root] = nil
-                sawUnowned = true
             end
-        end
-    end
-
-    -- Assignment success is not replication success. Wait one physics frame,
-    -- then count only roots that remain owned and at the requested position.
-    if #attempted > 0 then RunService.Heartbeat:Wait() end
-    if GatherGeneration ~= myGatherGeneration
-        or not SessionAlive()
-        or _G.State.Mode ~= "Farming"
-        or _G.State.ActiveQuestMob ~= activeQuestMob
-        or _G.State.FarmTarget ~= primary
-        or not _G.State.IsTraveling
-        or _G.State.MovementOwner ~= "Farm"
-        or TravelManager.TargetRef ~= primaryRoot
-        or not TravelManager:IsAtCombatAnchor(primaryRoot) then
-        return 0
-    end
-    local tolerance = _G.Settings.GatherPersistTolerance or 8
-    for _, attempt in ipairs(attempted) do
-        local okPersisted, position = pcall(function()
-            return attempt.Root.Parent and attempt.Humanoid.Health > 0
-                and attempt.Root.Position or nil
-        end)
-        if okPersisted and IsValidPos(position)
-            and ClientOwnsMob(attempt.Root) == true
-            and (position - attempt.Destination).Magnitude <= tolerance then
-            moved = moved + 1
-            VerifiedGatherRoots[attempt.Root] = tick()
+        elseif owns == nil then
+            unknown = true
+            VerifiedGatherRoots[entry.Root] = nil
         else
-            VerifiedGatherRoots[attempt.Root] = nil
-            sawUnowned = true
+            VerifiedGatherRoots[entry.Root] = nil
         end
     end
 
-    local bringMode
-    if candidates == 0 then
-        bringMode = "SOLO"
-    elseif moved > 0 then
-        bringMode = "OWNED"
-    elseif sawUnknownOwnership then
-        bringMode = "NO-OWNERSHIP-API"
-    elseif ownedCount > 0 then
-        bringMode = "OWNERSHIP-LOST"
-    elseif sawUnowned and simulationRequested then
-        bringMode = "WAIT-OWNERSHIP"
-    else
-        bringMode = "SIM-UNAVAILABLE"
-    end
-    _G.BobonDiagnostics.Bring = bringMode
-    _G.BobonDiagnostics.BringCandidates = candidates
-    _G.BobonDiagnostics.BringOwned = ownedCount
+    if moved > 0 then state.ClusterLastMoved = now end
+    local primary = self:SelectPrimary()
+    state.ClusterPrimary = primary
+    _G.BobonDiagnostics.BringCandidates = #candidates
+    _G.BobonDiagnostics.BringOwned = owned
     _G.BobonDiagnostics.BringMoved = moved
+    _G.BobonDiagnostics.Bring = moved > 0 and ("CLUSTER-" .. state.ClusterMode)
+        or (#candidates == 0 and "CLUSTER-WAIT-SPAWN")
+        or (unknown and "NO-OWNERSHIP-API")
+        or "WAIT-OWNERSHIP"
     return moved
 end
+
+-- Compatibility wrapper for old callers. Quest mode now persists at the
+-- current state anchor instead of using the primary mob as the cluster center.
+function FarmPositionController:GatherMobCluster(mobName, primary)
+    if not _G.State.ClusterAnchor then
+        local root = primary and primary:FindFirstChild("HumanoidRootPart")
+        if not root then return 0 end
+        ClusterFarmController:Activate("QUEST", {mobName}, CFrame.new(root.Position), "Farm")
+    end
+    return ClusterFarmController:Tick()
+end
+
+-- NPC magnet loop only. It never writes MovementOwner and never moves player.
+task.spawn(function()
+    while SessionAlive() and task.wait(_G.Settings.ClusterRefresh or 0.08) do
+        local ok, err = pcall(function() ClusterFarmController:Tick() end)
+        if not ok and _G.Settings.Debug then warn("[BobonHub] Cluster Error: " .. tostring(err)) end
+    end
+end)
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -4539,16 +4712,11 @@ local SkipRouteController = {
 }
 
 local SkipRouteDB = {
-    {Key="FountainEarly", Min=10, Max=54, Kind="Mob", Display="Galley Pirate", Names={"Galley Pirate"}, Fallback=CFrame.new(5551.02,78.90,3930.41)},
-    {Key="Bobby", Min=55, Max=89, Kind="Boss", Display="Bobby", Names={"Bobby"}, Fallback=CFrame.new(-1141.07,14.81,4322.92)},
-    {Key="Yeti", Min=90, Max=119, Kind="Boss", Display="Yeti", Names={"Yeti"}, Fallback=CFrame.new(1201.64,144.58,-1550.07)},
-    {Key="MobLeader", Min=120, Max=129, Kind="Boss", Display="Mob Leader", Names={"Mob Leader"}, Fallback=CFrame.new(-4870.00,25.00,4300.00)},
-    {Key="ViceAdmiral", Min=130, Max=219, Kind="Boss", Display="Vice Admiral", Names={"Vice Admiral"}, Fallback=CFrame.new(-4881.23,22.65,4273.75)},
-    {Key="PrisonBosses", Min=220, Max=349, Kind="Boss", Display="Warden / Chief Warden", Names={"Warden","Chief Warden"}, Fallback=CFrame.new(5098.97,15.00,474.24)},
-    {Key="MagmaAdmiral", Min=350, Max=424, Kind="Boss", Display="Magma Admiral", Names={"Magma Admiral"}, Fallback=CFrame.new(-5411.16,11.08,8454.29)},
-    {Key="FishmanLord", Min=425, Max=499, Kind="Boss", Display="Fishman Lord", Names={"Fishman Lord"}, Fallback=CFrame.new(60878.30,18.48,1543.76)},
-    {Key="Wysper", Min=500, Max=624, Kind="Boss", Display="Wysper", Names={"Wysper"}, Fallback=CFrame.new(-7678.49,5566.40,-497.22)},
-    {Key="FountainLate", Min=625, Max=699, Kind="Mob", Display="Galley Pirate", Names={"Galley Pirate"}, Fallback=CFrame.new(5551.02,78.90,3930.41)},
+    -- Reconstructed from the supplied Teddy showcase video:
+    -- Floor 1: Sky Bandit [Lv. 150] from player Lv10-50.
+    -- Floor 2: God's Guard [Lv. 450] from player Lv51-70.
+    {Key="TeddyFloor1", Min=10, Max=50, Kind="Mob", Display="Sky Bandit [Lv. 150]", Names={"Sky Bandit"}, Fallback=CFrame.new(-4953.21,295.74,-2899.23)},
+    {Key="TeddyFloor2", Min=51, Max=70, Kind="Mob", Display="God's Guard [Lv. 450]", Names={"God's Guard"}, Fallback=CFrame.new(-4710.04,845.28,-1927.31)},
 }
 
 function SkipRouteController:GetRoute()
@@ -4588,99 +4756,103 @@ function SkipRouteController:FindTarget(route)
 end
 
 function SkipRouteController:Run()
-    -- High-level skip targets are lethal with ordinary M1. Normal quest farm
-    -- is the runtime self-test; skip unlocks only after confirmed fast damage.
+    -- Teddy-style early skip needs the verified fast backend; if damage cannot
+    -- be proven, normal quest farming remains the fallback instead of stalling.
     if not CombatController:IsFastReady() then
         self:Reset("fast attack not health-verified")
         return false
     end
     local route = self:GetRoute()
     if not route then
-        self:Reset("Sea or level outside skip route")
+        self:Reset("outside Teddy early-skip range")
         return false
     end
 
     if self.CurrentKey ~= route.Key then
-        self:Reset("level transition")
+        self:Reset("floor transition")
         self.CurrentKey = route.Key
         self.RouteStartTime = os.time()
         self.RouteStartLevel = Level()
-        DLog("SKIP", "Route selected: " .. route.Key)
+        DLog("SKIP", "Teddy route selected: " .. route.Key)
+    elseif Level() > (self.RouteStartLevel or 0) then
+        -- Progress resets the watchdog without rebuilding the cluster anchor.
+        self.RouteStartLevel = Level()
+        self.RouteStartTime = os.time()
     end
 
-    -- [D-4] SKIP KHÔNG HIỆU QUẢ → FARM QUEST BÌNH THƯỜNG:
-    -- Cùng route quá SkipRouteFallbackTimeout giây mà level không tăng
-    -- (boss không spawn, mob không giết được, quái quá khỏe...) → tắt
-    -- hẳn skip route; main controller đi xuống quest gate và farm quest
-    -- như thường (không bao giờ kẹt "Waiting for boss" vô hạn).
-    if self.RouteStartTime and self.RouteStartLevel
-        and os.time() - self.RouteStartTime > (_G.Settings.SkipRouteFallbackTimeout or 90)
-        and Level() <= self.RouteStartLevel then
-        self.Enabled = false
-        _G.Settings.SkipLevelRoute = false
-        self:Reset("skip not effective, back to normal quest farm")
-        DLog("SKIP", "Skip không hiệu quả (" .. route.Key .. ") → tắt, farm quest bình thường")
+    if self.RouteStartTime and os.time() - self.RouteStartTime
+        > (_G.Settings.SkipRouteFallbackTimeout or 90) then
+        self:Reset("skip made no level progress")
+        DLog("SKIP", "Teddy skip stalled → normal quest fallback")
         return false
+    end
+
+    -- The showcase farms these floors without carrying the normal low-level
+    -- quest. Abandon once when necessary; failure is harmless and the next
+    -- main tick can still fall back to normal quest progression.
+    if HasQuest() == true then
+        pcall(function() CommF_:InvokeServer("AbandonQuest") end)
+        _G.State.ActiveQuestMob = nil
     end
 
     _G.State:SetMode("Farming")
     _G.State.FState = "SKIP_FARM"
-    _G.BobonStatus = "Skip Farm: " .. route.Display
+    _G.BobonStatus = "Level Farming | Skip Mode | "
+        .. (route.Key == "TeddyFloor1" and "Floor 1" or "Floor 2")
 
-    local target, targetName = self:FindTarget(route)
-    if target and (not _G.State:IsTargetValid(target) or not target.Parent
-        or not target:FindFirstChild("HumanoidRootPart")) then
-        target = nil
+    ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
+    ClusterFarmController:Tick()
+
+    local hoverHeight = (CombatController:IsFastReady()
+        or not CombatController:WantsClientRange())
+        and (_G.Settings.FarmHeight or 15)
+        or (_G.Settings.ClientHoverHeight or 5)
+    local hoverCF = ClusterFarmController:GetHoverCFrame(hoverHeight)
+    if hoverCF and _G.State:CanRequestTravel() then
+        TravelManager:Request(hoverCF, "Farm", {
+            arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+            fallback = route.Fallback,
+            combatHover = true,
+            persistent = true,
+        })
     end
-    if target then
-        local hum = target:FindFirstChildOfClass("Humanoid")
-        if not hum or hum.Health <= 0 then
-            target = nil
-        end
-    end
 
-    if target then
-        local targetRoot = target:FindFirstChild("HumanoidRootPart")
-        _G.State.FarmTarget = target
-        _G.State.CurrentTarget = target
-        PrepareCombatTarget(target)
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(targetRoot, "Farm", {
-                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                fallback = route.Fallback,
-                combatHover = true,
-            })
-        end
-
-        local hrp = HRP()
-        if hrp and targetRoot then
-            local a = Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
-            local b = Vector3.new(targetRoot.Position.X, 0, targetRoot.Position.Z)
-            local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
-            if (a - b).Magnitude <= _G.Settings.AttackRange and farmHolds
-                and TravelManager:IsAtCombatAnchor(targetRoot) then
-                -- Equip first; the shared health-verified adapter handles
-                -- every melee style and sword.
-                EquipCombatTool()
-                Attack(target, targetName)
-                DLog("SKIP", "Attacking " .. tostring(targetName or target.Name))
+    local target = ClusterFarmController:SelectPrimary()
+    if not target then
+        -- While ownership is being acquired, keep the anchor stable. If the
+        -- executor cannot own any NPC after the grace window, briefly chase the
+        -- nearest skip mob to acquire ownership without destroying the anchor.
+        if tick() - (_G.State.ClusterActivatedAt or 0)
+            > (_G.Settings.ClusterAcquireGrace or 1.75) then
+            local nearest, nearestName = self:FindTarget(route)
+            if nearest and nearest:FindFirstChild("HumanoidRootPart") then
+                _G.State.FarmTarget = nearest
+                _G.State.CurrentTarget = nearest
+                PrepareCombatTarget(nearest)
+                if _G.State:CanRequestTravel() and (_G.State.ClusterLastMoved or 0) == 0 then
+                    TravelManager:Request(nearest.HumanoidRootPart, "Farm", {
+                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                        fallback = hoverCF or route.Fallback,
+                        combatHover = true,
+                    })
+                end
             end
         end
-    else
-        _G.State:ClearTargets()
-        -- [D-5] KHÔNG CHỜ BOSS XUẤT HIỆN: route boss (Bobby/Yeti/Vice
-        -- Admiral/Warden/Magma Admiral/Fishman Lord/Wysper...) mà boss
-        -- không có mặt NGAY bây giờ → return false tức thời, main
-        -- controller chạy farm quest như bình thường. BossManager vẫn
-        -- tự săn boss khi boss thực sự xuất hiện trong Enemies.
-        if route.Kind == "Boss" then
-            self:Reset("boss not present, back to quest farm")
-            DLog("SKIP", route.Display .. " chưa spawn → farm quest bình thường")
-            return false
-        end
-        _G.BobonStatus = "Skip Farm: Waiting for " .. route.Display
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(route.Fallback, "Farm")
+        return true
+    end
+
+    _G.State.FarmTarget = target
+    _G.State.CurrentTarget = target
+    PrepareCombatTarget(target)
+    local root = target:FindFirstChild("HumanoidRootPart")
+    local me = HRP()
+    if root and me then
+        local flat = (Vector3.new(me.Position.X,0,me.Position.Z)
+            - Vector3.new(root.Position.X,0,root.Position.Z)).Magnitude
+        if flat <= _G.Settings.AttackRange
+            and TravelManager:IsAtCombatAnchor() then
+            EquipCombatTool()
+            Attack(target, route.Names[1])
         end
     end
     return true
@@ -6076,7 +6248,7 @@ function KatakuriController:GatherSameMob(primary)
     ExpandSimulationRadius()
     local moved, index = 0, 0
     local maxDistance = math.min(_G.Settings.GatherMaxDistance or 250, 250)
-    local spacing = math.max(_G.Settings.GatherSpacing or 5, 3)
+    local spacing = math.min(math.max(_G.Settings.ClusterStackRadius or 1.10, 0.35), 1.50)
     local anchor = primaryRoot.Position
 
     for _, mob in ipairs(folder:GetChildren()) do
@@ -6089,11 +6261,12 @@ function KatakuriController:GatherSameMob(primary)
                     and (mobPos - anchor).Magnitude <= maxDistance
                     and ClientOwnsMob(root) == true then
                     index = index + 1
-                    local angle = index * 1.7
+                    local angle = index * 2.3999632297
+                    local radius = math.min(spacing, 0.18 + index * 0.10)
                     local destination = anchor + Vector3.new(
-                        math.cos(angle) * spacing,
+                        math.cos(angle) * radius,
                         0,
-                        math.sin(angle) * spacing
+                        math.sin(angle) * radius
                     )
                     pcall(function()
                         root.AssemblyLinearVelocity = Vector3.zero
@@ -6563,7 +6736,16 @@ function HopManager:Request(reason)
     return ok
 end
 function HopManager:ShouldHop()
-    if _G.Settings.HopPlayerNear then
+    local activeQuestFight = _G.Settings.ContestSuppressPlayerHop
+        and _G.State.Mode == "Farming"
+        and _G.State.ActiveActionToken == 0
+        and _G.State.FarmTarget ~= nil
+        and _G.State:IsTargetValid(_G.State.FarmTarget)
+        and _G.State.ActiveQuestMob ~= nil
+        and IsEnemyNamed(_G.State.FarmTarget, _G.State.ActiveQuestMob)
+    -- "Hop Player Near" must not surrender a mob we are already farming.
+    -- The option still works while idle/travelling outside an active quest fight.
+    if _G.Settings.HopPlayerNear and not activeQuestFight then
         local me=HRP()
         if me then
             for _, p in ipairs(Players:GetPlayers()) do
@@ -6781,10 +6963,11 @@ task.spawn(function()
             -- Never let the fast skip route interrupt an accepted quest. It
             -- previously activated right after the first verified hits, which
             -- looked exactly like "attacks briefly, then stops/leaves".
-            if questState == true or _G.State.ActiveQuestMob then
-                SkipRouteController:Reset("active quest has priority")
-            elseif SkipRouteController:Run() then
+            local earlySkipLevel = GetSea() == 1 and Level() >= 10 and Level() <= 70
+            if earlySkipLevel and SkipRouteController:Run() then
                 return
+            elseif not earlySkipLevel then
+                SkipRouteController:Reset("outside early skip range")
             end
 
 
@@ -6927,164 +7110,128 @@ task.spawn(function()
                 return
             end
 
-            -- VERIFY_TARGET: clear NGAY nếu invalid → NEXT_TARGET
+            -- v18.6 QUEST CLUSTER: q.MC is the stable spawn-area anchor.
+            -- A mob death no longer destroys the cluster or forces player travel.
+            ClusterFarmController:Activate("QUEST", {questMobName}, q.MC, "Farm")
+            ClusterFarmController:Tick()
+
+            local anchorHeight = (CombatController:IsFastReady()
+                or not CombatController:WantsClientRange())
+                and (_G.Settings.FarmHeight or 15)
+                or (_G.Settings.ClientHoverHeight or 5)
+            local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
+
+            -- VERIFY/PROMOTE: first prefer a verified mob already stacked at the
+            -- persistent anchor. Killing the old primary simply promotes another.
             _G.State.FState = "VERIFY_TARGET"
-            if not _G.State:IsTargetValid(_G.State.FarmTarget)
-                or not IsEnemyNamed(_G.State.FarmTarget, questMobName) then
-                FarmPositionController:ReleaseCluster()
-                _G.State:ClearTargets()
-                _G.State.FState = "NEXT_TARGET"
-                DLog("TARGET", "Old target invalid → selecting a new one")
+            local contested = _G.State:IsTargetValid(_G.State.FarmTarget)
+                and IsEnemyNamed(_G.State.FarmTarget, questMobName)
+                and IsFarmTargetContested(_G.State.FarmTarget)
+            if not contested then
+                local promoted = ClusterFarmController:SelectPrimary()
+                if promoted then
+                    _G.State.FarmTarget = promoted
+                    _G.State.CurrentTarget = promoted
+                    _G.State.ClusterPrimary = promoted
+                elseif not _G.State:IsTargetValid(_G.State.FarmTarget)
+                    or not IsEnemyNamed(_G.State.FarmTarget, questMobName) then
+                    _G.State.FarmTarget = nil
+                    _G.State.CurrentTarget = nil
+                end
             end
 
+            local target = _G.State.FarmTarget
+            local targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+            local hrp = HRP()
 
-            if _G.State.FarmTarget then
-                local hrp = HRP()
-                local targetHRP = _G.State.FarmTarget:FindFirstChild("HumanoidRootPart")
-                if not targetHRP then
-                    _G.State:ClearTargets()
-                elseif hrp then
-                    local targetPos = targetHRP.Position
-                    local dist = (hrp.Position - targetPos).Magnitude
-                    PrepareCombatTarget(_G.State.FarmTarget)
-
-                    -- MOVE_TO_TARGET
-                    _G.State.FState = "MOVE_TO_TARGET"
-
-                    -- [FIX-6] Target quá xa hoặc dưới biển → clear, về khu farm
-                    if dist > _G.Settings.MaxFarmDistance + 50
-                        or not IsAllowedWorldPosition(targetPos) then
-                        _G.State:ClearTargets()
-                        _G.State.FState = "NEXT_TARGET"
-                        _G.BobonStatus = "Farm: Invalid target, returning to farm area"
-                        DLog("TARGET", "Invalid target (far/below sea) → returning to farm area")
-                        if _G.State:CanRequestTravel() then
-                            TravelManager:Request(q.MC, "Farm")
-                        end
-                        return
-                    end
-
-                    -- Target còn sống → KHÔNG restart travel, chỉ update ref
-                    -- [FIX-P4] Vẫn truyền fallback=q.MC để giữ an toàn mid-flight
-                    if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-                        TravelManager:Request(targetHRP, "Farm", {
+            -- Keep player parked above the stable anchor whenever a clustered
+            -- target exists. This is the fast path observed in the showcase.
+            local verifiedClusterTarget = target and ClusterFarmController:IsVerified(target)
+            if hoverCF and verifiedClusterTarget and not contested then
+                _G.State.FState = "MOVE_TO_CLUSTER"
+                if _G.State:CanRequestTravel() then
+                    TravelManager:Request(hoverCF, "Farm", {
+                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                        fallback = q.MC,
+                        combatHover = true,
+                        persistent = true,
+                    })
+                end
+            elseif target and targetRoot and hrp then
+                -- Contest/fallback path: never surrender a live quest mob another
+                -- player is attacking. Chase it while preserving the cluster anchor.
+                local targetPos = targetRoot.Position
+                local dist = (hrp.Position - targetPos).Magnitude
+                local normalTooFar = dist > _G.Settings.MaxFarmDistance + 50
+                local contestTooFar = dist > (_G.Settings.ContestChaseDistance or 900)
+                if not IsAllowedWorldPosition(targetPos)
+                    or (normalTooFar and (not contested or contestTooFar)) then
+                    _G.State.FarmTarget = nil
+                    _G.State.CurrentTarget = nil
+                else
+                    PrepareCombatTarget(target)
+                    _G.State.FState = contested and "CONTEST_TARGET" or "ACQUIRE_TARGET"
+                    if _G.State:CanRequestTravel() then
+                        TravelManager:Request(targetRoot, "Farm", {
                             arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                            fallback = q.MC,
+                            fallback = hoverCF or q.MC,
                             combatHover = true,
                         })
-                    else
-                        if _G.State:CanRequestTravel() then
-                            TravelManager:Request(targetHRP, "Farm", {
-                                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                                fallback = q.MC,
-                                combatHover = true,
-                            })
-                        end
-                    end
-
-                    -- ATTACK [A-6]: chỉ khi target sống + melee đã equip + trong
-                    -- AttackRange (XZ) + Farm đang giữ movement (owner Farm
-                    -- hoặc không travel — travel xong trả về Farm)
-                    if _G.State:IsTargetValid(_G.State.FarmTarget) then
-                        local flatDist = (Vector3.new(hrp.Position.X, 0, hrp.Position.Z)
-                            - Vector3.new(targetPos.X, 0, targetPos.Z)).Magnitude
-                        local farmHolds = not _G.State.IsTraveling
-                            or _G.State.MovementOwner == "Farm"
-                        if flatDist <= _G.Settings.AttackRange and farmHolds
-                            and TravelManager:IsAtCombatAnchor(targetHRP) then
-                            _G.State.FState = "ATTACK"
-                            -- Equip is asynchronous; the next tick runs the
-                            -- same verified adapter for melee or sword.
-                            EquipCombatTool()
-                            Attack(_G.State.FarmTarget, questMobName)
-                            if os.time() - lastAttackLog >= 5 then
-                                lastAttackLog = os.time()
-                                DLog("ATTACK", "Target: " .. _G.State.FarmTarget.Name)
-                            end
-                        end
-                    end
-
-                    -- GOM MOB [A-4]: gom mềm các mob quest ở gần vào cluster
-                    -- cục bộ rồi để FastAttack xử lý cả nhóm; không tạo loop
-                    -- movement riêng và không đụng mob ở xa.
-                    -- `hasQuest` is the strict UI-verified quest state above;
-                    -- q.M is therefore the mob of the quest currently held,
-                    -- never a stale/next-level mob name.
-                    local anchorHeight = (CombatController:IsFastReady()
-                        or not CombatController:WantsClientRange())
-                        and (_G.Settings.FarmHeight or 15)
-                        or (_G.Settings.ClientHoverHeight or 5)
-                    local anchorFarmPos = FarmPositionController:GetFarmPos(
-                        _G.State.FarmTarget, anchorHeight)
-                    local atAnchor = false
-                    if anchorFarmPos and hrp then
-                        atAnchor = (hrp.Position - anchorFarmPos).Magnitude
-                            <= (_G.Settings.HoverConfirmRadius or 5)
-                            and TravelManager:IsAtCombatAnchor(targetHRP)
-                    end
-                    -- Bring is allowed only while every farm/quest/anchor gate
-                    -- is true. Leaving the anchor immediately stops forcing
-                    -- NPC physics instead of retaining a stale cluster.
-                    local canGather = _G.Settings.GatherMobs
-                        and HasQuest() == true
-                        and _G.State.ActiveQuestMob ~= nil
-                        and atAnchor
-                        and CombatController:IsDamageReady()
-                    if canGather then
-                        FarmPositionController:GatherMobCluster(
-                            questMobName, _G.State.FarmTarget)
-                    else
-                        FarmPositionController:ReleaseCluster()
-                        if _G.Settings.GatherMobs
-                            and not _G.State.ActiveQuestMob then
-                            _G.BobonDiagnostics.Bring = "QUEST-UNKNOWN"
-                        elseif _G.Settings.GatherMobs
-                            and not CombatController:IsDamageReady() then
-                            _G.BobonDiagnostics.Bring = "DAMAGE-WAIT"
-                        elseif _G.Settings.GatherMobs and not atAnchor then
-                            _G.BobonDiagnostics.Bring = "WAIT-FARM-ANCHOR"
-                        end
                     end
                 end
             else
-                -- SELECT_TARGET [A-5]: mob theo quest/level/sea hiện tại,
-                -- chọn mob GẦN player nhất (không chọn ngẫu nhiên cả map)
-                _G.State.FState = "SELECT_TARGET"
-                DLog("FARM", "State = SELECT_TARGET")
-                local mob, dist = FindNearestMob(questMobName)
-
-
-                if mob and mob:FindFirstChild("HumanoidRootPart") and mob.Humanoid.Health > 0 then
-                    PrepareCombatTarget(mob)
-                    if dist > _G.Settings.MaxFarmDistance then
-                        -- Mob quá xa → về khu farm, KHÔNG giữ target xa
-                        _G.State:ClearTargets()
-                        _G.BobonStatus = "Farm: " .. questMobName .. " is far, returning to farm area"
-                        DLog("TARGET", q.M .. " is too far (" .. string.format("%.0f", dist) .. ") → returning to farm area")
-                        if _G.State:CanRequestTravel() then
-                            TravelManager:Request(q.MC, "Farm")
-                        end
-                    else
+                -- Give the anchor a short ownership-acquisition window before
+                -- chasing a spawn. The anchor itself is never released here.
+                if hoverCF and _G.State:CanRequestTravel() then
+                    TravelManager:Request(hoverCF, "Farm", {
+                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                        fallback = q.MC,
+                        combatHover = true,
+                        persistent = true,
+                    })
+                end
+                if tick() - (_G.State.ClusterActivatedAt or 0)
+                    > (_G.Settings.ClusterAcquireGrace or 1.75) then
+                    local mob, dist = FindNearestMob(questMobName)
+                    if mob and mob:FindFirstChild("HumanoidRootPart") then
                         _G.State.FarmTarget = mob
                         _G.State.CurrentTarget = mob
-                        _G.State.FState = "MOVE_TO_TARGET"
-                        _G.BobonStatus = "Farm: " .. questMobName
-                        DLog("TARGET", "Found: " .. q.M .. " @" .. string.format("%.0f", dist) .. " studs")
-                        if _G.State:CanRequestTravel() then
+                        PrepareCombatTarget(mob)
+                        if (_G.State.ClusterLastMoved or 0) == 0
+                            and dist <= _G.Settings.MaxFarmDistance
+                            and _G.State:CanRequestTravel() then
                             TravelManager:Request(mob.HumanoidRootPart, "Farm", {
                                 arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                                fallback = q.MC,
+                                fallback = hoverCF or q.MC,
                                 combatHover = true,
                             })
                         end
                     end
-                else
-                    _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
-                    DLog("TARGET", "Waiting for " .. q.M .. " spawn")
-                    if _G.State:CanRequestTravel() then
-                        TravelManager:Request(q.MC, "Farm")
+                end
+            end
+
+            -- ATTACK: verified cluster roots are stacked inside one XZ pocket.
+            -- Primary death does not reset backend verification or cluster anchor.
+            target = _G.State.FarmTarget
+            targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+            hrp = HRP()
+            if target and targetRoot and hrp and _G.State:IsTargetValid(target) then
+                PrepareCombatTarget(target)
+                local flatDist = (Vector3.new(hrp.Position.X,0,hrp.Position.Z)
+                    - Vector3.new(targetRoot.Position.X,0,targetRoot.Position.Z)).Magnitude
+                local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
+                if flatDist <= _G.Settings.AttackRange and farmHolds
+                    and TravelManager:IsAtCombatAnchor() then
+                    _G.State.FState = "ATTACK_CLUSTER"
+                    EquipCombatTool()
+                    Attack(target, questMobName)
+                    if os.time() - lastAttackLog >= 5 then
+                        lastAttackLog = os.time()
+                        DLog("ATTACK", "Cluster target: " .. target.Name)
                     end
                 end
+            else
+                _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
             end
         end)
         if not okMain then
@@ -7223,10 +7370,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Full Script Loaded Successfully!")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
-print("[BobonHub v18.4 DOUGH GATHER FIXED] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Full Script Loaded Successfully!")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
+print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
