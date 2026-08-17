@@ -1,37 +1,17 @@
 -- =================================================================
---         BOBON HUB v21.24.1 STARTUP SAFE PROGRESSION | ALL-MOB PILE | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.24.2 MINIMAL PRIORITY BOOTSAFE | ALL-MOB PERSISTENT PILE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24.1
+--         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24.2
 --
---  v21.24.1 STARTUP HOTFIX:
---  [BOOT-1] Removed the new local function binding from the Skull helper scope.
---  [BOOT-2] Removed okPriority/priorityResult locals from the giant MainController.
---           Priority pcall now lives in ItemProgression:RunImmediateChecksSafe().
---  [BOOT-3] Progression behavior from v21.24 is preserved; this patch only reduces
---           Luau compile/register pressure so re-execute can start again.
---
---  v21.24 IMMEDIATE PROGRESSION / QUEST PRIORITY FIX:
---  [PQ-1] Eligible permanent progression now PREEMPTS normal level farming immediately.
---         Farm travel/cluster/targets are released through PrepareClaimedAction, then the
---         progression ActionToken owns the job until it finishes or yields.
---  [PQ-2] Saber starts as soon as Lv.200 is reached even while a level quest is active.
---         Removed the old CombatController:IsDamageReady() startup gate that could leave
---         Lv.200+ accounts farming forever before the Saber puzzle ever claimed an action.
---  [PQ-3] Saber flow made state-aware: plates are attempted when the door state is unknown,
---         RichSon=nil explicitly starts dialogue, Mob Leader/Saber Expert get bounded spawn
---         waits, and failed spawn waits retry soon instead of the old 300-second cooldown.
---  [PQ-4] Mandatory Sea2/Bartilo/Sea3 story work no longer waits for a pre-verified combat
---         backend; combat verification is allowed to happen naturally when a boss is fought.
---  [PQ-5] Bartilo gate corrected to Lv.850. Race V2 follows Bartilo/Alchemist server state.
---  [PQ-6] Direct-ready item goals preempt farm: Pole when Thunder God is live, Kabucha when
---         fragments are ready, Rengoku when Hidden Key is owned, Midnight Blade when 100
---         Ectoplasm is ready, live Factory/Acidum, guaranteed Yama pull, live Tushita path,
---         ready CDK, ready Skull Guitar puzzle, and final TTK purchase.
---  [PQ-7] Skull Guitar first activation now requires a real Full Moon night window before
---         it can steal movement. Existing puzzle progress remains immediately resumable.
---  [PQ-8] Progression action retry shortened but remains bounded; missing bosses/events yield
---         back to level farm instead of camping forever. No new movement coroutine is added.
---  [PQ-9] v21.23 one-pile gather/combat/TravelManager logic is otherwise preserved.
+--  v21.24.2 MINIMAL PRIORITY / BOOT-SAFE FIX:
+--  [MP-1] Rebased directly on v21.23 (last known booting build). No new controller/function block.
+--  [MP-2] Existing ItemProgression:RunChecks(true,true) now runs before level quest/farm.
+--         An eligible progression action claims ActionToken and PrepareClaimedAction stops Farm travel.
+--  [MP-3] Saber can claim immediately at Lv.200 even if combat backend has not been pre-verified.
+--  [MP-4] Saber retry reduced from the generic 300s optional cooldown to 5s.
+--  [MP-5] Sea2/Bartilo/Sea3/Pole/Tushita/Factory-item entry gates no longer depend on a pre-verified damage backend.
+--  [MP-6] Bartilo level gate corrected to 850.
+--  [MP-7] Cluster/combat/travel implementation remains the v21.23 code path.
 --
 --  v21.23 ALL-MOB / PERSISTENT PILE FIX:
 --  [AP-1] Fixes the real v21.22 omission bug: candidate membership is now decided from
@@ -650,7 +630,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.24.1 STARTUP SAFE PROGRESSION + ALL-MOB PILE] Loading...")
+print("[BobonHub v21.24.2 MINIMAL PRIORITY BOOTSAFE + ALL-MOB PILE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1024,13 +1004,6 @@ _G.Settings = {
     NearQuestSnapCooldown= 0.08,
     -- Optional item failure/timeout must not block level farming forever.
     ItemRetryCooldown   = 300,
-    -- v21.24: permanent progression may interrupt ordinary level farm as soon as
-    -- its real level/server prerequisite is ready. Polling is throttled.
-    ProgressionPreemptFarm = true,
-    ProgressionPriorityPoll = 0.45,
-    ProgressionImmediateRetry = 2.0,
-    ProgressionMissingSpawnRetry = 10.0,
-    ProgressionActionRetry = 8.0,
     ServerHopCooldown   = 120,
     MaxFarmDistance     = 300,
     StatBatchLimit      = 100,
@@ -1601,7 +1574,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.24.1", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.24.2", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -7770,7 +7743,6 @@ end)
 local MaterialPrepController
 local FightingStyleUnlockController
 local ItemProgression = {}
-ItemProgression.LastPriorityScan = 0
 ItemProgression.NextOptional = {
     Saber = 0, PoleV1 = 0, Rengoku = 0, MidnightBlade = 0,
     Kabucha = 0, AcidumRifle = 0, Yama = 0, Tushita = 0, CDK = 0,
@@ -7839,15 +7811,13 @@ function ItemProgression:CheckSaber()
     if not _G.Settings.AutoItems or not _G.Settings.AutoSaber then return false end
     if InventoryHas("Saber") or Level() < 200 or GetSea() ~= 1 then return false end
     if not self:OptionalReady("Saber") then return false end
-
     local myToken = _G.State:ClaimAction("Saber")
     if myToken == 0 then return false end
     PrepareClaimedAction("Saber")
-    -- Saber is permanent progression, not a five-minute optional detour. A short
-    -- retry is enough because every server-side step is re-read on the next run.
-    self.NextOptional.Saber = tick() + (_G.Settings.ProgressionImmediateRetry or 2.0)
+    self.NextOptional.Saber = tick() + 5
     _G.State:SetMode("GettingItem")
-    _G.BobonStatus = "Progression: Saber"
+    _G.BobonStatus = "Item: Saber Sword"
+
 
     task.spawn(function()
         local ok, err = xpcall(function()
@@ -7859,48 +7829,23 @@ function ItemProgression:CheckSaber()
                     or (backpack and backpack:FindFirstChild(name))
                 if not tool or not hum then return false end
                 if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end) end
-                task.wait(0.18)
+                task.wait(0.2)
                 return c and c:FindFirstChild(name) ~= nil
             end
 
-            local function WaitLiveBoss(name, waitCF, timeout)
-                local boss = FindBoss(name)
-                if boss then return boss end
-                if waitCF and _G.State:IsActionValid(myToken) then
-                    TravelAndWait("Saber", myToken, waitCF, {
-                        timeout=60, arrivalThreshold=8, settle=0.25,
-                    })
-                end
-                local deadline = tick() + (timeout or 30)
-                repeat
-                    if not _G.State:IsActionValid(myToken) or not IsAlive() then return nil end
-                    boss = FindBoss(name)
-                    if boss then return boss end
-                    task.wait(0.4)
-                until tick() >= deadline
-                return nil
-            end
-
-            -- Current verified flow: five Jungle buttons -> Torch/Desert curtain ->
-            -- Cup/Sick Man -> Rich Man/Mob Leader -> Relic -> Saber Expert.
+            -- Current Saber flow: Jungle plates -> Torch/Burn -> Cup/SickMan
+            -- -> RichSon/Mob Leader -> Relic -> Saber Expert.
             local map = workspace:FindFirstChild("Map")
             local jungle = map and map:FindFirstChild("Jungle")
             local plates = jungle and jungle:FindFirstChild("QuestPlates")
             local plateDoor = plates and plates:FindFirstChild("Door")
-            local needPlates = true
-            if plateDoor then
-                pcall(function() needPlates = plateDoor.Transparency < 0.95 end)
-            end
-            if needPlates and plates then
-                _G.BobonStatus = "Saber: Jungle buttons"
+            if plateDoor and plateDoor.Transparency == 0 then
                 for i = 1, 5 do
-                    if not _G.State:IsActionValid(myToken) then return end
                     local plate = plates:FindFirstChild("Plate" .. i)
-                    local button = plate and (plate:FindFirstChild("Button")
-                        or plate:FindFirstChild("Button", true))
-                    if button and button:IsA("BasePart") then
+                    local button = plate and plate:FindFirstChild("Button")
+                    if button and _G.State:IsActionValid(myToken) then
                         TravelAndWait("Saber", myToken, button.CFrame, {
-                            timeout=45, arrivalThreshold=4, settle=0.28,
+                            timeout = 60, arrivalThreshold = 5, settle = 0.35,
                         })
                     end
                 end
@@ -7908,17 +7853,14 @@ function ItemProgression:CheckSaber()
 
             if not _G.State:IsActionValid(myToken) then return end
             if not HasItem("Torch") then
-                _G.BobonStatus = "Saber: Getting Torch"
                 TravelAndWait("Saber", myToken, CFrame.new(-1610,11,164), {
-                    timeout=75, arrivalThreshold=5, settle=0.8,
+                    timeout = 90, arrivalThreshold = 6, settle = 1,
                 })
             end
             if HasItem("Torch") and EquipNamed("Torch") then
-                _G.BobonStatus = "Saber: Burning Desert curtain"
                 TravelAndWait("Saber", myToken, CFrame.new(1114,5,4350), {
-                    timeout=75, arrivalThreshold=6, settle=1.0,
+                    timeout = 90, arrivalThreshold = 7, settle = 1,
                 })
-                task.wait(0.4)
             end
 
             if not _G.State:IsActionValid(myToken) then return end
@@ -7927,20 +7869,16 @@ function ItemProgression:CheckSaber()
                 sickProgress = CommF_:InvokeServer("ProQuestProgress", "SickMan")
             end)
             if sickProgress ~= 0 then
-                _G.BobonStatus = "Saber: Cup / Sick Man"
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "GetCup") end)
-                task.wait(0.20)
                 if EquipNamed("Cup") then
                     local cup = Char() and Char():FindFirstChild("Cup")
                     if cup then
                         pcall(function()
                             CommF_:InvokeServer("ProQuestProgress", "FillCup", cup)
                         end)
-                        task.wait(0.15)
                     end
                 end
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "SickMan") end)
-                task.wait(0.25)
             end
 
             if not _G.State:IsActionValid(myToken) then return end
@@ -7948,28 +7886,13 @@ function ItemProgression:CheckSaber()
             pcall(function()
                 richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
             end)
-            -- Current public flows explicitly start Rich Son when nil. The old source
-            -- did nothing in this state, so Saber could stall forever after Sick Man.
-            if richProgress == nil then
-                _G.BobonStatus = "Saber: Starting Rich Man quest"
-                pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
-                task.wait(0.35)
-                pcall(function()
-                    richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
-                end)
-            end
-
             if richProgress == 0 then
-                _G.BobonStatus = "Saber: Mob Leader"
-                local boss = WaitLiveBoss("Mob Leader",
-                    CFrame.new(-2967.59521,-4.91089821,5328.70703), 35)
+                local boss = FindBoss("Mob Leader")
                 if not boss then
-                    self.NextOptional.Saber = tick()
-                        + (_G.Settings.ProgressionMissingSpawnRetry or 10)
-                    _G.BobonStatus = "Saber: Mob Leader not spawned • retrying"
+                    _G.BobonStatus = "Item: Waiting for Mob Leader"
                     return
                 end
-                local deadline = tick() + 150
+                local deadline = tick() + 120
                 while boss and _G.State:IsActionValid(myToken) and IsAlive()
                     and tick() < deadline do
                     local bh = boss:FindFirstChildOfClass("Humanoid")
@@ -7984,60 +7907,50 @@ function ItemProgression:CheckSaber()
                     if TravelManager:IsAtCombatAnchor(br) then
                         Attack(boss, "Mob Leader")
                     end
-                    task.wait(0.10)
+                    task.wait(0.12)
                 end
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
-                task.wait(0.3)
             end
 
             pcall(function()
                 richProgress = CommF_:InvokeServer("ProQuestProgress", "RichSon")
             end)
             if richProgress == 1 or HasItem("Relic") then
-                _G.BobonStatus = "Saber: Placing Relic"
                 pcall(function() CommF_:InvokeServer("ProQuestProgress", "RichSon") end)
-                task.wait(0.2)
                 EquipNamed("Relic")
                 if TravelAndWait("Saber", myToken, CFrame.new(-1405,30,4), {
-                    timeout=75, arrivalThreshold=6, settle=0.8,
+                    timeout=90, arrivalThreshold=8, settle=0.5,
                 }) then
-                    -- Touch/equipped Relic is the real puzzle interaction. Keep the
-                    -- current remote as a compatibility acknowledgement only.
                     pcall(function()
                         CommF_:InvokeServer("ProQuestProgress", "PlaceRelic")
                     end)
                 end
-                task.wait(0.35)
             end
 
-            if not _G.State:IsActionValid(myToken) then return end
-            _G.BobonStatus = "Saber: Saber Expert"
-            local saberBoss = WaitLiveBoss("Saber Expert", CFrame.new(-1405,30,4), 35)
+            local saberBoss = FindBoss("Saber Expert")
             if not saberBoss then
-                self.NextOptional.Saber = tick()
-                    + (_G.Settings.ProgressionMissingSpawnRetry or 10)
-                _G.BobonStatus = "Saber: Expert not spawned • retrying"
+                _G.BobonStatus = "Item: Waiting for Saber Expert"
                 return
             end
-            local timeout = tick() + 210
+            local timeout = os.time() + 180
             while _G.State:IsActionValid(myToken) and not InventoryHas("Saber")
-                and tick() < timeout and IsAlive() do
+                and os.time() < timeout and IsAlive() do
                 local boss = saberBoss
-                local bh = boss and boss:FindFirstChildOfClass("Humanoid")
-                local br = boss and boss:FindFirstChild("HumanoidRootPart")
-                if not boss or not bh or bh.Health <= 0 or not br then break end
-                PrepareCombatTarget(boss)
-                EquipCombatTool()
-                TravelManager:Request(br, "Saber", {
-                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                    combatHover = true,
-                })
-                if TravelManager:IsAtCombatAnchor(br) then
-                    Attack(boss, "Saber Expert")
+                if boss and boss:FindFirstChild("HumanoidRootPart") and boss.Humanoid.Health > 0 then
+                    PrepareCombatTarget(boss)
+                    EquipCombatTool()
+                    TravelManager:Request(boss.HumanoidRootPart, "Saber", {
+                        arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                        combatHover = true,
+                    })
+                    if TravelManager:IsAtCombatAnchor(boss.HumanoidRootPart) then
+                        Attack(boss, "Saber Expert")
+                    end
+                else
+                    break
                 end
-                task.wait(0.08)
+                task.wait(0.1)
             end
-            InventoryCache.At = 0
         end, debug.traceback)
         if not ok then warn("[BobonHub] Module Error: Saber: " .. tostring(err)) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
@@ -8051,19 +7964,20 @@ function ItemProgression:CheckSaber()
     return true
 end
 
+
 function ItemProgression:CheckPoleV1()
     if not _G.Settings.AutoItems then return false end
     if InventoryHas("Pole (1st Form)") or Level() < 575 or GetSea() ~= 1 then return false end
     if not self:OptionalReady("PoleV1") then return false end
     local boss = FindBoss("Thunder God")
     if not boss then
-        self.NextOptional.PoleV1 = tick() + (_G.Settings.ProgressionMissingSpawnRetry or 10)
+        self:DelayOptional("PoleV1")
         return false
     end
     local myToken = _G.State:ClaimAction("PoleV1")
     if myToken == 0 then return false end
     PrepareClaimedAction("PoleV1")
-    self.NextOptional.PoleV1 = tick() + (_G.Settings.ProgressionActionRetry or 8)
+    self:DelayOptional("PoleV1")
     _G.State:SetMode("GettingItem")
     _G.BobonStatus = "Item: Pole v1"
 
@@ -8527,8 +8441,7 @@ local function StartOptionalAction(self, key, owner, status, body)
     local token = _G.State:ClaimAction(owner)
     if token == 0 then return false end
     PrepareClaimedAction(owner)
-    self.NextOptional[key] = tick() + (_G.Settings.ProgressionActionRetry
-        or _G.Settings.ProgressionRetry or 8)
+    self.NextOptional[key] = tick() + (_G.Settings.ProgressionRetry or 45)
     _G.State:SetMode("GettingItem")
     _G.BobonStatus = status
     task.spawn(function()
@@ -8733,8 +8646,7 @@ function ItemProgression:CheckKabucha()
     self.NextOptional.Kabucha = tick() + (_G.Settings.ProgressionRetry or 45)
     pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","1") end)
     pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","2") end)
-    InventoryCache.At = 0
-    return true
+    return false
 end
 
 function ItemProgression:CheckRengoku()
@@ -8763,8 +8675,6 @@ function ItemProgression:CheckMidnightBlade()
         if self:OptionalReady("MidnightBlade") then
             self.NextOptional.MidnightBlade = tick() + (_G.Settings.ProgressionRetry or 45)
             pcall(function() CommF_:InvokeServer("Ectoplasm","Buy",3) end)
-            InventoryCache.At = 0
-            return true
         end
         return false
     end
@@ -8836,6 +8746,7 @@ end
 function ItemProgression:CheckTushita()
     if not _G.Settings.AutoAdvancedItems or not _G.Settings.AutoCDK
         or GetSea() ~= 3 or Level() < 2000 or InventoryHas("Tushita") then return false end
+
     local torch = FindOwnedTool("Holy Torch")
     if torch then
         return StartOptionalAction(self, "Tushita", "Tushita", "Item: Tushita Holy Torch", function(token)
@@ -9449,29 +9360,6 @@ local function RunSkullSwamp(token)
     FarmPositionController:ReleaseCluster()
 end
 
-function ItemProgression:IsRealFullMoonNight()
-    local lighting = game:GetService("Lighting")
-    local sky = lighting:FindFirstChild("Sky") or lighting:FindFirstChild("FantasySky")
-    local texture = ""
-    if sky then pcall(function() texture = tostring(sky.MoonTextureId or "") end) end
-    -- Current public Blox Fruits moon-phase implementations map this texture to 100%.
-    local fullTexture = string.find(texture, "9709149431", 1, true) ~= nil
-    local clock = tonumber(lighting.ClockTime) or 12
-    return fullTexture and (clock >= 18 or clock <= 5)
-end
-
-function ItemProgression:IsSoulGuitarImmediateReady()
-    if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
-        or HasSkullGuitar() then return false end
-    if MaterialCount("Bones") < 500 or MaterialCount("Ectoplasm") < 250
-        or MaterialCount("Dark Fragment") < 1 then return false end
-    if not CanSpendFragments(5000, "Item: Skull Guitar", 70) then return false end
-    local npcs = workspace:FindFirstChild("NPCs")
-    if npcs and npcs:FindFirstChild("Skeleton Machine") then return true end
-    if GuitarProgress() then return true end
-    return self:IsRealFullMoonNight()
-end
-
 function ItemProgression:CheckSoulGuitar()
     if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
         or HasSkullGuitar() then return false end
@@ -9495,10 +9383,6 @@ function ItemProgression:CheckSoulGuitar()
 
     local progress=GuitarProgress()
     if not progress then
-        if not self:IsRealFullMoonNight() then
-            self.NextOptional.SoulGuitar = tick() + 5
-            return false
-        end
         return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: Full Moon gravestone",function(token)
             TravelAndWait("SkullGuitar",token,CFrame.new(-8655.02,141.32,6160.02),{timeout=90,arrivalThreshold=10,settle=0.6})
             pcall(function() CommF_:InvokeServer("gravestoneEvent",2) end)
@@ -9533,9 +9417,8 @@ function ItemProgression:CheckSoulGuitar()
         end)
     end
     pcall(function() CommF_:InvokeServer("soulGuitarBuy",true) end)
-    InventoryCache.At = 0
     self.NextOptional.SoulGuitar=tick()+3
-    return true
+    return false
 end
 
 end -- v21.1 Skull Guitar helper scope
@@ -9567,7 +9450,7 @@ function ItemProgression:CheckRaceV2()
                 TravelAndWait("RaceV2", token, flower2.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
                 return
             end
-            if not FindOwnedTool("Flower 3") then
+            if not FindOwnedTool("Flower 3") and CombatController:IsDamageReady() then
                 local swan = FindMob("Swan Pirate")
                 if swan then FightNamedForAction("Swan Pirate","RaceV2",token,90) end
                 return
@@ -9583,9 +9466,11 @@ function ItemProgression:CheckRaceV2()
     end)
 end
 
--- Safe-window progression still handles long dependency farming/material work.
--- v21.24 adds RunImmediateChecks() below for permanent goals whose actual
--- prerequisites are ready; those goals are allowed to preempt an active level quest.
+-- Progression is deliberately a *farm-window* operation.  A valid quest is
+-- never interrupted by an optional item or boss; Sea 2/3 and item checks run
+-- only after the current quest is finished (or before the first quest).
+-- `allowSea` also accepts a wrong quest so the level-700/1500 sea gate cannot
+-- accidentally send the player to a next-sea quest before unlocking it.
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
     -- Mandatory world gates first.
@@ -9594,12 +9479,14 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if self:CheckThirdSea() then return true end
     if not allowOptional then return false end
 
-    -- Goal-based material and hard style prerequisites run only in this safe window.
+    -- Permanent milestone first: once Lv.200 Saber is eligible it must preempt level farm.
+    if self:CheckSaber() then return true end
+
+    -- Goal-based material and hard style prerequisites.
     if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
     if FightingStyleUnlockController and FightingStyleUnlockController:TryRun() then return true end
 
-    -- Kaitun-only progression. Do not spend time/resources collecting unrelated
-    -- optional weapons merely because the account happens to meet their level gate.
+    -- Kaitun-only progression.
     if self:CheckRaceV2() then return true end
     local meleeBusy = false
     pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
@@ -9607,7 +9494,6 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
 
     -- Useful kaitun item queue. Every routine is bounded; missing spawns/keys return
     -- control to level farming instead of camping indefinitely.
-    if self:CheckSaber() then return true end
     if self:CheckPoleV1() then return true end
     if self:CheckKabucha() then return true end
     if self:CheckRengoku() then return true end
@@ -9619,97 +9505,6 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if self:CheckSoulGuitar() then return true end
     return false
 end
-
--- v21.24 PREEMPTIVE PROGRESSION SCHEDULER.
--- Only work whose *real* prerequisite is ready is allowed to interrupt the current
--- level quest. Long material/mastery grinds stay in RunChecks safe windows so one
--- unavailable optional goal cannot starve level progression forever.
-function ItemProgression:RunImmediateChecks()
-    if _G.Settings.ProgressionPreemptFarm == false or not _G.State:CanAct() then return false end
-    local now = tick()
-    if now - (self.LastPriorityScan or 0) < (_G.Settings.ProgressionPriorityPoll or 0.45) then
-        return false
-    end
-    self.LastPriorityScan = now
-
-    local sea, lv = GetSea(), Level()
-
-    -- Saber is the first permanent item milestone and must fire at Lv.200 even if
-    -- a normal level quest is currently accepted/running.
-    if sea == 1 and lv >= 200 and not InventoryHas("Saber") then
-        if self:CheckSaber() then return true end
-    end
-
-    -- Mandatory story gates. These always outrank ordinary level farming.
-    if self:CheckSecondSea() then return true end
-    if self:CheckBartilo() then return true end
-    if self:CheckThirdSea() then return true end
-
-    -- Race V2 becomes a real actionable quest only when the Alchemist server state
-    -- says so (Bartilo was checked above first).
-    if self:CheckRaceV2() then return true end
-
-    -- Live/direct-ready permanent items. Missing spawns/keys simply return false.
-    if self:CheckPoleV1() then return true end
-    if self:CheckKabucha() then return true end
-    if self:CheckRengoku() then return true end
-
-    -- Midnight Blade should interrupt immediately when the purchase bill is already
-    -- ready. Farming the 100 Ectoplasm itself remains bounded safe-window work.
-    if sea == 2 and lv >= 1000 and not InventoryHas("Midnight Blade")
-        and MaterialCount("Ectoplasm") >= 100 then
-        if self:CheckMidnightBlade() then return true end
-    end
-
-    -- Factory Core is a live event; CheckAcidumRifle only claims when Core exists.
-    if self:CheckAcidumRifle() then return true end
-
-    -- Yama immediate pull only at the guaranteed threshold. Below 30, Elite Hunter
-    -- farming remains safe-window work instead of repeatedly stealing every farm tick.
-    if sea == 3 and lv >= 1500 and not InventoryHas("Yama")
-        and _G.Settings.AutoAdvancedItems and _G.Settings.AutoCDK then
-        local eliteProgress = 0
-        pcall(function() eliteProgress = tonumber(CommF_:InvokeServer("EliteHunter","Progress")) or 0 end)
-        if eliteProgress >= 30 and self:CheckYama() then return true end
-    end
-
-    -- Tushita only claims if Holy Torch is owned or rip_indra is actually live.
-    if sea == 3 and lv >= 2000 and not InventoryHas("Tushita") then
-        local tushitaReady = FindOwnedTool("Holy Torch") ~= nil
-            or FindBoss("rip_indra") ~= nil or FindBoss("rip_indra True Form") ~= nil
-        if tushitaReady and self:CheckTushita() then return true end
-    end
-
-    -- CDK has strict server/mastery prerequisites inside CheckCDK; once ready it is
-    -- permanent progression and should preempt level farm immediately.
-    if self:CheckCDK() then return true end
-
-    -- Skull Guitar may preempt only once materials/fragments plus Full Moon/current
-    -- puzzle progress make the next stage genuinely actionable.
-    if type(self.IsSoulGuitarImmediateReady) == "function"
-        and self:IsSoulGuitarImmediateReady() then
-        if self:CheckSoulGuitar() then return true end
-    end
-
-    -- Final TTK purchase is instant once all three current/legacy aliases have 300
-    -- mastery and the Beli bill is ready. Training itself still rides normal farm.
-    if SwordProgressionController and SwordProgressionController:TryTrueTripleKatana() then
-        return true
-    end
-    return false
-end
--- v21.24.1: keep pcall locals OUTSIDE the giant MainController function.
--- The source has previously hit Luau per-function/local-register limits; adding
--- even a small local pair inside MainController can make the whole chunk fail to compile.
-function ItemProgression:RunImmediateChecksSafe()
-    local ok, result = pcall(function() return self:RunImmediateChecks() end)
-    if not ok then
-        warn("[BobonHub] Module Error: ProgressionPriority: " .. tostring(result))
-        return false
-    end
-    return result == true
-end
-
 -- ══════════════════════════════════════════════════════════════════
 --              BOSSMANAGER v16.4 — DATA-DRIVEN
 --   Boss không dùng tọa độ cứng để tránh bay ra biển khi map thay đổi.
@@ -11432,17 +11227,15 @@ task.spawn(function()
                 return
             end
 
-            -- v21.24 PERMANENT PROGRESSION PREEMPTS LEVEL FARM. This runs before
-            -- quest identity/skip/farm so reaching a real milestone (Saber 200,
-            -- Bartilo 850, Sea gates, ready permanent items, etc.) immediately
-            -- hands movement to its own ActionToken instead of waiting for the
-            -- current level quest to finish.
-            if ItemProgression:RunImmediateChecksSafe() then
+
+            -- v21.24.2 PRIORITY: run the EXISTING progression controller before level farm.
+            -- No new scheduler/function is introduced: this is intentionally a one-line
+            -- reordering on top of the known-booting v21.23 architecture.
+            if ItemProgression:RunChecks(true, true) then
                 return
             end
 
-            -- LEVEL FARM FALLBACK: only runs when no eligible permanent progression
-            -- has claimed the tick.
+            -- LEVEL FARM FALLBACK: runs only if no progression action claimed this tick.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
             if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
@@ -11595,8 +11388,8 @@ task.spawn(function()
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
                 local okSea, seaResult = pcall(function()
-                    -- Mandatory gates are also checked by the preemptive scheduler.
-                    -- Keep this fallback for the exact quest-transition tick.
+                    -- Sea gates vẫn là bắt buộc ở level 700/1500; optional
+                    -- item/boss tuyệt đối không được chen vào giữa quest.
                     return ItemProgression:RunChecks(true, false)
                 end)
                 if not okSea then
@@ -11605,9 +11398,10 @@ task.spawn(function()
                     return
                 end
 
-                -- Closed-quest window remains useful for long dependency work
-                -- (materials/mastery/boss drops). Direct-ready permanent goals were
-                -- already checked above and may now preempt an active quest.
+                -- A confirmed closed quest is the only safe window for
+                -- optional kaitun items/boss drops. The old placement was
+                -- below this return path, so Saber/Pole/BossManager were
+                -- logically unreachable and never ran at all.
                 -- The wrapper is authoritative here. A completed quest can
                 -- leave stale title text behind, so questMatch may still be
                 -- true even though there is no active quest.
@@ -12154,10 +11948,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.24.1] Full Script Loaded Successfully!")
-print("[BobonHub v21.24.1] Architecture: Progression Priority | Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.24.1] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.24.1] Modules: Immediate Progression | QuestFarm | One-Pile Cluster | Combat | Factory | Material Prep | CDK/Skull | Fire HUD")
-print("[BobonHub v21.24.1] Progression: Saber@200 PREEMPT | Sea2/Bartilo@850/Sea3 | RaceV2 | Factory | Pole/Kabucha/Rengoku/Midnight/Acidum | Yama/Tushita/TTK/CDK | Skull Guitar")
-print("[BobonHub v21.24.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.24.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.24.2] Full Script Loaded Successfully!")
+print("[BobonHub v21.24.2] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.24.2] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.24.2] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.24.2] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.24.2] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.24.2] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
