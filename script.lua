@@ -1,24 +1,18 @@
 -- =================================================================
---         BOBON HUB v21.11 OLD GATHER/ATTACK + FAST DESCEND + HAKI HOLD
+--         BOBON HUB v21.12 | v21.7 GATHER+ATTACK RESTORE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.8 FAST MOVEMENT | Version: v21.11
+--         Base: v21.7 SKIP SWEEP FIX | Version: v21.12
 --
---  v21.11 RESTORE OLD GATHER + ATTACK:
---  [RGA-1] Cluster/Gather/Restack logic is restored byte-for-byte from v21.8.
---  [RGA-2] CombatController + farm Attack path is restored byte-for-byte from v21.8.
---  [RGA-3] Fast descend is isolated inside TravelManager only; it does not gate,
---          delay, verify or alter mob stacking/attack selection.
---  [RGA-4] Armament Haki keeper is silent and state-checked; it never owns movement,
---          never changes farm/cluster state, and never writes Haki text to Status.
---
---  v21.8 FAST MOVEMENT TUNING:
---  [FM-1] Global travel speed raised moderately; skip Floor 1/2 uses a faster
---         dedicated speed so ownership sweeps do not crawl between mobs.
---  [FM-2] Near-target deceleration shortened and given a minimum approach speed;
---         arrival threshold is wider so the bot settles quickly instead of easing
---         for a long time during the final descent.
---  [FM-3] No anti-kick/anti-cheat bypass is added. Existing validation, movement
---         ownership, fallback and recovery logic are preserved.
+--  v21.12 RESTORE POLICY:
+--  [R7-1] Gather/Cluster/Attack logic is taken directly from the supplied v21.7 source.
+--         RestackBatch, acquisition sweep, target collection, attack backend and main
+--         farm/skip attack flow are intentionally not rewritten by this patch.
+--  [R7-2] Movement-only tuning: faster normal travel, dedicated skip speed and a fast
+--         vertical descent when already horizontally near a combat-hover target.
+--  [R7-3] Armament Haki is kept ON silently with state-check + cooldown/grace. It never
+--         writes Status and never sends Buso while the live HasBuso marker says ON.
+--  [R7-4] No v21.9 RestackBatch/backstep workaround is carried over, because that changed
+--         the gather feel the user wants preserved from v21.7.
 --
 --  v21.7 EARLY SKIP FLOOR 1/2 SWEEP FIX:
 --  [SF-1] Fixed the shared Floor 1 / Floor 2 deadlock where SKIP first requested
@@ -435,7 +429,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.11 OLD GATHER/ATTACK + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.12 | v21.7 GATHER+ATTACK + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -583,6 +577,7 @@ _G.Settings = {
     HitboxSize          = 0,
     FlySpeed            = 240,
     SkipTravelSpeed      = 320,
+    -- Movement-only tuning. Cluster/gather/attack timings below remain v21.7.
     NearMoveDecelDistance= 12,
     NearMoveMinSpeed     = 150,
     FastDescendEnabled   = true,
@@ -594,7 +589,7 @@ _G.Settings = {
     -- Submerged Island (Sea 3) dùng tọa độ âm dưới mặt biển.
     UnderwaterMinY      = -2300,
     CloseThreshold      = 35,
-    FarmArrivalThreshold= 7.0,
+    FarmArrivalThreshold= 5.5,
     HoverConfirmRadius  = 5,
     -- [A-4] Farm position / gom mob config (điều chỉnh theo game physics)
     MobGatherRadius     = 50,
@@ -604,10 +599,6 @@ _G.Settings = {
     EquipCooldown       = 0.5,
     -- [A-1] Cooldown giữa các lần chọn team (giây)
     TeamCooldown        = 5,
-    -- Silent always-on Armament watcher. Remote is sent only when state is OFF.
-    ArmamentWatchInterval = 0.15,
-    ArmamentRetryCooldown = 0.45,
-    ArmamentConfirmGrace  = 0.80,
     -- [A-7] Watchdog: travel không tiến quá N giây → light fix
     WatchdogStuckThreshold = 25,
     -- Current FastAttack path accepts nearby enemies up to 100 studs.  A
@@ -700,7 +691,7 @@ _G.Settings = {
     ClusterAcquireRetry = 0.25,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 3.0,
-    ClusterAcquireArrivalThreshold = 6.0,
+    ClusterAcquireArrivalThreshold = 4.5,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -757,6 +748,10 @@ _G.Settings = {
     -- Server validates level/money/ownership; probes are throttled and never own movement.
     AutoCoreAbilities   = true,
     CoreAbilityRetry    = 45,
+    -- Silent always-on Armament keeper; read state often, remote itself is gated.
+    ArmamentWatchInterval = 0.15,
+    ArmamentRetryCooldown = 0.45,
+    ArmamentConfirmGrace  = 0.80,
     -- Core kaitun progression: always enabled internally; intentionally NOT exposed in Configs.
     AutoFightingStyles  = true,
     AutoBuyMelee        = true,
@@ -1291,7 +1286,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.11", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.12", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4933,7 +4928,10 @@ function TravelManager:Request(targetCF, owner, options)
             end
 
 
-            -- v21.11 FAST DESCEND, movement-only. Gather/Restack/Attack remain v21.8.
+            -- v21.12 MOVEMENT-ONLY FAST DESCEND. Gather/Attack remains v21.7.
+            -- Transit keeps vector flight; when already horizontally over a combat
+            -- hover target, vertical descent gets a higher bounded speed so the final
+            -- drop does not crawl. No cluster root/target is modified here.
             self.AtCombatAnchor = false
             self.AtCombatTarget = nil
             local delta = targetPos - currentPos
@@ -5033,7 +5031,10 @@ function TravelManager:Request(targetCF, owner, options)
 end
 
 
--- v21.11 SILENT ALWAYS-ON ARMAMENT HAKI. Never call Buso blindly.
+-- v21.12 SILENT ALWAYS-ON ARMAMENT HAKI.
+-- Never call Buso blindly: when HasBuso is readable it is authoritative. If it
+-- disappears/turns false after being observed, request once and wait for replication.
+-- If the marker is unavailable, fall back to one successful request per character.
 local HakiController = {
     Character = nil,
     Enabled = false,
@@ -5064,7 +5065,9 @@ function HakiController:ReadArmamentState(character)
         return true, true
     end
     local okAttr, attr = pcall(function() return character:GetAttribute("HasBuso") end)
-    if okAttr and type(attr) == "boolean" then return attr, true end
+    if okAttr and type(attr) == "boolean" then
+        return attr, true
+    end
     return nil, false
 end
 
@@ -5083,6 +5086,7 @@ function HakiController:EnableForCharacter()
 
     local active, observableNow = self:ReadArmamentState(character)
     if observableNow then self.ArmamentObservable = true end
+
     if active == true then
         self.Enabled = true
         self.PendingBusoAt = 0
@@ -6039,7 +6043,6 @@ function SkipRouteController:Run()
 
     return true
 end
-
 
 -- ══════════════════════════════════════════════════════════════════
 --          FIGHTING STYLE PROGRESSION v17 — FARM-COOPERATIVE
@@ -10335,7 +10338,8 @@ task.spawn(function()
         DLog("TEAM", "Verified team: " .. LP.Team.Name)
     end
     task.wait(0.5)
-    pcall(function() HakiController:EnableForCharacter() end)
+    -- Silent Haki init: do not overwrite farm/status text.
+    HakiController:EnableForCharacter()
     task.wait(0.5)
     _G.State:SetMode("Idle")
 end)
@@ -10348,7 +10352,8 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 
 
--- Silent Armament keeper. State check runs often, Buso remote does not.
+-- v21.12 silent Armament keeper. State is read frequently; Buso itself is
+-- cooldown/grace gated and is never sent while Armament is observed ON.
 task.spawn(function()
     while SessionAlive() and task.wait(_G.Settings.ArmamentWatchInterval or 0.15) do
         pcall(function() HakiController:WatchTick() end)
@@ -10504,10 +10509,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.11] Full Script Loaded Successfully!")
-print("[BobonHub v21.11] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.11] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.11] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.11] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.11] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.11] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.12] Full Script Loaded Successfully!")
+print("[BobonHub v21.12] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.12] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.12] Modules: v21.7 Gather+Attack | Fast Descend | Haki Hold | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.12] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.12] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.12] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
