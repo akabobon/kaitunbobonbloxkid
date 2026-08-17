@@ -406,7 +406,15 @@ _G.Settings = {
     BossFarmHeight      = 24,
     -- Only the real-click fallback descends this low. Verified fast attack
     -- remains at FarmHeight/BossFarmHeight, safely outside ordinary NPC M1.
-    ClientHoverHeight   = 5,
+    ClientHoverHeight   = 6.5,
+    -- v19.2: client-input fallback is allowed to dip only briefly. If HP drops,
+    -- keep the same farm/action/cluster but rise out of NPC melee range until safe.
+    ClientDipHold       = 0.22,
+    ClientRetreatDelay  = 0.55,
+    EmergencyHoverHeight = 28,
+    EmergencyHealthPercent = 55,
+    EmergencyResumePercent = 82,
+    EmergencyMinHold    = 2.5,
     FarmOffsetX         = 1.5,
     -- Retained for compatibility only; enemy roots are no longer resized.
     HitboxSize          = 0,
@@ -769,6 +777,8 @@ _G.State = {
     LastPosition     = nil,
     LastAttackTime   = 0,
     LastIncomingDamage = 0,
+    FarmSafetyUntil   = 0,
+    FarmSafetyActive  = false,
     LastTargetContested = 0,
     ContestedTarget  = nil,
     ContestedBy      = nil,
@@ -974,7 +984,7 @@ do
             x.Position = pos
             x.Size = size
             x.BackgroundColor3 = CARD_BG
-            x.BackgroundTransparency = 0.68
+            x.BackgroundTransparency = 0.48
             x.BorderSizePixel = 0
             x.Parent = parent
             Corner(x, 14)
@@ -988,7 +998,10 @@ do
         Panel.AnchorPoint = Vector2.new(0.5,0.5)
         Panel.Position = UDim2.fromScale(0.5,0.5)
         Panel.Size = UDim2.fromScale(1,1)
-        Panel.BackgroundTransparency = 1
+        -- Grey translucent veil: keep the same HUD layout, only restore readable
+        -- contrast like the reference video without turning the screen black.
+        Panel.BackgroundColor3 = Color3.fromRGB(42,44,50)
+        Panel.BackgroundTransparency = 0.58
         Panel.BorderSizePixel = 0
         Panel.Parent = SG
 
@@ -999,7 +1012,8 @@ do
         Content.AnchorPoint = Vector2.new(0.5,0.5)
         Content.Position = UDim2.fromScale(0.5,0.5)
         Content.Size = UDim2.new(0.78,0,0.78,0)
-        Content.BackgroundTransparency = 1
+        Content.BackgroundColor3 = Color3.fromRGB(34,37,44)
+        Content.BackgroundTransparency = 0.74
         Content.BorderSizePixel = 0
         Content.Parent = Panel
 
@@ -1246,6 +1260,25 @@ local function Char() return LP.Character end
 local function HRP() local c=Char(); return c and c:FindFirstChild("HumanoidRootPart") end
 local function Hum() local c=Char(); return c and c:FindFirstChild("Humanoid") end
 local function IsAlive() local h=Hum(); return h and h.Health > 0 end
+
+local function FarmSafetyActive()
+    local h = Hum()
+    if not h or h.Health <= 0 or h.MaxHealth <= 0 then return false end
+    local state = _G.State
+    if not state then return false end
+    local pct = (h.Health / h.MaxHealth) * 100
+    local now = tick()
+    if state.FarmSafetyActive then
+        if pct >= (_G.Settings.EmergencyResumePercent or 82)
+            and now >= (state.FarmSafetyUntil or 0) then
+            state.FarmSafetyActive = false
+        end
+    elseif pct <= (_G.Settings.EmergencyHealthPercent or 55) then
+        state.FarmSafetyActive = true
+        state.FarmSafetyUntil = now + (_G.Settings.EmergencyMinHold or 2.5)
+    end
+    return state.FarmSafetyActive == true
+end
 
 
 local function Level()
@@ -1930,6 +1963,7 @@ local CombatController = {
     NextProbeAt = 0,
     LastConfirmedAt = 0,
     DesiredClientRange = false,
+    ClientRetreatUntil = 0,
     WatchedModel = nil,
     WatchedHumanoid = nil,
     WatchedHealth = nil,
@@ -2374,6 +2408,8 @@ function CombatController:IsDamageReady()
 end
 
 function CombatController:WantsClientRange()
+    if FarmSafetyActive() then return false end
+    if tick() < (self.ClientRetreatUntil or 0) then return false end
     return self.DesiredClientRange == true
 end
 
@@ -2421,7 +2457,14 @@ end
 function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     if #entries == 0 then return false end
     if IsClientInputBackend(backend) then
-        return self:DispatchClientClick(tool, preferredRoot, backend)
+        local ok = self:DispatchClientClick(tool, preferredRoot, backend)
+        if ok then
+            -- Do not park at melee height waiting for the next M1. One click gets
+            -- a short dip, then TravelManager immediately returns to safe hover.
+            self.DesiredClientRange = false
+            self.ClientRetreatUntil = tick() + (_G.Settings.ClientRetreatDelay or 0.55)
+        end
+        return ok
     elseif backend == "CLIENT-HELPER" then
         local helper = self:ResolveNativeHelper()
         local hitList = {}
@@ -2487,6 +2530,14 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         return false
     end
     local candidateInputBackend = IsClientInputBackend(candidateBackend)
+    if candidateInputBackend and FarmSafetyActive() then
+        self.DesiredClientRange = false
+        if self.PendingBackend and IsClientInputBackend(self.PendingBackend) then
+            self:AbortPending("SAFE-HOVER")
+        end
+        _G.BobonDiagnostics.Packet = "SAFE-HOVER"
+        return false
+    end
     local candidateRange = candidateInputBackend
         and (_G.Settings.ClientAttackRange or 8)
         or (_G.Settings.FastAttackRange or 100)
@@ -3474,6 +3525,9 @@ function ClusterFarmController:GetHoverCFrame(height)
     if not anchor then return nil end
     local p = anchor.Position
     local h = height or _G.Settings.FarmHeight or 15
+    if FarmSafetyActive() then
+        h = math.max(h, _G.Settings.EmergencyHoverHeight or 28)
+    end
     local y = math.max(p.Y + h,
         IsSubmergedPosition(p) and (_G.Settings.UnderwaterMinY + 25) or _G.Settings.MinY)
     return CFrame.new(p.X + (_G.Settings.FarmOffsetX or 0), y, p.Z)
@@ -4091,14 +4145,17 @@ function TravelManager:Request(targetCF, owner, options)
                     local model = self.TargetRef:IsA("Model") and self.TargetRef
                         or self.TargetRef:FindFirstAncestorOfClass("Model")
                     local hoverHeight = travelOptions.hoverHeight
-                    if not hoverHeight then
+                    if FarmSafetyActive() then
+                        hoverHeight = math.max(tonumber(hoverHeight) or 0,
+                            _G.Settings.EmergencyHoverHeight or 28)
+                    elseif not hoverHeight then
                         if CombatController:IsFastReady()
                             or not CombatController:WantsClientRange() then
                             hoverHeight = owner == "Farm"
                                 and (_G.Settings.FarmHeight or 15)
                                 or (_G.Settings.BossFarmHeight or 24)
                         else
-                            hoverHeight = _G.Settings.ClientHoverHeight or 5
+                            hoverHeight = _G.Settings.ClientHoverHeight or 6.5
                         end
                     end
                     -- Never change hover height because player health fell.
@@ -4396,13 +4453,37 @@ local function BindPlayerDamage(character, humanoid)
         if not SessionAlive() or PlayerDamageCharacter ~= character then return end
         if newHealth < lastHealth then
             _G.State.LastIncomingDamage = tick()
+            local maxHealth = tonumber(humanoid.MaxHealth) or 0
+            local hpPct = maxHealth > 0 and (newHealth / maxHealth) * 100 or 100
+            if hpPct <= (_G.Settings.EmergencyHealthPercent or 55) then
+                -- Preserve the exact job/target/cluster, but stop sitting inside NPC
+                -- melee range. This fixes the video failure where Snowmen chip HP to
+                -- zero while the client-input backend keeps the player at ~5 studs.
+                _G.State.FarmSafetyActive = true
+                _G.State.FarmSafetyUntil = math.max(_G.State.FarmSafetyUntil or 0,
+                    tick() + (_G.Settings.EmergencyMinHold or 2.5))
+                if CombatController then
+                    CombatController.DesiredClientRange = false
+                    CombatController.ClientRetreatUntil = math.max(
+                        CombatController.ClientRetreatUntil or 0,
+                        _G.State.FarmSafetyUntil)
+                end
+                _G.BobonStatus = "Farm: Safe hover • recovering HP"
+            end
             if _G.Settings.ContinuityMode then
                 -- Damage/knockback must not look like a travel stall. Keep the
                 -- existing ActionToken, MovementOwner, target and Mode intact.
                 _G.State.LastMoveTime = os.time()
                 _G.State.ConsecutiveFails = 0
-                DLog("CONTINUITY", "incoming damage ignored; current job preserved")
+                DLog("CONTINUITY", "incoming damage preserved job; safe-hover may engage")
             end
+        end
+        -- Hysteresis: do not descend again the instant HP crosses the trigger.
+        if _G.State.FarmSafetyActive and humanoid.MaxHealth > 0
+            and (newHealth / humanoid.MaxHealth) * 100
+                >= (_G.Settings.EmergencyResumePercent or 82)
+            and tick() >= (_G.State.FarmSafetyUntil or 0) then
+            _G.State.FarmSafetyActive = false
         end
         lastHealth = newHealth
     end)
@@ -4464,6 +4545,8 @@ LP.CharacterAdded:Connect(function(char)
         _G.State:ForceReleaseAction("Respawn")
         _G.State:ClearTargets()
         _G.State.LastIncomingDamage = 0
+        _G.State.FarmSafetyUntil = 0
+        _G.State.FarmSafetyActive = false
         _G.State.ConsecutiveFails = 0
         _G.State.Sea = GetSea()
 
