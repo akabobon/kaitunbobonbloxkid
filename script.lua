@@ -1,7 +1,19 @@
 -- =================================================================
---         BOBON HUB v16.6 LIVE | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.2 CONFIG COMPLETE | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v15.0 | Version: v16.6 LIVE
+--         Base: v17.0 FULL PROGRESSION | Version: v18.0 KATAKURI AUDITED
+--
+--  v18 AUDIT / ENDGAME FIXES:
+--  [K-1] Max level 2800 no longer stays on Grand Devotee forever.
+--  [K-2] Katakuri runs only at max level and never steals level-farm movement.
+--  [K-3] CakePrinceSpawner(true) progress query + Cake Land kill loop.
+--  [K-4] Sweet Chalice path: cocoa farming + live Sweet Crafter interaction.
+--  [K-5] Katakuri combat uses ActionToken + TravelManager + verified attack.
+--  [K-6] Katakuri bring only moves same-name mobs with verified ownership.
+--  [K-7] Max level bypasses mandatory Submerged travel so endgame can run.
+--  [K-8] External Configs adapter only maps implemented features.
+--  [K-9] Team chooser respects configured Pirates/Marines.
+--  [K-10] UI block preserved byte-for-byte from v17.0.
 --
 --  LIVE HOTFIX VERIFIED COMBAT + ATOMIC TRAVEL:
 --  [C-1] Melee/sword attack adapter: live client helper -> tokenized Net ->
@@ -198,6 +210,16 @@
 -- =================================================================
 
 
+--  v16.7 CORE FIXED (non-UI audit):
+--  [R-1] Preserve UI block unchanged.
+--  [R-2] Team gate requires verified Pirates, not merely any non-nil team.
+--  [R-3] PrepareCombatTarget never resizes enemy roots.
+--  [R-4] Boss target participates in shared target cleanup/kill accounting.
+--  [R-5] Implement FruitEnabled: Sea2/3 random fruit + backpack store, cooldown-safe.
+--  [R-6] Kill counter ignores unrelated server NPC deaths.
+--  [R-7] Fruit work never owns movement/ActionToken, so it cannot race farm/travel.
+
+
 repeat task.wait() until game:IsLoaded()
 repeat task.wait() until game.Players.LocalPlayer
 -- Re-execution guard. Newer sessions invalidate every persistent loop from
@@ -215,7 +237,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v16.6 LIVE] Loading...")
+print("[BobonHub v18.2 CONFIG COMPLETE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -228,13 +250,14 @@ local VU           = game:GetService("VirtualUser")
 local VIM          = game:GetService("VirtualInputManager")
 local TS           = game:GetService("TweenService")
 local TeleportSvc  = game:GetService("TeleportService")
+local HttpService  = game:GetService("HttpService")
 local CoreGui      = game:GetService("CoreGui")
 
 
 local LP      = Players.LocalPlayer
 local Remotes = RS:WaitForChild("Remotes", 10)
 local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v16.6 LIVE] CommF_ not found!") return end
+if not CommF_ then warn("[BobonHub v18.2 CONFIG COMPLETE] CommF_ not found!") return end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -243,6 +266,7 @@ if not CommF_ then warn("[BobonHub v16.6 LIVE] CommF_ not found!") return end
 _G.Settings = {
     -- [A-8] DEBUG log: true = in [TAG] log ra console (không spam khi false)
     DEBUG               = false,
+    Team                = "Pirates",
     -- Safe hover for verified fast attack. Before fast damage is confirmed,
     -- the controller temporarily uses ClientHoverHeight for a genuine M1.
     FarmHeight          = 15,
@@ -293,6 +317,13 @@ _G.Settings = {
     CombatCausalWindow  = 0.65,
     IgnoreIncomingDamage= true,
     IncomingDamageGrace = 2.0,
+    -- v18.1: external hits/control effects must never cancel the current job.
+    -- These values only affect controller policy; they do not mutate server Stun/Busy.
+    ContinuityMode      = true,
+    ExternalInterferenceGrace = 3.0,
+    KeepTargetOnDamage  = true,
+    KeepActionOnDamage  = true,
+    KeepMovementOnDamage= true,
     EquipSettle         = 0.35,
     StuckTimeout        = 8,
     HoverStuckTimeout   = 30,
@@ -304,6 +335,9 @@ _G.Settings = {
     ApproachThreshold   = 120,
     TravelTimeoutMargin = 20,
     RandomFruitInterval = 120,
+    RandomFruitSea2Cost = 100000,
+    RandomFruitSea3Cost = 250000,
+    FruitStoreInterval  = 8,
     AttackDelay         = 0.08,
     QuestDelay          = 1.5,
     QuestRetryLimit     = 3,
@@ -346,8 +380,127 @@ _G.Settings = {
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
     SkipRouteFallbackTimeout = 90,
+
+    -- v17 progression: all are non-blocking. A missing server event/key never
+    -- freezes the level farm; the controller retries only in safe quest windows.
+    AutoAdvancedItems   = true,
+    AutoFightingStyles  = true,
+    AutoRaceV2          = true,
+    AutoCDK             = true,
+    AutoSoulGuitar      = true,
+    ProgressionRetry    = 45,
+    InventoryCacheTTL   = 5,
+    OptionalWorkTimeout = 150,
+
+    AutoKatakuri        = true,
+    KatakuriOnlyMax     = true,
+    KatakuriPreferDough = true,
+    KatakuriWorkTimeout = 90,
+    KatakuriRetry       = 20,
+    KatakuriCraftRetry  = 20,
+
+    -- v18.2 compact config: every exposed key below has live logic.
+    AutoSaber            = true,
+    AutoSpawnRipIndra    = false,
+    FPSBoostEnabled      = false,
+    FPSCap               = 30,
+    FPSHideGameUI        = false,
+    FPSDisable3DRender   = false,
+    FarmBossDrops        = false,
+    BossDropsWhen2xExpired = false,
+    FarmMasteryEnabled   = false,
+    FarmMasteryWeapons   = {},
+    FarmMasteryGuns      = {},
+    FarmMasterySwords    = {},
+    MasteryHealthPercent = 40,
+    MasteryTarget        = 600,
+    GetFruits            = true,
+    HopEnabled           = false,
+    HopFindFruit         = true,
+    HopElite             = true,
+    HopFindDarkbeard     = true,
+    HopFindMirage        = true,
+    HopFindMirrorFractal = true,
+    HopFindSoulReaper    = true,
+    HopFindTushita       = true,
+    HopFindValkyrieHelm  = true,
+    HopPlayerNear        = false,
+    HopPlayerNearRadius  = 250,
+    HopCheckInterval     = 8,
+    HopRequestCooldown   = 25,
+    LockFragment         = 0,
+    RainbowHaki          = false,
+    Shutdown             = false,
+    SnipeFruit           = "",
+    SwitchMelee          = true,
 }
 
+
+-- External config adapter — compact Hune-style surface.
+-- Every key mapped here has real implementation in this file; no display-only toggles.
+do
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local cfg = env and env.Configs
+    if type(cfg) == "table" then
+        local function bool(v, default) return type(v) == "boolean" and v or default end
+        local function num(v, default) return type(v) == "number" and v or default end
+        local function str(v, default) return type(v) == "string" and v or default end
+        local function arr(v) return type(v) == "table" and v or {} end
+
+        if cfg.Team == "Pirates" or cfg.Team == "Marines" then _G.Settings.Team = cfg.Team end
+        _G.Settings.AutoSaber = bool(cfg["Auto Saber"], _G.Settings.AutoSaber)
+        _G.Settings.AutoKatakuri = bool(cfg["Auto Spawn Dough King"], _G.Settings.AutoKatakuri)
+        _G.Settings.KatakuriPreferDough = _G.Settings.AutoKatakuri
+        _G.Settings.AutoSpawnRipIndra = bool(cfg["Auto Spawn rip_indra"], _G.Settings.AutoSpawnRipIndra)
+        _G.Settings.AutoCDK = bool(cfg["Cursed Dual Katana"], _G.Settings.AutoCDK)
+        _G.Settings.AutoSoulGuitar = bool(cfg["Skull Guitar"], _G.Settings.AutoSoulGuitar)
+        _G.Settings.AutoRaceV2 = bool(cfg["Auto Race V2"], _G.Settings.AutoRaceV2)
+        _G.Settings.GetFruits = bool(cfg["Get Fruits"], _G.Settings.GetFruits)
+        _G.Settings.FruitEnabled = _G.Settings.GetFruits
+        _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
+        _G.Settings.Shutdown = bool(cfg["Shutdown"], _G.Settings.Shutdown)
+        _G.Settings.SnipeFruit = str(cfg["Snipe Fruit"], _G.Settings.SnipeFruit)
+        _G.Settings.SwitchMelee = bool(cfg["Switch Melee"], _G.Settings.SwitchMelee)
+        _G.Settings.LockFragment = math.max(0, num(cfg["Lock Fragment"], _G.Settings.LockFragment))
+        _G.Settings.HopPlayerNear = bool(cfg["Hop Player Near"], _G.Settings.HopPlayerNear)
+
+        local fps = cfg["FPS Boost"]
+        if type(fps) == "table" then
+            _G.Settings.FPSBoostEnabled = bool(fps.Enable, _G.Settings.FPSBoostEnabled)
+            _G.Settings.FPSCap = math.clamp(num(fps["FPS Cap"], _G.Settings.FPSCap), 1, 240)
+            _G.Settings.FPSHideGameUI = bool(fps["Hide Game UI"], _G.Settings.FPSHideGameUI)
+            _G.Settings.FPSDisable3DRender = bool(fps["Disable 3D Render"], _G.Settings.FPSDisable3DRender)
+        end
+
+        local boss = cfg["Farm Boss Drops"]
+        if type(boss) == "table" then
+            _G.Settings.FarmBossDrops = bool(boss.Enable, _G.Settings.FarmBossDrops)
+            _G.Settings.BossDropsWhen2xExpired = bool(boss["When x2 Exp Expired"], _G.Settings.BossDropsWhen2xExpired)
+        end
+
+        local mastery = cfg["Farm Mastery"]
+        if type(mastery) == "table" then
+            _G.Settings.FarmMasteryEnabled = bool(mastery.Enable, _G.Settings.FarmMasteryEnabled)
+            _G.Settings.FarmMasteryWeapons = arr(mastery["Farm Mastery Weapons"])
+            _G.Settings.FarmMasteryGuns = arr(mastery["Guns To Farm"])
+            _G.Settings.FarmMasterySwords = arr(mastery["Swords To Farm"])
+            _G.Settings.MasteryHealthPercent = math.clamp(num(mastery["Mastery Health (%)"], _G.Settings.MasteryHealthPercent), 1, 100)
+        end
+
+        local hop = cfg.Hop
+        if type(hop) == "table" then
+            _G.Settings.HopEnabled = bool(hop.Enable, _G.Settings.HopEnabled)
+            _G.Settings.HopFindFruit = bool(hop["Find Fruit"], _G.Settings.HopFindFruit)
+            _G.Settings.HopElite = bool(hop["Hop Elite"], _G.Settings.HopElite)
+            _G.Settings.HopFindDarkbeard = bool(hop["Hop Find Darkbeard"], _G.Settings.HopFindDarkbeard)
+            _G.Settings.HopFindMirage = bool(hop["Hop Find Mirage"], _G.Settings.HopFindMirage)
+            _G.Settings.HopFindMirrorFractal = bool(hop["Hop Find Mirror Fractal"], _G.Settings.HopFindMirrorFractal)
+            _G.Settings.HopFindSoulReaper = bool(hop["Hop Find Soul Reaper"], _G.Settings.HopFindSoulReaper)
+            _G.Settings.HopFindTushita = bool(hop["Hop Find Tushita"], _G.Settings.HopFindTushita)
+            _G.Settings.HopFindValkyrieHelm = bool(hop["Hop Find Valkyrie Helm"], _G.Settings.HopFindValkyrieHelm)
+        end
+    end
+end
 
 -- ══════════════════════════════════════════════════════════════════
 --              STATE MANAGER v7
@@ -882,6 +1035,111 @@ local function HasItem(name)
         or (Char() and Char():FindFirstChild(name))
 end
 
+local function Fragments()
+    local d = LP:FindFirstChild("Data")
+    return d and d:FindFirstChild("Fragments") and d.Fragments.Value or 0
+end
+
+local function CanSpendFragments(cost)
+    local reserve = math.max(0, tonumber(_G.Settings and _G.Settings.LockFragment or 0) or 0)
+    return Fragments() - (tonumber(cost) or 0) >= reserve
+end
+
+local function FindOwnedTool(name)
+    local c = Char()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    return (c and c:FindFirstChild(name)) or (backpack and backpack:FindFirstChild(name))
+end
+
+local function ToolMastery(name)
+    local tool = FindOwnedTool(name)
+    local lv = tool and tool:FindFirstChild("Level")
+    return lv and tonumber(lv.Value) or 0
+end
+
+local function EquipNamedTool(name)
+    local c = Char()
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local tool = FindOwnedTool(name)
+    if not c or not hum or not tool then return false end
+    if tool.Parent ~= c then
+        pcall(function() hum:EquipTool(tool) end)
+        task.wait(0.2)
+    end
+    return tool.Parent == c
+end
+
+-- Server inventory is authoritative for items/materials that are not currently
+-- represented by a Tool. Cache it to avoid hammering CommF_ every controller tick.
+local InventoryCache = { At = 0, Rows = {} }
+local function GetInventoryRows(force)
+    local now = tick()
+    if not force and now - InventoryCache.At < (_G.Settings.InventoryCacheTTL or 5) then
+        return InventoryCache.Rows
+    end
+    local rows = {}
+    local ok, result = pcall(function() return CommF_:InvokeServer("getInventory") end)
+    if ok and type(result) == "table" then rows = result end
+    InventoryCache.At, InventoryCache.Rows = now, rows
+    return rows
+end
+
+local function InventoryHas(name)
+    if HasItem(name) then return true end
+    local wanted = string.lower(tostring(name))
+    for _, row in pairs(GetInventoryRows(false)) do
+        if type(row) == "table" then
+            local n = row.Name or row.name or row.Item or row.ItemName
+            if n and string.lower(tostring(n)) == wanted then return true end
+        end
+    end
+    return false
+end
+
+local function MaterialCount(name)
+    local wanted = string.lower(tostring(name))
+    local best = 0
+    for _, row in pairs(GetInventoryRows(false)) do
+        if type(row) == "table" then
+            local n = row.Name or row.name or row.Item or row.ItemName
+            if n and string.lower(tostring(n)) == wanted then
+                local c = tonumber(row.Count or row.count or row.Amount or row.amount
+                    or row.Quantity or row.quantity or row.Value or 1) or 0
+                if c > best then best = c end
+            end
+        end
+    end
+    return best
+end
+
+
+local WeaponInventoryCache = { At = 0, Rows = {} }
+local function EffectiveMastery(name)
+    local live = ToolMastery(name)
+    if live > 0 then return live end
+    local now = tick()
+    if now - WeaponInventoryCache.At >= (_G.Settings.InventoryCacheTTL or 5) then
+        local rows = {}
+        local ok, result = pcall(function() return CommF_:InvokeServer("getInventoryWeapons") end)
+        if ok and type(result) == "table" then rows = result end
+        WeaponInventoryCache.At, WeaponInventoryCache.Rows = now, rows
+    end
+    local wanted = string.lower(tostring(name))
+    for _, row in pairs(WeaponInventoryCache.Rows) do
+        if type(row) == "table" and row.Name and string.lower(tostring(row.Name)) == wanted then
+            return tonumber(row.Mastery or row.Level or row.MasteryLevel or 0) or 0
+        end
+    end
+    return 0
+end
+
+local function TryClickDetector(root)
+    if not root then return false end
+    local detector = root:IsA("ClickDetector") and root or root:FindFirstChildWhichIsA("ClickDetector", true)
+    if not detector or type(fireclickdetector) ~= "function" then return false end
+    return pcall(function() fireclickdetector(detector) end)
+end
+
 
 local function HasQuest()
     local ok, r = pcall(function()
@@ -988,6 +1246,32 @@ local function DLog(tag, msg)
     if _G.Settings and _G.Settings.DEBUG then
         print("[" .. tag .. "] " .. msg)
     end
+end
+
+-- v18.1 CONTINUITY: damage/PvP/NPC control effects are transient external
+-- interference, never a reason to abandon Farm/Boss/Item/Katakuri work.
+local function HasControlInterference()
+    local character = Char()
+    if not character then return false end
+    for _, flagName in ipairs({"Stun", "Busy"}) do
+        local flag = character:FindFirstChild(flagName)
+        if flag and ((flag:IsA("BoolValue") and flag.Value)
+            or (flag:IsA("NumberValue") and flag.Value > 0)) then
+            return true
+        end
+        local attr = character:GetAttribute(flagName)
+        if attr == true or (type(attr) == "number" and attr > 0) then
+            return true
+        end
+    end
+    return false
+end
+
+local function HasRecentExternalInterference()
+    if not (_G.Settings and _G.Settings.ContinuityMode) then return false end
+    local grace = _G.Settings.ExternalInterferenceGrace or 3
+    local damaged = tick() - (_G.State.LastIncomingDamage or 0) <= grace
+    return damaged or HasControlInterference()
 end
 
 
@@ -1606,13 +1890,24 @@ function CombatController:CheckPending(now)
         if _G.Settings.IgnoreIncomingDamage
             and now - (_G.State.LastIncomingDamage or 0)
                 <= (_G.Settings.IncomingDamageGrace or 2) then
-            self:AbortPending("RETRY-INCOMING-DAMAGE")
-            return
+            -- v18.1: do NOT abort/restart the attack probe when the player is hit.
+            -- Preserve backend, target and action; keep dispatching against the
+            -- same mob while the server resolves knockback/stun/damage effects.
+            _G.BobonDiagnostics.Packet = "CONTINUE-INCOMING-DAMAGE"
+            self.PendingSettleUntil = math.max(self.PendingSettleUntil or 0,
+                now + (_G.Settings.CombatLateGrace or 0.35))
         end
         if self.PendingSettleUntil <= 0 then
             self.PendingSettleUntil = now + (_G.Settings.CombatLateGrace or 0.35)
             _G.BobonDiagnostics.Packet = "WAIT-LATE-DAMAGE"
         elseif now >= self.PendingSettleUntil then
+            -- Continuous PvP/NPC interference is not evidence that the backend
+            -- failed. Extend the probe window without changing target/job.
+            if HasRecentExternalInterference() then
+                self.PendingSettleUntil = now + (_G.Settings.CombatLateGrace or 0.35)
+                _G.BobonDiagnostics.Packet = "CONTINUE-INTERFERENCE"
+                return
+            end
             local backend = self.PendingBackend
             local proven = self.VerifiedBackend == backend
                 and (self.BackendProofs[backend] or 0)
@@ -2000,16 +2295,11 @@ local function Attack(preferredTarget, mobName)
 end
 
 local function PrepareCombatTarget(target)
-    if not target then return end
+    if not target then return false end
     local root = target:IsA("BasePart") and target or target:FindFirstChild("HumanoidRootPart")
-    if not root or not root:IsA("BasePart") then return end
-    pcall(function()
-        -- Undo the exact 50^3 mutation made by the previous hotfix, then leave
-        -- enemy geometry untouched. Direct/client combat does not need it.
-        if root.Size == Vector3.new(50, 50, 50) then
-            root.Size = Vector3.new(2, 2, 1)
-        end
-    end)
+    if not root or not root:IsA("BasePart") or not root.Parent then return false end
+    local ok, pos = pcall(function() return root.Position end)
+    return ok and IsAllowedWorldPosition(pos)
 end
 
 
@@ -2156,6 +2446,35 @@ local function IsGunTool(tool)
         or string.find(category, "bow", 1, true) ~= nil
 end
 
+local function MasteryConfiguredNames()
+    local out, seen = {}, {}
+    for _, list in ipairs({_G.Settings.FarmMasteryWeapons, _G.Settings.FarmMasterySwords, _G.Settings.FarmMasteryGuns}) do
+        if type(list) == "table" then
+            for _, name in pairs(list) do
+                if type(name) == "string" and name ~= "" and not seen[name] then
+                    seen[name] = true
+                    out[#out + 1] = name
+                end
+            end
+        end
+    end
+    return out
+end
+
+local function MasteryPreferredTool()
+    if not _G.Settings.FarmMasteryEnabled then return nil end
+    local target = _G.State and _G.State.FarmTarget
+    local hum = target and target:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.MaxHealth <= 0 then return nil end
+    local hpPct = (hum.Health / hum.MaxHealth) * 100
+    if hpPct > (_G.Settings.MasteryHealthPercent or 40) then return nil end
+    local targetMastery = _G.Settings.MasteryTarget or 600
+    for _, name in ipairs(MasteryConfiguredNames()) do
+        if FindOwnedTool(name) and EffectiveMastery(name) < targetMastery then return name end
+    end
+    return nil
+end
+
 WeaponController = {
     LastEquip = 0,
     LastResult = "none",
@@ -2183,7 +2502,17 @@ function WeaponController:EquipPreferred()
         return false
     end
     local now = tick()
+    local preferredName = MasteryPreferredTool() or (_G.State and _G.State.PreferredCombatTool)
     local held = c:FindFirstChildOfClass("Tool")
+    -- Mastery/style progression may request one exact tool. Switch Melee=true
+    -- otherwise rejects a held sword/gun so the fallback really equips melee.
+    if held and preferredName and held.Name ~= preferredName then
+        pcall(function() hum:UnequipTools() end)
+        held = nil
+    elseif held and not preferredName and _G.Settings.SwitchMelee ~= false and not IsMeleeTool(held) then
+        pcall(function() hum:UnequipTools() end)
+        held = nil
+    end
     if held and self:IsCombatTool(held) then
         if self.HeldTool ~= held then
             self.HeldTool = held
@@ -2202,18 +2531,21 @@ function WeaponController:EquipPreferred()
     local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
     if not backpack then self.LastResult = "noBackpack"; return false end
     local candidate
-    -- melee trước để damage/knockback ổn định; nếu không có thì sword/gun.
-    for _, tool in ipairs(backpack:GetChildren()) do
-        if IsMeleeTool(tool) then candidate = tool; break end
+    if preferredName then
+        local preferred = backpack:FindFirstChild(preferredName)
+        if preferred and self:IsCombatTool(preferred) then candidate = preferred end
     end
+    -- Switch Melee=true keeps the normal kaitun fallback on melee.
+    -- false keeps a valid held/preferred tool and otherwise favors sword/gun.
+    local order = _G.Settings.SwitchMelee ~= false
+        and {IsMeleeTool, IsSwordTool, IsGunTool}
+        or {IsSwordTool, IsGunTool, IsMeleeTool}
     if not candidate then
-        for _, tool in ipairs(backpack:GetChildren()) do
-            if IsSwordTool(tool) then candidate = tool; break end
-        end
-    end
-    if not candidate then
-        for _, tool in ipairs(backpack:GetChildren()) do
-            if IsGunTool(tool) then candidate = tool; break end
+        for _, predicate in ipairs(order) do
+            for _, tool in ipairs(backpack:GetChildren()) do
+                if predicate(tool) then candidate = tool; break end
+            end
+            if candidate then break end
         end
     end
     if not candidate then
@@ -2326,7 +2658,7 @@ TeamController.Retries = 0
 TeamController.MaxRetries = 6
 TeamController.RetryWindow = 30
 
-local function ClickPiratesChoice()
+local function ClickTeamChoice()
     local gui = LP:FindFirstChild("PlayerGui")
     if not gui then return false end
     local choose = gui:FindFirstChild("ChooseTeam", true)
@@ -2342,8 +2674,8 @@ local function ClickPiratesChoice()
                 if type(fn) == "function" and getfenv(fn).script == controller then
                     local constants = getconstants(fn)
                     if type(constants) == "table" and #constants == 1
-                        and constants[1] == "Pirates" then
-                        fn("Pirates")
+                        and constants[1] == (_G.Settings.Team or "Pirates") then
+                        fn(_G.Settings.Team or "Pirates")
                         return
                     end
                 end
@@ -2351,16 +2683,17 @@ local function ClickPiratesChoice()
         end)
         if ok and LP.Team then return true end
     end
-    local pirates = choose and choose:FindFirstChild("Pirates", true)
-    local button = pirates and (pirates:IsA("GuiButton") and pirates
-        or pirates:FindFirstChildWhichIsA("GuiButton", true))
+    local desired = _G.Settings.Team or "Pirates"
+    local teamNode = choose and choose:FindFirstChild(desired, true)
+    local button = teamNode and (teamNode:IsA("GuiButton") and teamNode
+        or teamNode:FindFirstChildWhichIsA("GuiButton", true))
     -- Một số bản UI đổi Name của button nhưng vẫn giữ Text="Pirates".
     if not button then
         for _, node in ipairs(gui:GetDescendants()) do
             if node:IsA("GuiButton") then
                 local ok, txt = pcall(function() return node.Text end)
                 if ok and type(txt) == "string"
-                    and string.lower(txt):find("pirates", 1, true) then
+                    and string.lower(txt):find(string.lower(desired), 1, true) then
                     button = node
                     break
                 end
@@ -2376,7 +2709,7 @@ end
 -- Trả về true khi player ĐÃ có team. Chưa có → gửi lệnh chọn (có
 -- cooldown), chưa verify xong → false (main loop gọi lại, không chặn farm).
 function TeamController:AutoSelectTeam()
-    if LP.Team and LP.Team.Name == "Pirates" then
+    if LP.Team and LP.Team.Name == (_G.Settings.Team or "Pirates") then
         self.Retries = 0
         return true
     end
@@ -2388,17 +2721,17 @@ function TeamController:AutoSelectTeam()
     end
     self.LastCheck = now
     self.Retries = self.Retries + 1
-    DLog("TEAM", "No team → selecting Pirates (retry " .. self.Retries .. ")")
+    DLog("TEAM", "No team → selecting " .. tostring(_G.Settings.Team or "Pirates") .. " (retry " .. self.Retries .. ")")
     -- Ưu tiên nút UI khi ChooseTeam đang mở; một số server không nhận
     -- SetTeam cho tới khi client Activate button trước.
-    ClickPiratesChoice()
+    ClickTeamChoice()
     local ok, result = pcall(function()
-        return CommF_:InvokeServer("SetTeam", "Pirates")
+        return CommF_:InvokeServer("SetTeam", _G.Settings.Team or "Pirates")
     end)
     if not ok then
         warn("[BobonHub] SetTeam error: " .. tostring(result))
     end
-    if not LP.Team then ClickPiratesChoice() end
+    if not LP.Team then ClickTeamChoice() end
     -- VERIFY TEAM, không spam thêm remote.
     task.delay(0.75, function()
         if LP.Team then
@@ -2406,7 +2739,7 @@ function TeamController:AutoSelectTeam()
             DLog("TEAM", "Verified team: " .. LP.Team.Name)
         end
     end)
-    return LP.Team ~= nil
+    return LP.Team ~= nil and LP.Team.Name == "Pirates"
 end
 
 
@@ -3502,6 +3835,13 @@ local function BindPlayerDamage(character, humanoid)
         if not SessionAlive() or PlayerDamageCharacter ~= character then return end
         if newHealth < lastHealth then
             _G.State.LastIncomingDamage = tick()
+            if _G.Settings.ContinuityMode then
+                -- Damage/knockback must not look like a travel stall. Keep the
+                -- existing ActionToken, MovementOwner, target and Mode intact.
+                _G.State.LastMoveTime = os.time()
+                _G.State.ConsecutiveFails = 0
+                DLog("CONTINUITY", "incoming damage ignored; current job preserved")
+            end
         end
         lastHealth = newHealth
     end)
@@ -3742,7 +4082,7 @@ function DodgeController:TryDodge()
     if not TravelManager:ApplyDodgeOffset(dodgeOffset, 0.25) then return false end
     self.LastDodge = now
     DLog("DODGE", "Né chiêu " .. tostring(danger.Name))
-    _G.BobonStatus = "Farm: Né chiêu"
+    -- Do not overwrite the current job/status; this is only a one-shot offset.
     return true
 end
 
@@ -3858,6 +4198,14 @@ task.spawn(function()
             -- Chỉ watchdog light khi đang Farm + còn sống
             if _G.State.Mode ~= "Farming" then return end
             if not IsAlive() then return end
+            -- v18.1: PvP/NPC hits, knockback, Stun/Busy and screen-side combat
+            -- effects are transient. Never Stop/Recover because of them; the
+            -- active movement/action continues and naturally resumes.
+            if HasRecentExternalInterference() then
+                lightFails = 0
+                _G.State.LastMoveTime = os.time()
+                return
+            end
             -- LIGHT 1: travel đang chạy nhưng không tiến → Stop, để main
             -- loop request lại (không recovery nặng ngay)
             if _G.State.IsTraveling and _G.State.MovementOwner then
@@ -3885,8 +4233,9 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---          QUEST DATABASE v16.4 (SEA 1/2/3 COORDINATES)
+--          QUEST DATABASE v18 (SEA 1/2/3 COORDINATES)
 -- ══════════════════════════════════════════════════════════════════
+local MAX_LEVEL = 2800
 local QDB = {
     {Min=1,Max=9,Q="BanditQuest1",M="Bandit",QL=1,QC=CFrame.new(1059.37,15.45,1550.42),MC=CFrame.new(1045.96,27.00,1560.82)},
     {Min=10,Max=14,Q="JungleQuest",M="Monkey",QL=1,QC=CFrame.new(-1598.09,35.55,153.38),MC=CFrame.new(-1448.52,67.85,11.47)},
@@ -4075,6 +4424,8 @@ end
 local function GetQ()
     local lv = Level()
     local sea = GetSea()
+    -- 2800 is already max; do not keep accepting Grand Devotee forever.
+    if lv >= MAX_LEVEL then return nil end
     -- At a sea boundary the normal level table already points into the next
     -- world. Prove combat on the highest valid local quest before starting a
     -- mandatory boss/progression action; this avoids using a boss as a lethal
@@ -4265,6 +4616,135 @@ function SkipRouteController:Run()
     return true
 end
 
+
+-- ══════════════════════════════════════════════════════════════════
+--          FIGHTING STYLE PROGRESSION v17 — FARM-COOPERATIVE
+--   Trains required styles through the normal quest farm by selecting exactly
+--   one preferred combat tool. Purchase probes are throttled and own no movement.
+-- ══════════════════════════════════════════════════════════════════
+local FightingStyleController = {
+    LastProbe = 0,
+    LastStatus = "idle",
+}
+
+local function InvokeStyle(remote, ...)
+    local args = {...}
+    local ok, result = pcall(function()
+        return CommF_:InvokeServer(remote, table.unpack(args))
+    end)
+    return ok, result
+end
+
+function FightingStyleController:SetPreferred(name, reason)
+    _G.State.PreferredCombatTool = name
+    self.LastStatus = reason or name or "none"
+    DLog("STYLE", "Preferred=" .. tostring(name) .. " | " .. tostring(self.LastStatus))
+end
+
+function FightingStyleController:Tick()
+    if not _G.Settings.AutoFightingStyles or not IsAlive() then
+        _G.State.PreferredCombatTool = nil
+        return false
+    end
+    -- Never change equipment while a puzzle/boss/sea subsystem owns an action.
+    if _G.State.ActiveActionToken ~= 0 then return false end
+
+    local function train(name, target)
+        local tool = FindOwnedTool(name)
+        if tool and ToolMastery(name) < target then
+            self:SetPreferred(name, ("Mastery %s %d/%d"):format(name, ToolMastery(name), target))
+            return true
+        end
+        return false
+    end
+
+    -- Phase 1: prerequisites for Superhuman.
+    for _, row in ipairs({
+        {"Black Leg",300,"BuyBlackLeg"},
+        {"Electro",300,"BuyElectro"},
+        {"Fishman Karate",300,"BuyFishmanKarate"},
+        {"Dragon Claw",300,"DragonClaw"},
+    }) do
+        if train(row[1], row[2]) then return true end
+        if not FindOwnedTool(row[1]) and tick() - self.LastProbe >= 15 then
+            self.LastProbe = tick()
+            if row[3] == "DragonClaw" then
+                if CanSpendFragments(1500) then
+                    pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
+                    pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
+                end
+            else
+                InvokeStyle(row[3])
+            end
+            return false
+        end
+    end
+
+    if not FindOwnedTool("Superhuman") and tick() - self.LastProbe >= 15 then
+        self.LastProbe = tick()
+        InvokeStyle("BuySuperhuman")
+        return false
+    end
+    if train("Superhuman", 400) then return true end
+
+    -- Phase 2: V2 styles required for Godhuman.
+    local advanced = {
+        {base="Black Leg", baseM=400, name="Death Step", remote="BuyDeathStep"},
+        {base="Fishman Karate", baseM=400, name="Sharkman Karate", remote="BuySharkmanKarate"},
+        {base="Electro", baseM=400, name="Electric Claw", remote="BuyElectricClaw"},
+        {base="Dragon Claw", baseM=400, name="Dragon Talon", remote="BuyDragonTalon"},
+    }
+    for _, row in ipairs(advanced) do
+        if not FindOwnedTool(row.name) then
+            if train(row.base, row.baseM) then return true end
+            if tick() - self.LastProbe >= 15 and CanSpendFragments(5000) then
+                self.LastProbe = tick()
+                if row.name == "Sharkman Karate" then
+                    InvokeStyle(row.remote, true)
+                    InvokeStyle(row.remote)
+                elseif row.name == "Electric Claw" then
+                    local ok, state = InvokeStyle(row.remote, true)
+                    if ok and state == 4 then InvokeStyle(row.remote, "Start") else InvokeStyle(row.remote) end
+                else
+                    InvokeStyle(row.remote)
+                end
+            end
+            return false
+        end
+        if train(row.name, 400) then return true end
+    end
+
+    if not FindOwnedTool("Godhuman") then
+        if tick() - self.LastProbe >= 20 and CanSpendFragments(5000) then
+            self.LastProbe = tick()
+            InvokeStyle("BuyGodhuman", true)
+            InvokeStyle("BuyGodhuman")
+        end
+        return false
+    end
+
+    -- Godhuman is the stable default after the mastery chain is complete.
+    self:SetPreferred("Godhuman", "Godhuman ready")
+
+    -- Sanguine is an optional end-game purchase. The server validates Heart,
+    -- materials, money and fragments; a failed probe changes no movement/state.
+    if GetSea() == 3 and not FindOwnedTool("Sanguine Art")
+        and Level() >= 2400 and tick() - self.LastProbe >= 30 and CanSpendFragments(5000) then
+        self.LastProbe = tick()
+        InvokeStyle("BuySanguineArt", true)
+        InvokeStyle("BuySanguineArt")
+    end
+    return true
+end
+
+task.spawn(function()
+    while SessionAlive() and task.wait(3) do
+        if _G.Settings.AutoFightingStyles and _G.State.ActiveActionToken == 0 then
+            pcall(function() FightingStyleController:Tick() end)
+        end
+    end
+end)
+
 -- ══════════════════════════════════════════════════════════════════
 --     AUTO ITEMS + SEA PROGRESSION v16.1 (GIỮ NGUYÊN + FIX-P8/P9)
 --   ActionToken system: ClaimAction → IsActionValid → ReleaseAction
@@ -4274,8 +4754,9 @@ end
 -- ══════════════════════════════════════════════════════════════════
 local ItemProgression = {}
 ItemProgression.NextOptional = {
-    Saber = 0,
-    PoleV1 = 0,
+    Saber = 0, PoleV1 = 0, Rengoku = 0, MidnightBlade = 0,
+    Kabucha = 0, AcidumRifle = 0, Yama = 0, Tushita = 0, CDK = 0,
+    SoulGuitar = 0, RaceV2 = 0, Style = 0,
 }
 
 function ItemProgression:OptionalReady(name)
@@ -4292,23 +4773,23 @@ end
 local ItemCatalog = {
     {Name="Saber",Sea=1,MinLevel=200,Method="Puzzle+Boss",Auto="CheckSaber"},
     {Name="Pole (1st Form)",Sea=1,MinLevel=150,Method="Thunder God drop/purchase",Auto="CheckPoleV1"},
-    {Name="Rengoku",Sea=2,MinLevel=1100,Method="Hidden Key + Awakened Ice Admiral",Auto="BossDrop"},
-    {Name="Midnight Blade",Sea=2,MinLevel=1000,Method="Cursed Ship dealer",Auto="Manual"},
+    {Name="Rengoku",Sea=2,MinLevel=1100,Method="Hidden Key + Awakened Ice Admiral",Auto="CheckRengoku"},
+    {Name="Midnight Blade",Sea=2,MinLevel=1000,Method="100 Ectoplasm",Auto="CheckMidnightBlade"},
     {Name="Buddy Sword",Sea=3,MinLevel=2000,Method="Cake Queen drop",Auto="BossDrop"},
-    {Name="Yama",Sea=3,MinLevel=1500,Method="Elite Hunter bounty quest",Auto="Manual"},
-    {Name="Tushita",Sea=3,MinLevel=1500,Method="rip_indra puzzle + boss",Auto="Manual"},
-    {Name="Cursed Dual Katana",Sea=3,MinLevel=2200,Method="Scroll quests",Auto="Manual"},
-    {Name="Kabucha",Sea=2,MinLevel=700,Method="Sick Scientist + fragments",Auto="Manual"},
-    {Name="Acidum Rifle",Sea=2,MinLevel=700,Method="Factory materials",Auto="Manual"},
-    {Name="Soul Guitar",Sea=3,MinLevel=2300,Method="Soul Guitar puzzle",Auto="Manual"},
-    {Name="Godhuman",Sea=3,MinLevel=1500,Method="mastery + materials",Auto="Manual"},
-    {Name="Sanguine Art",Sea=3,MinLevel=2400,Method="Sanguine teacher + materials",Auto="Manual"},
+    {Name="Yama",Sea=3,MinLevel=1500,Method="30 Elite/Player Hunter quests",Auto="CheckYama"},
+    {Name="Tushita",Sea=3,MinLevel=2000,Method="rip_indra + Holy Torch puzzle + Longma",Auto="CheckTushita"},
+    {Name="Cursed Dual Katana",Sea=3,MinLevel=2200,Method="Yama/Tushita 350 + scroll trials",Auto="CheckCDK"},
+    {Name="Kabucha",Sea=2,MinLevel=700,Method="1,500 fragments",Auto="CheckKabucha"},
+    {Name="Acidum Rifle",Sea=2,MinLevel=700,Method="Factory Core drop",Auto="CheckAcidumRifle"},
+    {Name="Soul Guitar",Sea=3,MinLevel=2300,Method="Full Moon puzzle + materials",Auto="CheckSoulGuitar"},
+    {Name="Godhuman",Sea=3,MinLevel=1500,Method="style mastery + materials",Auto="FightingStyles"},
+    {Name="Sanguine Art",Sea=3,MinLevel=2400,Method="Leviathan Heart + materials",Auto="FightingStyles"},
 }
 
 function ItemProgression:GetMissingCatalog()
     local missing = {}
     for _, item in ipairs(ItemCatalog) do
-        if Level() >= item.MinLevel and not HasItem(item.Name) then
+        if Level() >= item.MinLevel and not InventoryHas(item.Name) then
             missing[#missing + 1] = item
         end
     end
@@ -4329,8 +4810,8 @@ end
 
 
 function ItemProgression:CheckSaber()
-    if not _G.Settings.AutoItems then return false end
-    if HasItem("Saber") or Level() < 200 or GetSea() ~= 1 then return false end
+    if not _G.Settings.AutoItems or not _G.Settings.AutoSaber then return false end
+    if InventoryHas("Saber") or Level() < 200 or GetSea() ~= 1 then return false end
     if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Saber") then return false end
     local myToken = _G.State:ClaimAction("Saber")
@@ -4455,7 +4936,7 @@ function ItemProgression:CheckSaber()
                 return
             end
             local timeout = os.time() + 180
-            while _G.State:IsActionValid(myToken) and not HasItem("Saber")
+            while _G.State:IsActionValid(myToken) and not InventoryHas("Saber")
                 and os.time() < timeout and IsAlive() do
                 local boss = saberBoss
                 if boss and boss:FindFirstChild("HumanoidRootPart") and boss.Humanoid.Health > 0 then
@@ -4489,7 +4970,7 @@ end
 
 function ItemProgression:CheckPoleV1()
     if not _G.Settings.AutoItems then return false end
-    if HasItem("Pole (1st Form)") or Level() < 575 or GetSea() ~= 1 then return false end
+    if InventoryHas("Pole (1st Form)") or Level() < 575 or GetSea() ~= 1 then return false end
     if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("PoleV1") then return false end
     local boss = FindBoss("Thunder God")
@@ -4509,7 +4990,7 @@ function ItemProgression:CheckPoleV1()
         local ok, err = xpcall(function()
             local deadline = tick() + 180
             while _G.State:IsActionValid(myToken) and IsAlive()
-                and tick() < deadline and not HasItem("Pole (1st Form)") do
+                and tick() < deadline and not InventoryHas("Pole (1st Form)") do
                 local hum = boss and boss:FindFirstChildOfClass("Humanoid")
                 local root = boss and boss:FindFirstChild("HumanoidRootPart")
                 if not boss or not boss.Parent or not hum or hum.Health <= 0 or not root then
@@ -4810,6 +5291,359 @@ function ItemProgression:CheckThirdSea()
 end
 
 
+
+-- v17 helpers for optional progression. Every routine is bounded and returns
+-- control to quest farming if a server-side prerequisite is absent.
+local function FightNamedForAction(name, owner, token, timeout)
+    local deadline = tick() + (timeout or 120)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        local mob = FindBoss(name) or FindMob(name)
+        if not mob then return false end
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local root = mob:FindFirstChild("HumanoidRootPart")
+        if not hum or hum.Health <= 0 or not root then return true end
+        PrepareCombatTarget(mob)
+        EquipCombatTool()
+        TravelManager:Request(root, owner, {
+            arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+            combatHover = true,
+        })
+        if TravelManager:IsAtCombatAnchor(root) then Attack(mob, name) end
+        task.wait(0.12)
+    end
+    return true
+end
+
+local function StartOptionalAction(self, key, owner, status, body)
+    if not self:OptionalReady(key) or not _G.State:CanAct() then return false end
+    local token = _G.State:ClaimAction(owner)
+    if token == 0 then return false end
+    PrepareClaimedAction(owner)
+    self.NextOptional[key] = tick() + (_G.Settings.ProgressionRetry or 45)
+    _G.State:SetMode("GettingItem")
+    _G.BobonStatus = status
+    task.spawn(function()
+        local ok, err = xpcall(function() body(token) end, debug.traceback)
+        if not ok then warn("[BobonHub] Module Error: " .. owner .. ": " .. tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner == owner then
+            TravelManager:Stop(owner .. "Complete")
+        end
+        _G.State:ReleaseAction(token)
+        if _G.State.Mode == "GettingItem" then _G.State:SetMode("Idle") end
+    end)
+    return true
+end
+
+function ItemProgression:CheckKabucha()
+    if not _G.Settings.AutoAdvancedItems or GetSea() < 2 or Level() < 700
+        or InventoryHas("Kabucha") or not CanSpendFragments(1500) then return false end
+    if not self:OptionalReady("Kabucha") then return false end
+    self.NextOptional.Kabucha = tick() + (_G.Settings.ProgressionRetry or 45)
+    pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","1") end)
+    pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","2") end)
+    return false
+end
+
+function ItemProgression:CheckRengoku()
+    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 2 or Level() < 1100
+        or InventoryHas("Rengoku") then return false end
+    local key = FindOwnedTool("Hidden Key")
+    if not key then return false end -- BossManager hunts Awakened Ice Admiral.
+    return StartOptionalAction(self, "Rengoku", "Rengoku", "Item: Opening Rengoku chest", function(token)
+        EquipNamedTool("Hidden Key")
+        TravelAndWait("Rengoku", token, CFrame.new(5518.01,60.56,-6828.81), {
+            timeout=90, arrivalThreshold=7, settle=1.2,
+        })
+        -- The door/chest normally consumes Hidden Key by touch; click any nearby
+        -- detector as a compatibility fallback without guessing a remote.
+        local map = workspace:FindFirstChild("Map")
+        local castle = map and (map:FindFirstChild("IceCastle") or map:FindFirstChild("Ice Castle"))
+        if castle then TryClickDetector(castle) end
+    end)
+end
+
+function ItemProgression:CheckMidnightBlade()
+    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 2 or Level() < 1000
+        or InventoryHas("Midnight Blade") then return false end
+    local ecto = MaterialCount("Ectoplasm")
+    if ecto >= 100 then
+        if self:OptionalReady("MidnightBlade") then
+            self.NextOptional.MidnightBlade = tick() + (_G.Settings.ProgressionRetry or 45)
+            pcall(function() CommF_:InvokeServer("Ectoplasm","Buy",3) end)
+        end
+        return false
+    end
+    if not CombatController:IsDamageReady() then return false end
+    return StartOptionalAction(self, "MidnightBlade", "MidnightBlade",
+        "Item: Farming Ectoplasm " .. tostring(ecto) .. "/100", function(token)
+        local stopAt = tick() + math.min(_G.Settings.OptionalWorkTimeout or 150, 90)
+        while _G.State:IsActionValid(token) and tick() < stopAt
+            and MaterialCount("Ectoplasm") < 100 do
+            local mob
+            for _, n in ipairs({"Ship Deckhand","Ship Engineer","Ship Steward","Ship Officer","Cursed Captain"}) do
+                mob = FindMob(n) or FindBoss(n)
+                if mob then break end
+            end
+            if mob then
+                FightNamedForAction(mob.Name, "MidnightBlade", token, 25)
+                InventoryCache.At = 0
+            else
+                pcall(function()
+                    CommF_:InvokeServer("requestEntrance", Vector3.new(923.21,126.98,32852.83))
+                end)
+                task.wait(2)
+            end
+        end
+        InventoryCache.At = 0
+        if MaterialCount("Ectoplasm") >= 100 then
+            pcall(function() CommF_:InvokeServer("Ectoplasm","Buy",3) end)
+        end
+    end)
+end
+
+function ItemProgression:CheckYama()
+    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 3 or Level() < 1500
+        or InventoryHas("Yama") then return false end
+    local progress
+    pcall(function() progress = CommF_:InvokeServer("EliteHunter","Progress") end)
+    progress = tonumber(progress) or 0
+    if progress >= 30 then
+        return StartOptionalAction(self, "Yama", "Yama", "Item: Pulling Yama", function(token)
+            local map = workspace:FindFirstChild("Map")
+            local waterfall = map and map:FindFirstChild("Waterfall")
+            local sealed = waterfall and waterfall:FindFirstChild("SealedKatana")
+            local handle = sealed and sealed:FindFirstChild("Handle")
+            if handle then
+                TravelAndWait("Yama", token, handle.CFrame, {
+                    timeout=90, arrivalThreshold=6, settle=0.5,
+                })
+                for _ = 1, 5 do
+                    if InventoryHas("Yama") or not _G.State:IsActionValid(token) then break end
+                    TryClickDetector(handle)
+                    task.wait(0.5)
+                end
+            end
+        end)
+    end
+    if not CombatController:IsDamageReady() then return false end
+    return StartOptionalAction(self, "Yama", "Yama", "Item: Elite Hunter " .. progress .. "/30", function(token)
+        pcall(function() CommF_:InvokeServer("EliteHunter") end)
+        task.wait(0.5)
+        local elite
+        for _, n in ipairs({"Diablo","Deandre","Urban"}) do
+            elite = FindBoss(n) or FindMob(n)
+            if elite then break end
+        end
+        if elite then FightNamedForAction(elite.Name, "Yama", token, 120) end
+    end)
+end
+
+function ItemProgression:CheckTushita()
+    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 3 or Level() < 2000
+        or InventoryHas("Tushita") then return false end
+    if not CombatController:IsDamageReady() then return false end
+
+    local torch = FindOwnedTool("Holy Torch")
+    if torch then
+        return StartOptionalAction(self, "Tushita", "Tushita", "Item: Tushita Holy Torch", function(token)
+            EquipNamedTool("Holy Torch")
+            local map = workspace:FindFirstChild("Map")
+            local turtle = map and map:FindFirstChild("Turtle")
+            local torches = turtle and turtle:FindFirstChild("QuestTorches")
+            if torches then
+                for i = 1, 5 do
+                    local t = torches:FindFirstChild("Torch" .. i)
+                    if t and _G.State:IsActionValid(token) then
+                        local lit = false
+                        pcall(function()
+                            local main = t:FindFirstChild("Particles", true)
+                            local light = main and main:FindFirstChild("Main")
+                            lit = light and light.Enabled == true
+                        end)
+                        if not lit then
+                            TravelAndWait("Tushita", token, t.CFrame, {
+                                timeout=60, arrivalThreshold=4, settle=0.8,
+                            })
+                        end
+                    end
+                end
+            end
+            local longma = FindBoss("Longma")
+            if longma then FightNamedForAction("Longma", "Tushita", token, 180) end
+        end)
+    end
+
+    local indra = FindBoss("rip_indra") or FindBoss("rip_indra True Form")
+    if indra then
+        return StartOptionalAction(self, "Tushita", "Tushita", "Item: Entering Tushita room", function(token)
+            local map = workspace:FindFirstChild("Map")
+            local waterfall = map and map:FindFirstChild("Waterfall")
+            local room = waterfall and waterfall:FindFirstChild("SecretRoom")
+            local hitbox = room and room:FindFirstChild("Hitbox", true)
+            if hitbox and hitbox:IsA("BasePart") then
+                TravelAndWait("Tushita", token, hitbox.CFrame, {
+                    timeout=90, arrivalThreshold=5, settle=1,
+                })
+            else
+                TravelAndWait("Tushita", token, CFrame.new(5152,142,912), {
+                    timeout=90, arrivalThreshold=8, settle=1,
+                })
+            end
+        end)
+    end
+    -- No rip_indra/Holy Torch in this server: do not steal movement from leveling.
+    return false
+end
+
+function ItemProgression:CheckCDK()
+    if not _G.Settings.AutoCDK or GetSea() ~= 3 or Level() < 2200
+        or InventoryHas("Cursed Dual Katana") then return false end
+    if not InventoryHas("Yama") or not InventoryHas("Tushita")
+        or EffectiveMastery("Yama") < 350 or EffectiveMastery("Tushita") < 350 then
+        return false
+    end
+    if not self:OptionalReady("CDK") then return false end
+    self.NextOptional.CDK = tick() + (_G.Settings.ProgressionRetry or 45)
+    local fragments = MaterialCount("Alucard Fragment")
+    -- Starting a trial is safe/idempotent. Trial-specific kills/travel are left
+    -- to the normal farm unless a live final boss can be verified.
+    if fragments < 3 then
+        pcall(function() CommF_:InvokeServer("CDKQuest","Progress","Evil") end)
+        pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Evil") end)
+    elseif fragments < 6 then
+        pcall(function() CommF_:InvokeServer("CDKQuest","Progress","Good") end)
+        pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Good") end)
+    else
+        pcall(function() CommF_:InvokeServer("CDKQuest","OpenDoor") end)
+        local boss = FindBoss("Cursed Skeleton Boss")
+        if boss and CombatController:IsDamageReady() then
+            return StartOptionalAction(self, "CDK", "CDK", "Item: Cursed Dual Katana final", function(token)
+                pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Boss") end)
+                FightNamedForAction("Cursed Skeleton Boss", "CDK", token, 240)
+            end)
+        end
+    end
+    return false
+end
+
+function ItemProgression:CheckAcidumRifle()
+    if GetSea() ~= 2 or Level() < 700 or InventoryHas("Acidum Rifle") then return false end
+    if not self:OptionalReady("AcidumRifle") then return false end
+
+    -- Acidum Rifle is a live Factory Core drop. Never camp or steal movement
+    -- while the Factory is closed; only act when a real Core is present.
+    local core = FindMob("Core") or FindBoss("Core")
+    if not core or not _G.State:IsTargetValid(core) then return false end
+    if not CombatController:IsDamageReady() then return false end
+
+    self.NextOptional.AcidumRifle = tick() + (_G.Settings.ProgressionRetry or 45)
+    return StartOptionalAction(self, "AcidumRifle", "Factory", "Item: Factory Core / Acidum Rifle", function(token)
+        FightNamedForAction("Core", "Factory", token, math.min(_G.Settings.OptionalWorkTimeout or 150, 280))
+    end)
+end
+
+function ItemProgression:CheckSoulGuitar()
+    if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
+        or InventoryHas("Soul Guitar") then return false end
+    if not self:OptionalReady("SoulGuitar") then return false end
+    self.NextOptional.SoulGuitar = tick() + (_G.Settings.ProgressionRetry or 45)
+
+    -- Once the Skeleton Machine is available, this server-side call validates
+    -- the material bill and performs the purchase. It is harmless when gated.
+    local npcs = workspace:FindFirstChild("NPCs")
+    if npcs and npcs:FindFirstChild("Skeleton Machine") then
+        if CanSpendFragments(5000) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+        return false
+    end
+
+    local progress
+    pcall(function() progress = CommF_:InvokeServer("GuitarPuzzleProgress","Check") end)
+    if type(progress) ~= "table" then
+        -- Puzzle has not been initialized (normally requires the correct Full Moon
+        -- gravestone interaction). Do not invent client state or spam clicks.
+        return false
+    end
+
+    if progress.Swamp == false then
+        -- This stage requires six Living Zombies to die together. The generic
+        -- single-target farm must not fake completion; wait for a verified group.
+        _G.BobonStatus = "Item: Soul Guitar - Swamp stage"
+        return false
+    elseif progress.Gravestones == false then
+        local map = workspace:FindFirstChild("Map")
+        local castle = map and map:FindFirstChild("Haunted Castle")
+        if not castle then return false end
+        local order = {
+            {"Placard7","Left"},{"Placard6","Left"},{"Placard5","Left"},
+            {"Placard4","Right"},{"Placard3","Left"},{"Placard2","Right"},{"Placard1","Right"},
+        }
+        for _, row in ipairs(order) do
+            local placard = castle:FindFirstChild(row[1])
+            local side = placard and placard:FindFirstChild(row[2])
+            if side then TryClickDetector(side) end
+            task.wait(0.08)
+        end
+        return false
+    elseif progress.Ghost == false then
+        pcall(function() CommF_:InvokeServer("GuitarPuzzleProgress","Ghost") end)
+        pcall(function() CommF_:InvokeServer("GuitarPuzzleProgress","Ghost",true) end)
+        return false
+    elseif progress.Trophies == false then
+        _G.BobonStatus = "Item: Soul Guitar - Trophy stage"
+        return false
+    elseif progress.Pipes == false then
+        _G.BobonStatus = "Item: Soul Guitar - Pipe stage"
+        return false
+    end
+
+    -- All puzzle flags completed: ask the Skeleton Machine purchase endpoint.
+    if CanSpendFragments(5000) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+    return false
+end
+
+function ItemProgression:CheckRaceV2()
+    if not _G.Settings.AutoRaceV2 or GetSea() ~= 2 or Level() < 850 then return false end
+    local data = LP:FindFirstChild("Data")
+    local race = data and data:FindFirstChild("Race")
+    if not race or race:FindFirstChild("Evolved") then return false end
+    local state
+    pcall(function() state = CommF_:InvokeServer("Alchemist","1") end)
+    if state == -2 then return false end
+    return StartOptionalAction(self, "RaceV2", "RaceV2", "Race: Upgrading V2", function(token)
+        if state == 0 then
+            if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
+                timeout=90, arrivalThreshold=6, settle=0.8,
+            }) then
+                pcall(function() CommF_:InvokeServer("Alchemist","2") end)
+            end
+            return
+        end
+        if state == 1 then
+            local flower1, flower2 = workspace:FindFirstChild("Flower1"), workspace:FindFirstChild("Flower2")
+            if not FindOwnedTool("Flower 1") and flower1 and flower1:IsA("BasePart") then
+                TravelAndWait("RaceV2", token, flower1.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
+                return
+            end
+            if not FindOwnedTool("Flower 2") and flower2 and flower2:IsA("BasePart") then
+                TravelAndWait("RaceV2", token, flower2.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
+                return
+            end
+            if not FindOwnedTool("Flower 3") and CombatController:IsDamageReady() then
+                local swan = FindMob("Swan Pirate")
+                if swan then FightNamedForAction("Swan Pirate","RaceV2",token,90) end
+                return
+            end
+            if FindOwnedTool("Flower 1") and FindOwnedTool("Flower 2") and FindOwnedTool("Flower 3") then
+                if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
+                    timeout=90, arrivalThreshold=6, settle=0.8,
+                }) then
+                    pcall(function() CommF_:InvokeServer("Alchemist","3") end)
+                end
+            end
+        end
+    end)
+end
+
 -- Progression is deliberately a *farm-window* operation.  A valid quest is
 -- never interrupted by an optional item or boss; Sea 2/3 and item checks run
 -- only after the current quest is finished (or before the first quest).
@@ -4817,13 +5651,28 @@ end
 -- accidentally send the player to a next-sea quest before unlocking it.
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
-    -- Sea changes are mandatory gates, so they run before optional items.
+    -- Mandatory world gates first.
     if self:CheckSecondSea() then return true end
     if self:CheckBartilo() then return true end
     if self:CheckThirdSea() then return true end
     if not allowOptional then return false end
+
+    -- Cheap/non-blocking progression before long item hunts.
+    if self:CheckRaceV2() then return true end
+    pcall(function() FightingStyleController:Tick() end)
+    if self:CheckKabucha() then return true end
+
+    -- Weapons and puzzles. Every routine is bounded; missing spawn/event simply
+    -- returns false so BossManager/QuestFarm can continue.
     if self:CheckSaber() then return true end
     if self:CheckPoleV1() then return true end
+    if self:CheckRengoku() then return true end
+    if self:CheckMidnightBlade() then return true end
+    if self:CheckAcidumRifle() then return true end
+    if self:CheckYama() then return true end
+    if self:CheckTushita() then return true end
+    if self:CheckCDK() then return true end
+    if self:CheckSoulGuitar() then return true end
     return false
 end
 -- ══════════════════════════════════════════════════════════════════
@@ -4863,12 +5712,14 @@ local BossDatabase = {
     -- Sea 3
     {N="Stone",Sea=3,MinLevel=1550}, {N="Island Empress",Sea=3,MinLevel=1675},
     {N="Kilo Admiral",Sea=3,MinLevel=1750}, {N="Captain Elephant",Sea=3,MinLevel=1875},
+    {N="Beautiful Pirate",Sea=3,MinLevel=1950},
     {N="Longma",Sea=3,MinLevel=2000},
     {N="Cursed Skeleton Boss",Sea=3,MinLevel=2050}, {N="Cake Queen",Sea=3,MinLevel=2175},
     {N="Soul Reaper",Sea=3,MinLevel=2000}, {N="Cake Prince",Sea=3,MinLevel=2200},
     {N="Dough King",Sea=3,MinLevel=2300},
     {N="Tyrant of the Skies",Sea=3,MinLevel=2600},
     {N="rip_indra",Sea=3,MinLevel=1500},
+    {N="Diablo",Sea=3,MinLevel=1500}, {N="Deandre",Sea=3,MinLevel=1500}, {N="Urban",Sea=3,MinLevel=1500},
 }
 
 -- Optional boss work must advance the kaitun instead of interrupting every
@@ -4879,6 +5730,23 @@ local BossDropItems = {
     ["Awakened Ice Admiral"] = "Rengoku",
     ["Cake Queen"] = "Buddy Sword",
 }
+
+local function HasActive2xExp()
+    local data = LP:FindFirstChild("Data")
+    if not data then return false end
+    for _, obj in ipairs(data:GetDescendants()) do
+        local n = string.lower(tostring(obj.Name or ""))
+        if n:find("exp",1,true) and (n:find("boost",1,true) or n:find("2x",1,true) or n:find("double",1,true)) then
+            if (obj:IsA("NumberValue") or obj:IsA("IntValue")) and tonumber(obj.Value) and obj.Value > 0 then return true end
+            if obj:IsA("BoolValue") and obj.Value then return true end
+        end
+    end
+    for _, attr in ipairs({"ExpBoost","XPBoost","DoubleExp","2xExp"}) do
+        local v = data:GetAttribute(attr)
+        if v == true or (type(v)=="number" and v > 0) then return true end
+    end
+    return false
+end
 
 function BossManager:FindLiveBoss()
     local folder = workspace:FindFirstChild("Enemies")
@@ -4894,7 +5762,24 @@ function BossManager:FindLiveBoss()
                 local wantedItem = BossDropItems[entry.N]
                 local progressionBoss = entry.N == "Tyrant of the Skies"
                     and level >= 2600 and not SubmergedAccessController.Confirmed
-                if ((wantedItem and not HasItem(wantedItem)) or progressionBoss)
+                local styleKeyBoss = _G.Settings.AutoFightingStyles and (
+                    (entry.N == "Awakened Ice Admiral" and not InventoryHas("Death Step")
+                        and ToolMastery("Black Leg") >= 400)
+                    or (entry.N == "Tide Keeper" and not InventoryHas("Sharkman Karate")
+                        and ToolMastery("Fishman Karate") >= 400)
+                )
+                local farmDrops = _G.Settings.FarmBossDrops
+                    and (not _G.Settings.BossDropsWhen2xExpired or not HasActive2xExp())
+                local hopTarget = false
+                if _G.Settings.HopEnabled then
+                    hopTarget = (_G.Settings.HopElite and (entry.N == "Diablo" or entry.N == "Deandre" or entry.N == "Urban"))
+                        or (_G.Settings.HopFindDarkbeard and entry.N == "Darkbeard")
+                        or (_G.Settings.HopFindSoulReaper and entry.N == "Soul Reaper")
+                        or (_G.Settings.HopFindMirrorFractal and entry.N == "Dough King" and not InventoryHas("Mirror Fractal"))
+                        or (_G.Settings.HopFindTushita and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Tushita"))
+                        or (_G.Settings.HopFindValkyrieHelm and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Valkyrie Helm"))
+                end
+                if ((wantedItem and not InventoryHas(wantedItem)) or progressionBoss or styleKeyBoss or farmDrops or hopTarget)
                     and entry.Sea == sea and level >= entry.MinLevel
                     and IsEnemyNamed(mob, entry.N) then
                     local p = mobRoot.Position
@@ -4916,6 +5801,10 @@ function BossManager:_Finish(token, reason)
     if TravelManager and _G.State.IsTraveling and _G.State.MovementOwner == "Boss" then
         TravelManager:Stop("Boss:" .. tostring(reason))
     end
+    if _G.State.CurrentTarget and (not _G.State.CurrentTarget.Parent
+        or self.ActiveName == nil or IsEnemyNamed(_G.State.CurrentTarget, self.ActiveName)) then
+        _G.State.CurrentTarget = nil
+    end
     _G.State:ReleaseAction(token)
     self.Active = false
     self.ActiveName = nil
@@ -4925,6 +5814,7 @@ end
 function BossManager:_RunBoss(boss, entry, token)
     local ok, err = xpcall(function()
         self.ActiveName = entry.N
+        _G.State.CurrentTarget = boss
         _G.State:SetMode("Bossing")
         _G.BobonStatus = "Boss: " .. entry.N
         local deadline = tick() + 180
@@ -4978,6 +5868,668 @@ function BossManager:TryFightBoss()
 end
 
 
+
+-- ══════════════════════════════════════════════════════════════════
+--              KATAKURI CONTROLLER v18 — MAX LEVEL ONLY
+-- ══════════════════════════════════════════════════════════════════
+local KatakuriController = {
+    NextTry = 0,
+    LastProgress = nil,
+    LastProgressAt = 0,
+    CraftNextTry = 0,
+}
+
+local CAKE_MOBS = {"Cookie Crafter", "Cake Guard", "Baking Staff", "Head Baker"}
+local COCOA_MOBS = {"Cocoa Warrior", "Chocolate Bar Battler"}
+
+local function FindAnyNamed(names)
+    local root, folder = HRP(), workspace:FindFirstChild("Enemies")
+    if not root or not folder then return nil end
+    local best, bestDist = nil, math.huge
+    for _, mob in ipairs(folder:GetChildren()) do
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local mr = mob:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and mr then
+            for _, wanted in ipairs(names) do
+                if IsEnemyNamed(mob, wanted) then
+                    local d = (root.Position - mr.Position).Magnitude
+                    if d < bestDist then best, bestDist = mob, d end
+                    break
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function FindNpcLike(needles)
+    for _, root in ipairs({workspace:FindFirstChild("NPCs"), workspace:FindFirstChild("Map")}) do
+        if root then
+            for _, obj in ipairs(root:GetDescendants()) do
+                local lower = string.lower(tostring(obj.Name or ""))
+                for _, needle in ipairs(needles) do
+                    if string.find(lower, string.lower(needle), 1, true) then
+                        local model = obj:IsA("Model") and obj or obj:FindFirstAncestorOfClass("Model")
+                        if model then return model end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function TryPrompt(root)
+    if not root then return false end
+    local prompt = root:FindFirstChildWhichIsA("ProximityPrompt", true)
+    if not prompt or type(fireproximityprompt) ~= "function" then return false end
+    return pcall(function() fireproximityprompt(prompt) end)
+end
+
+function KatakuriController:IsEligible()
+    if not _G.Settings.AutoKatakuri or GetSea() ~= 3 then return false end
+    if _G.Settings.KatakuriOnlyMax ~= false and Level() < MAX_LEVEL then return false end
+    return Level() >= MAX_LEVEL
+end
+
+function KatakuriController:GetRemaining(force)
+    local now = tick()
+    if not force and self.LastProgress ~= nil and now - self.LastProgressAt < 2 then
+        return self.LastProgress
+    end
+    local result
+    local ok = pcall(function() result = CommF_:InvokeServer("CakePrinceSpawner", true) end)
+    if not ok then return nil end
+    local n
+    if type(result) == "number" then
+        n = result
+    else
+        for digits in tostring(result or ""):gmatch("%d+") do n = tonumber(digits) or n end
+    end
+    self.LastProgress, self.LastProgressAt = n, now
+    return n
+end
+
+function KatakuriController:StartAction(status, body)
+    if not self:IsEligible() or not _G.State:CanAct() or tick() < self.NextTry then return false end
+    local token = _G.State:ClaimAction("Katakuri")
+    if token == 0 then return false end
+    PrepareClaimedAction("Katakuri")
+    self.NextTry = tick() + (_G.Settings.KatakuriRetry or 20)
+    _G.State:SetMode("Bossing")
+    _G.BobonStatus = status
+    task.spawn(function()
+        local ok, err = xpcall(function() body(token) end, debug.traceback)
+        if not ok then warn("[BobonHub] Module Error: Katakuri: " .. tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner == "Katakuri" then
+            TravelManager:Stop("KatakuriComplete")
+        end
+        FarmPositionController:ReleaseCluster()
+        _G.State:ClearTargets()
+        CombatController:WatchTarget(nil, nil)
+        _G.State:ReleaseAction(token)
+        if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
+    end)
+    return true
+end
+
+function KatakuriController:GatherSameMob(primary)
+    if not _G.Settings.GatherMobs or not primary or not _G.State:IsTargetValid(primary) then return 0 end
+    local primaryRoot = primary:FindFirstChild("HumanoidRootPart")
+    local folder = workspace:FindFirstChild("Enemies")
+    if not primaryRoot or not folder or not TravelManager:IsAtCombatAnchor(primaryRoot) then return 0 end
+    if _G.State.MovementOwner ~= "Katakuri" then return 0 end
+    ExpandSimulationRadius()
+    local moved, index = 0, 0
+    for _, mob in ipairs(folder:GetChildren()) do
+        if mob ~= primary and IsEnemyNamed(mob, primary.Name) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and not root.Anchored then
+                local distance = (root.Position - primaryRoot.Position).Magnitude
+                if distance <= math.min(_G.Settings.GatherMaxDistance or 250, 250)
+                    and ClientOwnsMob(root) == true then
+                    index = index + 1
+                    local angle = index * 1.7
+                    local spacing = math.max(_G.Settings.GatherSpacing or 5, 3)
+                    local destination = primaryRoot.Position + Vector3.new(
+                        math.cos(angle) * spacing, 0, math.sin(angle) * spacing)
+                    if ClientOwnsMob(root) == true then
+                        local ok = pcall(function()
+                            root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                        if ok then moved = moved + 1 end
+                    end
+                end
+            end
+        end
+    end
+    if moved > 0 then _G.BobonDiagnostics.Bring = "KATAKURI-OWNED" end
+    return moved
+end
+
+function KatakuriController:FightModel(model, token, timeout)
+    local deadline = tick() + (timeout or 90)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        if not _G.State:IsTargetValid(model) then return true end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        if not hum or hum.Health <= 0 or not root then return true end
+        PrepareCombatTarget(model)
+        EquipCombatTool()
+        TravelManager:Request(root, "Katakuri", {arrivalThreshold=_G.Settings.FarmArrivalThreshold, combatHover=true})
+        if TravelManager:IsAtCombatAnchor(root) then
+            self:GatherSameMob(model)
+            Attack(model, model.Name)
+        end
+        task.wait(0.12)
+    end
+    return true
+end
+
+function KatakuriController:FarmNamed(names, token, seconds, materialName, wantedCount)
+    local deadline = tick() + (seconds or 60)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        if materialName then
+            InventoryCache.At = 0
+            if MaterialCount(materialName) >= (wantedCount or 1) then return true end
+        end
+        local mob = FindAnyNamed(names)
+        if mob then
+            self:FightModel(mob, token, 30)
+            InventoryCache.At = 0
+            self.LastProgressAt = 0
+        else
+            TravelManager:Request(CFrame.new(-2021, 38, -12029), "Katakuri", {arrivalThreshold=30})
+            task.wait(1)
+        end
+    end
+    return false
+end
+
+function KatakuriController:TryCraftSweetChalice(token)
+    if FindOwnedTool("Sweet Chalice") then return true end
+    if not FindOwnedTool("God's Chalice") or MaterialCount("Conjured Cocoa") < 10 then return false end
+    if tick() < self.CraftNextTry then return false end
+    self.CraftNextTry = tick() + (_G.Settings.KatakuriCraftRetry or 20)
+    _G.BobonStatus = "Katakuri: Crafting Sweet Chalice"
+    local npc = FindNpcLike({"Sweet Crafter", "SweetCrafter"})
+    if npc then
+        local part = npc.PrimaryPart or npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChildWhichIsA("BasePart", true)
+        if part then
+            TravelAndWait("Katakuri", token, part.CFrame, {timeout=60,arrivalThreshold=7,settle=0.8})
+        end
+        TryPrompt(npc)
+        TryClickDetector(npc)
+        task.wait(1)
+    end
+    -- Guarded compatibility fallback: it is attempted only with the exact
+    -- prerequisites, and failure is isolated by pcall.
+    if not FindOwnedTool("Sweet Chalice") then
+        pcall(function() CommF_:InvokeServer("SweetChaliceNpc") end)
+        task.wait(0.8)
+    end
+    InventoryCache.At = 0
+    return FindOwnedTool("Sweet Chalice") ~= nil
+end
+
+function KatakuriController:TryRun()
+    if not self:IsEligible() or not _G.State:CanAct() then return false end
+    local live = FindBoss("Dough King")
+    if live then
+        return self:StartAction("Katakuri: " .. live.Name, function(token)
+            self:FightModel(live, token, math.min(_G.Settings.OptionalWorkTimeout or 150, 300))
+        end)
+    end
+
+    local sweet = FindOwnedTool("Sweet Chalice")
+    local gods = FindOwnedTool("God's Chalice")
+    InventoryCache.At = 0
+    local cocoa = MaterialCount("Conjured Cocoa")
+    if _G.Settings.KatakuriPreferDough and not sweet and gods then
+        if cocoa < 10 then
+            return self:StartAction("Katakuri: Cocoa " .. tostring(cocoa) .. "/10", function(token)
+                self:FarmNamed(COCOA_MOBS, token, math.min(_G.Settings.KatakuriWorkTimeout or 90, 90), "Conjured Cocoa", 10)
+            end)
+        end
+        return self:StartAction("Katakuri: Sweet Chalice", function(token)
+            self:TryCraftSweetChalice(token)
+        end)
+    end
+
+    if not sweet and not gods then
+        local elite = FindAnyNamed({"Diablo", "Deandre", "Urban"})
+        if elite then
+            return self:StartAction("Katakuri: Farming Elite for God's Chalice", function(token)
+                self:FightModel(elite, token, 180)
+            end)
+        end
+    end
+
+    local remaining = self:GetRemaining(false)
+    if remaining ~= nil and remaining <= 0 then
+        if sweet then EquipNamedTool("Sweet Chalice") end
+        if not sweet then return false end
+        return self:StartAction("Katakuri: Summoning Dough King", function(token)
+            pcall(function() CommF_:InvokeServer("CakePrinceSpawner") end)
+            task.wait(1.5)
+            self.LastProgressAt = 0
+            local spawned = FindBoss("Dough King")
+            if spawned then self:FightModel(spawned, token, 300) end
+        end)
+    end
+
+    local label = remaining and tostring(remaining) or "?"
+    return self:StartAction("Katakuri: Cake mobs remaining " .. label, function(token)
+        self:FarmNamed(CAKE_MOBS, token, math.min(_G.Settings.KatakuriWorkTimeout or 90, 90))
+        self.LastProgressAt = 0
+    end)
+end
+
+-- ══════════════════════════════════════════════════════════════════
+--              FRUIT MANAGER v16.7 — RANDOM + SAFE STORE
+--   FruitEnabled existed in config but had no implementation in v16.6.
+--   This manager never owns movement and never interrupts quest/combat.
+--   Sea 2/3 beli gates prevent pointless Cousin spam; storing is best-effort.
+-- ══════════════════════════════════════════════════════════════════
+local FruitManager = {
+    LastStore = 0,
+    Busy = false,
+}
+
+local FruitIdFallback = {
+    ["Rocket"]="Rocket-Rocket", ["Spin"]="Spin-Spin", ["Blade"]="Blade-Blade",
+    ["Chop"]="Chop-Chop", ["Spring"]="Spring-Spring", ["Bomb"]="Bomb-Bomb",
+    ["Smoke"]="Smoke-Smoke", ["Spike"]="Spike-Spike", ["Flame"]="Flame-Flame",
+    ["Falcon"]="Falcon-Falcon", ["Ice"]="Ice-Ice", ["Sand"]="Sand-Sand",
+    ["Dark"]="Dark-Dark", ["Ghost"]="Ghost-Ghost", ["Diamond"]="Diamond-Diamond",
+    ["Light"]="Light-Light", ["Rubber"]="Rubber-Rubber", ["Barrier"]="Barrier-Barrier",
+    ["Creation"]="Creation-Creation", ["Magma"]="Magma-Magma", ["Quake"]="Quake-Quake",
+    ["Buddha"]="Buddha-Buddha", ["Human-Human: Buddha"]="Human-Human: Buddha",
+    ["Love"]="Love-Love", ["Spider"]="Spider-Spider", ["String"]="String-String",
+    ["Sound"]="Sound-Sound", ["Phoenix"]="Phoenix-Phoenix",
+    ["Bird: Phoenix"]="Bird-Bird: Phoenix", ["Portal"]="Portal-Portal",
+    ["Door"]="Door-Door", ["Rumble"]="Rumble-Rumble", ["Pain"]="Pain-Pain",
+    ["Paw"]="Paw-Paw", ["Blizzard"]="Blizzard-Blizzard", ["Gravity"]="Gravity-Gravity",
+    ["Mammoth"]="Mammoth-Mammoth", ["T-Rex"]="T-Rex-T-Rex", ["Dough"]="Dough-Dough",
+    ["Shadow"]="Shadow-Shadow", ["Venom"]="Venom-Venom", ["Control"]="Control-Control",
+    ["Spirit"]="Spirit-Spirit", ["Soul"]="Soul-Soul", ["Gas"]="Gas-Gas",
+    ["Leopard"]="Leopard-Leopard", ["Yeti"]="Yeti-Yeti", ["Kitsune"]="Kitsune-Kitsune",
+    ["Dragon"]="Dragon-Dragon",
+}
+local function FruitOriginalName(tool)
+    if not tool or not tool:IsA("Tool") then return nil end
+    local original
+    pcall(function() original = tool:GetAttribute("OriginalName") end)
+    if type(original) == "string" and original ~= "" then return original end
+    local name = tostring(tool.Name or "")
+    if name == "" then return nil end
+    name = name:gsub("%s+[Ff]ruit$", ""):gsub("%-[Ff]ruit$", "")
+    -- Already canonical IDs should pass through untouched.
+    if name:find("%-") and not FruitIdFallback[name] then return name end
+    return FruitIdFallback[name] or (name .. "-" .. name)
+end
+
+local function LooksLikeFruitTool(tool)
+    if not tool or not tool:IsA("Tool") then return false end
+    local original
+    pcall(function() original = tool:GetAttribute("OriginalName") end)
+    if type(original) == "string" and original ~= "" then return true end
+    local n = string.lower(tostring(tool.Name or ""))
+    return n:find("fruit", 1, true) ~= nil
+end
+
+function FruitManager:StoreBackpackFruits()
+    if not _G.Settings.FruitEnabled then return false end
+    local now = tick()
+    if now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
+    self.LastStore = now
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    if not backpack then return false end
+    local storedAny = false
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if LooksLikeFruitTool(tool) then
+            local fruitName = FruitOriginalName(tool)
+            if fruitName then
+                local ok = pcall(function()
+                    CommF_:InvokeServer("StoreFruit", fruitName, tool)
+                end)
+                storedAny = storedAny or ok
+                task.wait(0.12)
+            end
+        end
+    end
+    return storedAny
+end
+
+function FruitManager:TryRandomFruit()
+    if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or self.Busy or not IsAlive() then return false end
+    local sea = GetSea()
+    if sea < 2 then return false end
+    local now = tick()
+    if now - (_G.State.LastRandomFruit or 0) < (_G.Settings.RandomFruitInterval or 120) then
+        return false
+    end
+    local required = sea >= 3 and (_G.Settings.RandomFruitSea3Cost or 250000)
+        or (_G.Settings.RandomFruitSea2Cost or 100000)
+    if Beli() < required then return false end
+
+    self.Busy = true
+    -- Mark the attempt before invoking so an error cannot turn into a remote-spam loop.
+    _G.State.LastRandomFruit = now
+    local ok, result = pcall(function()
+        return CommF_:InvokeServer("Cousin", "Buy")
+    end)
+    if not ok then
+        DLog("FRUIT", "Random fruit request failed: " .. tostring(result))
+    else
+        DLog("FRUIT", "Random fruit request sent")
+    end
+    task.wait(0.25)
+    pcall(function() self:StoreBackpackFruits() end)
+    self.Busy = false
+    return ok
+end
+
+-- Fruit is a background economy action only: no CFrame, no MovementOwner,
+-- no ActionToken. That keeps it from racing Farm/Boss/Sea progression.
+task.spawn(function()
+    while SessionAlive() and task.wait(2) do
+        if _G.Settings.GetFruits and _G.Settings.FruitEnabled then
+            pcall(function()
+                FruitManager:StoreBackpackFruits()
+                FruitManager:TryRandomFruit()
+            end)
+        end
+    end
+end)
+
+
+
+-- ══════════════════════════════════════════════════════════════════
+--      v18.2 COMPACT-CONFIG MANAGERS — ALL EXPOSED KEYS ARE LIVE
+-- ══════════════════════════════════════════════════════════════════
+
+local function FindLiveNamed(names)
+    local folder = workspace:FindFirstChild("Enemies")
+    if not folder then return nil end
+    for _, mob in ipairs(folder:GetChildren()) do
+        for _, name in ipairs(names) do
+            if IsEnemyNamed(mob, name) then
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                local root = mob:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health > 0 and root then return mob end
+            end
+        end
+    end
+end
+
+local RainbowHakiController = { NextTry = 0 }
+local RAINBOW_BOSSES = {"Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate"}
+function RainbowHakiController:TryRun()
+    if not _G.Settings.RainbowHaki or GetSea() ~= 3 or Level() < MAX_LEVEL
+        or not _G.State:CanAct() or tick() < self.NextTry then return false end
+    self.NextTry = tick() + 8
+    pcall(function() CommF_:InvokeServer("HornedMan", "Bet") end)
+    local qtext = string.lower(tostring(GetQuestText() or ""))
+    local wanted
+    for _, name in ipairs(RAINBOW_BOSSES) do
+        if qtext:find(string.lower(name),1,true) then wanted = name; break end
+    end
+    local boss = wanted and FindBoss(wanted) or FindLiveNamed(RAINBOW_BOSSES)
+    if not boss then return false end
+    local token = _G.State:ClaimAction("RainbowHaki")
+    if token == 0 then return false end
+    PrepareClaimedAction("RainbowHaki")
+    task.spawn(function()
+        local ok, err = xpcall(function()
+            _G.State:SetMode("Bossing")
+            _G.BobonStatus = "Rainbow Haki: " .. boss.Name
+            local deadline = tick() + 240
+            while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline and _G.State:IsTargetValid(boss) do
+                local root = boss:FindFirstChild("HumanoidRootPart")
+                if not root then break end
+                TravelManager:Request(root, "RainbowHaki", {arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                if TravelManager:IsAtCombatAnchor(root) then EquipCombatTool(); Attack(boss, boss.Name) end
+                task.wait(0.12)
+            end
+            pcall(function() CommF_:InvokeServer("HornedMan", "Bet") end)
+        end, debug.traceback)
+        if not ok then warn("[BobonHub] Module Error: RainbowHaki: " .. tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner == "RainbowHaki" then TravelManager:Stop("RainbowHakiComplete") end
+        _G.State:ReleaseAction(token)
+        if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
+    end)
+    return true
+end
+
+local IndraController = { NextTry = 0 }
+local INDRA_COLORS = {
+    {"Winter Sky", CFrame.new(-5420.16602,1084.9657,-2666.8208)},
+    {"Pure Red",   CFrame.new(-5414.41357,309.865753,-2212.45776)},
+    {"Snow White", CFrame.new(-4971.47559,331.565765,-3720.02954)},
+}
+function IndraController:TryRun()
+    if not _G.Settings.AutoSpawnRipIndra or GetSea() ~= 3 or Level() < MAX_LEVEL
+        or not _G.State:CanAct() or tick() < self.NextTry then return false end
+    local live = FindBoss("rip_indra") or FindBoss("rip_indra True Form")
+    if live then
+        local token = _G.State:ClaimAction("Indra")
+        if token == 0 then return false end
+        PrepareClaimedAction("Indra")
+        task.spawn(function()
+            local ok, err = xpcall(function()
+                _G.State:SetMode("Bossing")
+                local deadline=tick()+300
+                while _G.State:IsActionValid(token) and IsAlive() and tick()<deadline and _G.State:IsTargetValid(live) do
+                    local root=live:FindFirstChild("HumanoidRootPart"); if not root then break end
+                    TravelManager:Request(root,"Indra",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                    if TravelManager:IsAtCombatAnchor(root) then EquipCombatTool(); Attack(live,"rip_indra") end
+                    task.wait(0.12)
+                end
+            end, debug.traceback)
+            if not ok then warn("[BobonHub] Module Error: IndraFight: "..tostring(err)) end
+            if _G.State.IsTraveling and _G.State.MovementOwner == "Indra" then TravelManager:Stop("IndraComplete") end
+            _G.State:ReleaseAction(token)
+            if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
+        end)
+        return true
+    end
+    if not FindOwnedTool("God's Chalice") then return false end
+    self.NextTry = tick() + 60
+    local token = _G.State:ClaimAction("Indra")
+    if token == 0 then return false end
+    PrepareClaimedAction("Indra")
+    task.spawn(function()
+        local ok, err = xpcall(function()
+            _G.State:SetMode("Bossing")
+            _G.BobonStatus = "rip_indra: Activating colors"
+            for _, row in ipairs(INDRA_COLORS) do
+                if not _G.State:IsActionValid(token) or not IsAlive() then return end
+                pcall(function() CommF_:InvokeServer("activateColor", row[1]) end)
+                TravelAndWait("Indra", token, row[2], {timeout=80,arrivalThreshold=8,settle=0.4})
+            end
+            if not EquipNamedTool("God's Chalice") then return end
+            _G.BobonStatus = "rip_indra: Placing God's Chalice"
+            TravelAndWait("Indra", token, CFrame.new(-5560.27,313.92,-2663.90), {timeout=80,arrivalThreshold=6,settle=1})
+            task.wait(1.5)
+            local spawned = FindBoss("rip_indra") or FindBoss("rip_indra True Form")
+            if spawned then
+                local deadline=tick()+300
+                while _G.State:IsActionValid(token) and IsAlive() and tick()<deadline and _G.State:IsTargetValid(spawned) do
+                    local root=spawned:FindFirstChild("HumanoidRootPart"); if not root then break end
+                    TravelManager:Request(root,"Indra",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
+                    if TravelManager:IsAtCombatAnchor(root) then EquipCombatTool(); Attack(spawned,"rip_indra") end
+                    task.wait(0.12)
+                end
+            end
+        end, debug.traceback)
+        if not ok then warn("[BobonHub] Module Error: Indra: "..tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner == "Indra" then TravelManager:Stop("IndraComplete") end
+        _G.State:ReleaseAction(token)
+        if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
+    end)
+    return true
+end
+
+local FruitSniper = { LastTry = 0 }
+function FruitSniper:Tick()
+    local wanted = tostring(_G.Settings.SnipeFruit or "")
+    if wanted == "" or tick() - self.LastTry < 5 or not IsAlive() then return false end
+    self.LastTry = tick()
+    pcall(function() CommF_:InvokeServer("GetFruits") end)
+    local ok = pcall(function() CommF_:InvokeServer("PurchaseRawFruit", wanted, false) end)
+    if ok then pcall(function() FruitManager:StoreBackpackFruits() end) end
+    return ok
+end
+task.spawn(function() while SessionAlive() and task.wait(2) do pcall(function() FruitSniper:Tick() end) end end)
+
+local function ApplyFPSBoost()
+    if not _G.Settings.FPSBoostEnabled then return end
+    pcall(function() if type(setfpscap)=="function" then setfpscap(_G.Settings.FPSCap or 30) end end)
+    pcall(function() RunService:Set3dRenderingEnabled(not _G.Settings.FPSDisable3DRender) end)
+    if _G.Settings.FPSHideGameUI then
+        local pg = LP:FindFirstChildOfClass("PlayerGui")
+        if pg then for _, gui in ipairs(pg:GetChildren()) do if gui:IsA("ScreenGui") then pcall(function() gui.Enabled=false end) end end end
+    end
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Smoke") or obj:IsA("Fire") or obj:IsA("Sparkles") then
+            pcall(function() obj.Enabled=false end)
+        end
+    end
+end
+task.defer(ApplyFPSBoost)
+
+local HopManager = { LastHop = 0, Visited = {} }
+local function FindDroppedFruit()
+    for _, obj in ipairs(workspace:GetChildren()) do
+        if obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) then return obj end
+    end
+end
+local function CollectDroppedFruit(tool)
+    if not tool or not tool.Parent then return false end
+    local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+    local me = HRP()
+    if handle and me and type(firetouchinterest) == "function" then
+        local ok = pcall(function()
+            firetouchinterest(me, handle, 0)
+            firetouchinterest(me, handle, 1)
+        end)
+        if ok then return true end
+    end
+    return false
+end
+local function MiragePresent()
+    local map=workspace:FindFirstChild("Map")
+    if not map then return false end
+    for _, obj in ipairs(map:GetDescendants()) do
+        local n=string.lower(obj.Name)
+        if n:find("mirage",1,true) or n:find("mysticisland",1,true) or n:find("mystic island",1,true) then return true end
+    end
+    return false
+end
+function HopManager:FindServer()
+    local cursor=""
+    for _=1,4 do
+        local url=("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s"):format(game.PlaceId,
+            cursor~="" and ("&cursor="..HttpService:UrlEncode(cursor)) or "")
+        local ok, body=pcall(function() return game:HttpGet(url) end)
+        if not ok then return nil end
+        local okj, data=pcall(function() return HttpService:JSONDecode(body) end)
+        if not okj or type(data)~="table" then return nil end
+        for _, row in ipairs(data.data or {}) do
+            local id=tostring(row.id or "")
+            if id~="" and id~=game.JobId and not self.Visited[id]
+                and tonumber(row.playing or 0) < tonumber(row.maxPlayers or 12) then
+                self.Visited[id]=true
+                return id
+            end
+        end
+        cursor=tostring(data.nextPageCursor or "")
+        if cursor=="" then break end
+    end
+end
+function HopManager:Request(reason)
+    if tick()-self.LastHop < (_G.Settings.HopRequestCooldown or 25) then return false end
+    self.LastHop=tick()
+    local id=self:FindServer(); if not id then return false end
+    _G.BobonStatus="Server Hop: "..tostring(reason)
+    _G.State:SetMode("ServerHop")
+    pcall(function() TravelManager:Stop("ServerHop") end)
+    local ok=pcall(function() TeleportSvc:TeleportToPlaceInstance(game.PlaceId,id,LP) end)
+    if not ok then _G.State:SetMode("Idle") end
+    return ok
+end
+function HopManager:ShouldHop()
+    if _G.Settings.HopPlayerNear then
+        local me=HRP()
+        if me then
+            for _, p in ipairs(Players:GetPlayers()) do
+                local pr=p~=LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+                if pr and (pr.Position-me.Position).Magnitude <= (_G.Settings.HopPlayerNearRadius or 250) then return "player-near" end
+            end
+        end
+    end
+    if not _G.Settings.HopEnabled then return nil end
+    local missing = {}
+    local requested = 0
+
+    if _G.Settings.HopFindFruit then
+        requested = requested + 1
+        local fruit = FindDroppedFruit()
+        if fruit then CollectDroppedFruit(fruit); return nil end
+        missing[#missing+1] = "fruit"
+    end
+    if GetSea()==3 and _G.Settings.HopElite then
+        requested = requested + 1
+        if FindLiveNamed({"Diablo","Deandre","Urban"}) then return nil end
+        missing[#missing+1] = "elite"
+    end
+    if GetSea()==2 and _G.Settings.HopFindDarkbeard then
+        requested = requested + 1
+        if FindBoss("Darkbeard") then return nil end
+        missing[#missing+1] = "darkbeard"
+    end
+    if GetSea()==3 and _G.Settings.HopFindMirage then
+        requested = requested + 1
+        if MiragePresent() then return nil end
+        missing[#missing+1] = "mirage"
+    end
+    if GetSea()==3 and _G.Settings.HopFindMirrorFractal and not InventoryHas("Mirror Fractal") then
+        requested = requested + 1
+        if FindBoss("Dough King") then return nil end
+        missing[#missing+1] = "mirror"
+    end
+    if GetSea()==3 and _G.Settings.HopFindSoulReaper then
+        requested = requested + 1
+        if FindBoss("Soul Reaper") then return nil end
+        missing[#missing+1] = "reaper"
+    end
+    if GetSea()==3 and _G.Settings.HopFindTushita and not InventoryHas("Tushita") then
+        requested = requested + 1
+        if FindOwnedTool("Holy Torch") or FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
+        missing[#missing+1] = "tushita"
+    end
+    if GetSea()==3 and _G.Settings.HopFindValkyrieHelm and not InventoryHas("Valkyrie Helm") then
+        requested = requested + 1
+        if FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
+        missing[#missing+1] = "valkyrie"
+    end
+    if requested > 0 and #missing == requested then return "find:" .. table.concat(missing, ",") end
+end
+task.spawn(function()
+    while SessionAlive() and task.wait(_G.Settings.HopCheckInterval or 8) do
+        if _G.State.Mode~="Dead" and _G.State.Mode~="Respawning" and _G.State.Mode~="ServerHop" then
+            local reason; pcall(function() reason=HopManager:ShouldHop() end)
+            if reason then pcall(function() HopManager:Request(reason) end) end
+        end
+    end
+end)
+
+if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function() LP:Kick("BobonHub Shutdown=true") end) end) end
+
 -- ══════════════════════════════════════════════════════════════════
 --    MAIN CONTROLLER v16.2 FIXED — SINGLE LOOP
 --
@@ -5018,7 +6570,7 @@ task.spawn(function()
             -- Team phải được xác nhận trước mọi remote/item/boss; nếu chưa có
             -- team thì không được bắt đầu một travel dang dở.
             if not TeamController:AutoSelectTeam() then
-                _G.BobonStatus = "Team: Confirming Pirates"
+                _G.BobonStatus = "Team: Confirming " .. tostring(_G.Settings.Team or "Pirates")
                 return
             end
 
@@ -5028,7 +6580,7 @@ task.spawn(function()
             -- boss routines cannot pull the player away mid-farm.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
-            if GetSea() == 3 and lv >= 2600
+            if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
                 and not SubmergedAccessController:IsInside() then
                 local canAttemptEntrance = SubmergedAccessController.Confirmed
                     or questState == false
@@ -5064,8 +6616,27 @@ task.spawn(function()
                     and _G.State.MovementOwner == "Farm" then
                     TravelManager:Stop("NoQuest")
                 end
+                -- At max level there is no next quest to create an item window.
+                -- Continue end-game progression instead of becoming permanently Idle.
+                local okEnd, endResult = pcall(function()
+                    return ItemProgression:RunChecks(true, true)
+                end)
+                if okEnd and endResult then return end
+                local okKata, kataResult = pcall(function()
+                    return KatakuriController:TryRun()
+                end)
+                if not okKata then
+                    warn("[BobonHub] Module Error: KatakuriController: " .. tostring(kataResult))
+                elseif kataResult then
+                    return
+                end
+                local okBossEnd, bossEnd = pcall(function()
+                    return BossManager:TryFightBoss()
+                end)
+                if okBossEnd and bossEnd then return end
+                pcall(function() FightingStyleController:Tick() end)
                 _G.State:SetMode("Idle")
-                _G.BobonStatus = "Max Level / No Quest"
+                _G.BobonStatus = "Max Level: Progression waiting"
                 return
             end
 
@@ -5160,6 +6731,10 @@ task.spawn(function()
                 -- true even though there is no active quest.
                 local safeItemWindow = questState == false
                 if safeItemWindow then
+                    local okIndra, indraResult = pcall(function() return IndraController:TryRun() end)
+                    if okIndra and indraResult then return end
+                    local okRainbow, rainbowResult = pcall(function() return RainbowHakiController:TryRun() end)
+                    if okRainbow and rainbowResult then return end
                     local okItems, itemResult = pcall(function()
                         return ItemProgression:RunChecks(true, true)
                     end)
@@ -5496,7 +7071,12 @@ local function HookMob(mob)
         h:SetAttribute("BHooked", true)
         h.Died:Connect(function()
             if not SessionAlive() then return end
-            _G.State.KillCount = _G.State.KillCount + 1
+            -- Count only a mob this kaitun was actively tracking. The old hook
+            -- incremented for every NPC death in workspace.Enemies, including
+            -- kills made by other players elsewhere in the server.
+            if _G.State.FarmTarget == mob or _G.State.CurrentTarget == mob then
+                _G.State.KillCount = _G.State.KillCount + 1
+            end
         end)
     end
 end
@@ -5535,16 +7115,17 @@ _G.BobonUnload = function()
     _G.BobonSessionID = SessionID + 1
     pcall(function() TravelManager:Stop("Reexecute") end)
     pcall(function() CombatController:Cleanup() end)
+    pcall(function() if FruitManager then FruitManager.Busy = false end end)
     pcall(function() FarmPositionController:ReleaseCluster() end)
     pcall(function() BindPlayerDamage(nil, nil) end)
     pcall(function() if SG and SG.Parent then SG:Destroy() end end)
 end
 
 
-print("[BobonHub v16.6 LIVE] Full Script Loaded Successfully!")
-print("[BobonHub v16.6 LIVE] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v16.6 LIVE] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
-print("[BobonHub v16.6 LIVE] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | Responsive Glass HUD")
-print("[BobonHub v16.6 LIVE] Progression: Saber | Pole | Sea2 | Bartilo | Sea3")
-print("[BobonHub v16.6 LIVE] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
-print("[BobonHub v16.6 LIVE] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v18.2 CONFIG COMPLETE] Full Script Loaded Successfully!")
+print("[BobonHub v18.2 CONFIG COMPLETE] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v18.2 CONFIG COMPLETE] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
+print("[BobonHub v18.2 CONFIG COMPLETE] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
+print("[BobonHub v18.2 CONFIG COMPLETE] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
+print("[BobonHub v18.2 CONFIG COMPLETE] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
+print("[BobonHub v18.2 CONFIG COMPLETE] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
