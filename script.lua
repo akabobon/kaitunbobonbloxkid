@@ -1,7 +1,14 @@
 -- =================================================================
---         BOBON HUB v21.24 IMMEDIATE PROGRESSION PRIORITY | ALL-MOB PILE | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.24.1 STARTUP SAFE PROGRESSION | ALL-MOB PILE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24
+--         Base: v21.23 ALL-MOB PERSISTENT PILE | Version: v21.24.1
+--
+--  v21.24.1 STARTUP HOTFIX:
+--  [BOOT-1] Removed the new local function binding from the Skull helper scope.
+--  [BOOT-2] Removed okPriority/priorityResult locals from the giant MainController.
+--           Priority pcall now lives in ItemProgression:RunImmediateChecksSafe().
+--  [BOOT-3] Progression behavior from v21.24 is preserved; this patch only reduces
+--           Luau compile/register pressure so re-execute can start again.
 --
 --  v21.24 IMMEDIATE PROGRESSION / QUEST PRIORITY FIX:
 --  [PQ-1] Eligible permanent progression now PREEMPTS normal level farming immediately.
@@ -643,7 +650,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.24 IMMEDIATE PROGRESSION PRIORITY + ALL-MOB PILE + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.24.1 STARTUP SAFE PROGRESSION + ALL-MOB PILE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1594,7 +1601,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.24", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.24.1", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -9442,7 +9449,7 @@ local function RunSkullSwamp(token)
     FarmPositionController:ReleaseCluster()
 end
 
-local function IsRealFullMoonNight()
+function ItemProgression:IsRealFullMoonNight()
     local lighting = game:GetService("Lighting")
     local sky = lighting:FindFirstChild("Sky") or lighting:FindFirstChild("FantasySky")
     local texture = ""
@@ -9462,7 +9469,7 @@ function ItemProgression:IsSoulGuitarImmediateReady()
     local npcs = workspace:FindFirstChild("NPCs")
     if npcs and npcs:FindFirstChild("Skeleton Machine") then return true end
     if GuitarProgress() then return true end
-    return IsRealFullMoonNight()
+    return self:IsRealFullMoonNight()
 end
 
 function ItemProgression:CheckSoulGuitar()
@@ -9488,7 +9495,7 @@ function ItemProgression:CheckSoulGuitar()
 
     local progress=GuitarProgress()
     if not progress then
-        if not IsRealFullMoonNight() then
+        if not self:IsRealFullMoonNight() then
             self.NextOptional.SoulGuitar = tick() + 5
             return false
         end
@@ -9691,6 +9698,18 @@ function ItemProgression:RunImmediateChecks()
     end
     return false
 end
+-- v21.24.1: keep pcall locals OUTSIDE the giant MainController function.
+-- The source has previously hit Luau per-function/local-register limits; adding
+-- even a small local pair inside MainController can make the whole chunk fail to compile.
+function ItemProgression:RunImmediateChecksSafe()
+    local ok, result = pcall(function() return self:RunImmediateChecks() end)
+    if not ok then
+        warn("[BobonHub] Module Error: ProgressionPriority: " .. tostring(result))
+        return false
+    end
+    return result == true
+end
+
 -- ══════════════════════════════════════════════════════════════════
 --              BOSSMANAGER v16.4 — DATA-DRIVEN
 --   Boss không dùng tọa độ cứng để tránh bay ra biển khi map thay đổi.
@@ -11418,12 +11437,7 @@ task.spawn(function()
             -- Bartilo 850, Sea gates, ready permanent items, etc.) immediately
             -- hands movement to its own ActionToken instead of waiting for the
             -- current level quest to finish.
-            local okPriority, priorityResult = pcall(function()
-                return ItemProgression:RunImmediateChecks()
-            end)
-            if not okPriority then
-                warn("[BobonHub] Module Error: ProgressionPriority: " .. tostring(priorityResult))
-            elseif priorityResult then
+            if ItemProgression:RunImmediateChecksSafe() then
                 return
             end
 
@@ -12140,10 +12154,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.24] Full Script Loaded Successfully!")
-print("[BobonHub v21.24] Architecture: Progression Priority | Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.24] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.24] Modules: Immediate Progression | QuestFarm | One-Pile Cluster | Combat | Factory | Material Prep | CDK/Skull | Fire HUD")
-print("[BobonHub v21.24] Progression: Saber@200 PREEMPT | Sea2/Bartilo@850/Sea3 | RaceV2 | Factory | Pole/Kabucha/Rengoku/Midnight/Acidum | Yama/Tushita/TTK/CDK | Skull Guitar")
-print("[BobonHub v21.24] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.24] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.24.1] Full Script Loaded Successfully!")
+print("[BobonHub v21.24.1] Architecture: Progression Priority | Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.24.1] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.24.1] Modules: Immediate Progression | QuestFarm | One-Pile Cluster | Combat | Factory | Material Prep | CDK/Skull | Fire HUD")
+print("[BobonHub v21.24.1] Progression: Saber@200 PREEMPT | Sea2/Bartilo@850/Sea3 | RaceV2 | Factory | Pole/Kabucha/Rengoku/Midnight/Acidum | Yama/Tushita/TTK/CDK | Skull Guitar")
+print("[BobonHub v21.24.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.24.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
