@@ -1,5 +1,5 @@
 -- =================================================================
---         BOBON HUB v18.7 FULL-BATCH CLUSTER + GLASS NEON HUD V2 | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.7 FULL-BATCH CLUSTER + GLASS NEON HUD V2.1 SAFE | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
 --         Base: v18.4 DOUGH GATHER FIXED | Version: v18.7 FULL-BATCH CLUSTER + TEDDY SKIP
 --
@@ -261,7 +261,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.7 GLASS NEON HUD V2] Loading...")
+print("[BobonHub v18.7 GLASS NEON HUD V2.1 SAFE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -281,7 +281,7 @@ local CoreGui      = game:GetService("CoreGui")
 local LP      = Players.LocalPlayer
 local Remotes = RS:WaitForChild("Remotes", 10)
 local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v18.7 GLASS NEON HUD V2] CommF_ not found!") return end
+if not CommF_ then warn("[BobonHub v18.7 GLASS NEON HUD V2.1 SAFE] CommF_ not found!") return end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -755,621 +755,410 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---             UI — GLASS NEON HUD V2
---   Compact frosted card • neon shimmer • animated status/level/kills
---   UI-only upgrade: no farm/combat/cluster controller behavior changed.
+--             UI — GLASS NEON HUD V2.1 SAFE
+--   Self-contained + protected: UI failure must NEVER stop kaitun core.
 -- ══════════════════════════════════════════════════════════════════
-if CoreGui:FindFirstChild("BobonHubUI") then CoreGui.BobonHubUI:Destroy() end
-
-local UIS = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
-
--- Clean visual effects left by a previous execute.
-for _, scope in ipairs({ CoreGui, workspace.CurrentCamera, Lighting }) do
-    pcall(function()
-        local old = scope and scope:FindFirstChild("BobonHubBlur")
-        if old then old:Destroy() end
-    end)
-end
-
-local SG = Instance.new("ScreenGui")
-SG.Name = "BobonHubUI"
-SG.Parent = CoreGui
-SG.ResetOnSpawn = false
-SG.DisplayOrder = 10000
-SG.IgnoreGuiInset = true
-SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-
-_G.Settings.MenuBlur = _G.Settings.MenuBlur or 8
-
-local Blur = Instance.new("BlurEffect")
-Blur.Name = "BobonHubBlur"
-Blur.Size = 0
-Blur.Enabled = true
-Blur.Parent = workspace.CurrentCamera or Lighting
-
-workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if not SessionAlive() then return end
-    pcall(function()
-        local cam = workspace.CurrentCamera
-        if Blur and cam then Blur.Parent = cam end
-    end)
-end)
-
-local ACCENT_A = Color3.fromRGB(72, 223, 255)
-local ACCENT_B = Color3.fromRGB(139, 92, 246)
-local ACCENT_C = Color3.fromRGB(55, 255, 180)
-local PANEL_TOP = Color3.fromRGB(16, 24, 40)
-local PANEL_BOTTOM = Color3.fromRGB(7, 12, 24)
-local TEXT_MAIN = Color3.fromRGB(244, 249, 255)
-local TEXT_MUTED = Color3.fromRGB(145, 166, 194)
-local CARD_BG = Color3.fromRGB(17, 29, 48)
-
-local function AddCorner(obj, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, radius or 12)
-    c.Parent = obj
-    return c
-end
-
-local function AddStroke(obj, color, transparency, thickness)
-    local s = Instance.new("UIStroke")
-    s.Color = color or ACCENT_A
-    s.Transparency = transparency == nil and 0.55 or transparency
-    s.Thickness = thickness or 1
-    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    s.Parent = obj
-    return s
-end
-
-local function AddGradient(obj, c1, c2, rotation)
-    local g = Instance.new("UIGradient")
-    g.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, c1),
-        ColorSequenceKeypoint.new(1, c2),
-    })
-    g.Rotation = rotation or 0
-    g.Parent = obj
-    return g
-end
-
-local FadeTextObjects = {}
-local function MkText(parent, text, size, color, bold, align)
-    local lb = Instance.new("TextLabel")
-    lb.Parent = parent
-    lb.BackgroundTransparency = 1
-    lb.Text = text or ""
-    lb.TextColor3 = color or TEXT_MAIN
-    lb.TextSize = size or 13
-    lb.Font = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
-    lb.TextXAlignment = align or Enum.TextXAlignment.Left
-    lb.TextYAlignment = Enum.TextYAlignment.Center
-    lb.TextTruncate = Enum.TextTruncate.AtEnd
-    lb.TextTransparency = 0
-    lb.ZIndex = 8
-    table.insert(FadeTextObjects, lb)
-    return lb
-end
-
-local function MkCard(parent, position, size)
-    local f = Instance.new("Frame")
-    f.Parent = parent
-    f.Position = position
-    f.Size = size
-    f.BackgroundColor3 = CARD_BG
-    f.BackgroundTransparency = 0.34
-    f.BorderSizePixel = 0
-    f.ZIndex = 5
-    AddCorner(f, 13)
-    AddStroke(f, Color3.fromRGB(110, 175, 220), 0.78, 1)
-    local shade = AddGradient(f, Color3.fromRGB(25, 45, 68), Color3.fromRGB(11, 18, 34), 90)
-    shade.Transparency = NumberSequence.new({
-        NumberSequenceKeypoint.new(0, 0.08),
-        NumberSequenceKeypoint.new(1, 0.34),
-    })
-    return f
-end
-
--- Main floating glass panel.
-local Panel = Instance.new("Frame")
-Panel.Name = "GlassNeonV2"
-Panel.Parent = SG
-Panel.AnchorPoint = Vector2.new(0, 0.5)
-Panel.Position = UDim2.new(0, 24, 0.5, 0)
-Panel.Size = UDim2.new(0, 478, 0, 370)
-Panel.BackgroundColor3 = PANEL_TOP
-Panel.BackgroundTransparency = 0.12
-Panel.BorderSizePixel = 0
-Panel.ClipsDescendants = true
-Panel.ZIndex = 3
-AddCorner(Panel, 20)
-
-local PanelGradient = AddGradient(Panel, PANEL_TOP, PANEL_BOTTOM, 115)
-PanelGradient.Transparency = NumberSequence.new({
-    NumberSequenceKeypoint.new(0, 0.04),
-    NumberSequenceKeypoint.new(0.55, 0.18),
-    NumberSequenceKeypoint.new(1, 0.02),
-})
-
-local PanelStroke = AddStroke(Panel, ACCENT_A, 0.24, 1.4)
-local PanelScale = Instance.new("UIScale")
-PanelScale.Scale = 0.94
-PanelScale.Parent = Panel
-
-local SizeConstraint = Instance.new("UISizeConstraint")
-SizeConstraint.MinSize = Vector2.new(408, 316)
-SizeConstraint.MaxSize = Vector2.new(478, 370)
-SizeConstraint.Parent = Panel
-
--- Neon top line + animated shimmer.
-local NeonLine = Instance.new("Frame")
-NeonLine.Parent = Panel
-NeonLine.Position = UDim2.new(0, 18, 0, 0)
-NeonLine.Size = UDim2.new(1, -36, 0, 2)
-NeonLine.BackgroundColor3 = Color3.new(1,1,1)
-NeonLine.BorderSizePixel = 0
-NeonLine.ZIndex = 10
-AddCorner(NeonLine, 2)
-local NeonGradient = Instance.new("UIGradient")
-NeonGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, ACCENT_A),
-    ColorSequenceKeypoint.new(0.5, ACCENT_B),
-    ColorSequenceKeypoint.new(1, ACCENT_C),
-})
-NeonGradient.Offset = Vector2.new(-1, 0)
-NeonGradient.Parent = NeonLine
-
--- Soft interior glows: UI-only, no particle emitters.
-local GlowA = Instance.new("Frame")
-GlowA.Parent = Panel
-GlowA.AnchorPoint = Vector2.new(0.5,0.5)
-GlowA.Position = UDim2.new(0, 55, 0, 48)
-GlowA.Size = UDim2.new(0, 150, 0, 150)
-GlowA.BackgroundColor3 = ACCENT_A
-GlowA.BackgroundTransparency = 0.91
-GlowA.BorderSizePixel = 0
-GlowA.ZIndex = 4
-AddCorner(GlowA, 75)
-
-local GlowB = Instance.new("Frame")
-GlowB.Parent = Panel
-GlowB.AnchorPoint = Vector2.new(0.5,0.5)
-GlowB.Position = UDim2.new(1, -28, 1, -36)
-GlowB.Size = UDim2.new(0, 180, 0, 180)
-GlowB.BackgroundColor3 = ACCENT_B
-GlowB.BackgroundTransparency = 0.94
-GlowB.BorderSizePixel = 0
-GlowB.ZIndex = 4
-AddCorner(GlowB, 90)
-
--- Header / drag handle.
-local Header = Instance.new("Frame")
-Header.Parent = Panel
-Header.Position = UDim2.new(0, 18, 0, 14)
-Header.Size = UDim2.new(1, -36, 0, 48)
-Header.BackgroundTransparency = 1
-Header.ZIndex = 8
-Header.Active = true
-
-local Brand = MkText(Header, "◈  BOBON HUB", 20, TEXT_MAIN, true)
-Brand.Position = UDim2.new(0, 0, 0, 0)
-Brand.Size = UDim2.new(0.55, 0, 0, 25)
-
-local Sub = MkText(Header, "GLASS NEON  •  KAITUN", 10, ACCENT_A, true)
-Sub.Position = UDim2.new(0, 27, 0, 24)
-Sub.Size = UDim2.new(0.58, 0, 0, 18)
-
-local OnlineDot = Instance.new("Frame")
-OnlineDot.Parent = Header
-OnlineDot.AnchorPoint = Vector2.new(1,0.5)
-OnlineDot.Position = UDim2.new(1, -63, 0, 16)
-OnlineDot.Size = UDim2.new(0, 8, 0, 8)
-OnlineDot.BackgroundColor3 = ACCENT_C
-OnlineDot.BackgroundTransparency = 0
-OnlineDot.BorderSizePixel = 0
-OnlineDot.ZIndex = 10
-AddCorner(OnlineDot, 8)
-local OnlineStroke = AddStroke(OnlineDot, ACCENT_C, 0.2, 2)
-
-local OnlineL = MkText(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
-OnlineL.AnchorPoint = Vector2.new(1,0)
-OnlineL.Position = UDim2.new(1, 0, 0, 6)
-OnlineL.Size = UDim2.new(0, 55, 0, 20)
-
-local VersionL = MkText(Header, "v18.7", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
-VersionL.AnchorPoint = Vector2.new(1,0)
-VersionL.Position = UDim2.new(1, 0, 0, 27)
-VersionL.Size = UDim2.new(0, 55, 0, 16)
-
--- Level / Sea cards.
-local LevelCard = MkCard(Panel, UDim2.new(0, 18, 0, 70), UDim2.new(0.50, -22, 0, 58))
-local LevelCaption = MkText(LevelCard, "LEVEL", 9, TEXT_MUTED, true)
-LevelCaption.Position = UDim2.new(0, 14, 0, 8)
-LevelCaption.Size = UDim2.new(0, 65, 0, 15)
-local LevelValue = MkText(LevelCard, "1", 23, TEXT_MAIN, true)
-LevelValue.Position = UDim2.new(0, 14, 0, 21)
-LevelValue.Size = UDim2.new(1, -28, 0, 30)
-local LevelScale = Instance.new("UIScale")
-LevelScale.Parent = LevelValue
-
-local SeaCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 70), UDim2.new(0.50, -22, 0, 58))
-local SeaCaption = MkText(SeaCard, "WORLD", 9, TEXT_MUTED, true)
-SeaCaption.Position = UDim2.new(0, 14, 0, 8)
-SeaCaption.Size = UDim2.new(0, 65, 0, 15)
-local SeaValue = MkText(SeaCard, "SEA 1", 20, ACCENT_A, true)
-SeaValue.Position = UDim2.new(0, 14, 0, 23)
-SeaValue.Size = UDim2.new(0.55, -14, 0, 26)
-local TeamL = MkText(SeaCard, "PIRATES ✓", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
-TeamL.Position = UDim2.new(0.52, 0, 0, 24)
-TeamL.Size = UDim2.new(0.48, -14, 0, 24)
-
--- Main status glass.
-local StatusCard = MkCard(Panel, UDim2.new(0, 18, 0, 136), UDim2.new(1, -36, 0, 78))
-StatusCard.BackgroundTransparency = 0.25
-local StatusDot = Instance.new("Frame")
-StatusDot.Parent = StatusCard
-StatusDot.Position = UDim2.new(0, 14, 0, 17)
-StatusDot.Size = UDim2.new(0, 9, 0, 9)
-StatusDot.BackgroundColor3 = ACCENT_C
-StatusDot.BorderSizePixel = 0
-StatusDot.ZIndex = 9
-AddCorner(StatusDot, 9)
-local StatusDotStroke = AddStroke(StatusDot, ACCENT_C, 0.36, 2)
-
-local ModeL = MkText(StatusCard, "FARMING", 10, ACCENT_C, true)
-ModeL.Position = UDim2.new(0, 31, 0, 10)
-ModeL.Size = UDim2.new(0.48, 0, 0, 20)
-
-local FlagL = MkText(StatusCard, "READY", 9, ACCENT_A, true, Enum.TextXAlignment.Right)
-FlagL.Position = UDim2.new(0.55, 0, 0, 10)
-FlagL.Size = UDim2.new(0.45, -14, 0, 20)
-
-local StatusL = MkText(StatusCard, "Initializing...", 16, TEXT_MAIN, true)
-StatusL.Position = UDim2.new(0, 14, 0, 31)
-StatusL.Size = UDim2.new(1, -28, 0, 27)
-local StatusBasePos = StatusL.Position
-
-local ClusterL = MkText(StatusCard, "Cluster: waiting", 10, TEXT_MUTED, false)
-ClusterL.Position = UDim2.new(0, 14, 1, -20)
-ClusterL.Size = UDim2.new(1, -28, 0, 15)
-
--- Currency row.
-local BeliCard = MkCard(Panel, UDim2.new(0, 18, 0, 222), UDim2.new(0.50, -22, 0, 54))
-local BeliCap = MkText(BeliCard, "BELI", 9, TEXT_MUTED, true)
-BeliCap.Position = UDim2.new(0, 12, 0, 7); BeliCap.Size = UDim2.new(1,-24,0,13)
-local BeliL = MkText(BeliCard, "$ 0", 16, Color3.fromRGB(93,255,151), true)
-BeliL.Position = UDim2.new(0, 12, 0, 21); BeliL.Size = UDim2.new(1,-24,0,25)
-
-local FragCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 222), UDim2.new(0.50, -22, 0, 54))
-local FragCap = MkText(FragCard, "FRAGMENTS", 9, TEXT_MUTED, true)
-FragCap.Position = UDim2.new(0, 12, 0, 7); FragCap.Size = UDim2.new(1,-24,0,13)
-local FragL = MkText(FragCard, "◈ 0", 16, Color3.fromRGB(194,135,255), true)
-FragL.Position = UDim2.new(0, 12, 0, 21); FragL.Size = UDim2.new(1,-24,0,25)
-
--- Kills / Time row.
-local KillCard = MkCard(Panel, UDim2.new(0, 18, 0, 284), UDim2.new(0.50, -22, 0, 48))
-local KillCap = MkText(KillCard, "KILLS", 9, TEXT_MUTED, true)
-KillCap.Position = UDim2.new(0, 12, 0, 5); KillCap.Size = UDim2.new(0.40,0,0,13)
-local KillL = MkText(KillCard, "0", 15, Color3.fromRGB(255,119,145), true)
-KillL.Position = UDim2.new(0, 12, 0, 18); KillL.Size = UDim2.new(1,-24,0,23)
-local KillScale = Instance.new("UIScale")
-KillScale.Parent = KillL
-
-local TimeCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 284), UDim2.new(0.50, -22, 0, 48))
-local TimeCap = MkText(TimeCard, "RUNTIME", 9, TEXT_MUTED, true)
-TimeCap.Position = UDim2.new(0, 12, 0, 5); TimeCap.Size = UDim2.new(0.48,0,0,13)
-local TimeL = MkText(TimeCard, "00:00:00", 15, TEXT_MAIN, true)
-TimeL.Position = UDim2.new(0, 12, 0, 18); TimeL.Size = UDim2.new(1,-24,0,23)
-
--- Diagnostics footer.
-local Footer = Instance.new("Frame")
-Footer.Parent = Panel
-Footer.Position = UDim2.new(0, 18, 1, -28)
-Footer.Size = UDim2.new(1, -36, 0, 18)
-Footer.BackgroundTransparency = 1
-Footer.ZIndex = 8
-local CombatL = MkText(Footer, "COMBAT  WAITING", 9, Color3.fromRGB(255,190,102), true)
-CombatL.Position = UDim2.new(0,0,0,0); CombatL.Size = UDim2.new(0.52,0,1,0)
-local BringL = MkText(Footer, "BRING  WAITING", 9, TEXT_MUTED, true, Enum.TextXAlignment.Right)
-BringL.Position = UDim2.new(0.48,0,0,0); BringL.Size = UDim2.new(0.52,0,1,0)
-
--- Persistent mini toggle; remains usable while panel is hidden.
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "OverlayToggle"
-ToggleButton.Parent = SG
-ToggleButton.AnchorPoint = Vector2.new(0,0.5)
-ToggleButton.Position = UDim2.new(0, 10, 0.5, 0)
-ToggleButton.Size = UDim2.new(0, 36, 0, 36)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(10, 22, 39)
-ToggleButton.BackgroundTransparency = 0.08
-ToggleButton.BorderSizePixel = 0
-ToggleButton.Text = "◈"
-ToggleButton.TextColor3 = ACCENT_A
-ToggleButton.TextSize = 17
-ToggleButton.Font = Enum.Font.GothamBold
-ToggleButton.AutoButtonColor = false
-ToggleButton.ZIndex = 30
-AddCorner(ToggleButton, 12)
-local ToggleStroke = AddStroke(ToggleButton, ACCENT_A, 0.20, 1.4)
-AddGradient(ToggleButton, Color3.fromRGB(16,42,62), Color3.fromRGB(9,14,27), 90)
-
--- Responsive scale without adding a second UIScale to the same panel.
-local HudBaseScale = 1
-local UITransitionBusy = false
-local function RefreshHudScale()
-    local camera = workspace.CurrentCamera
-    local viewport = camera and camera.ViewportSize or Vector2.new(1280,720)
-    local sx = viewport.X / 1180
-    local sy = viewport.Y / 720
-    HudBaseScale = math.clamp(math.min(sx, sy), 0.78, 1.05)
-    if not UITransitionBusy then PanelScale.Scale = HudBaseScale end
-end
-RefreshHudScale()
-workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if SessionAlive() then task.defer(RefreshHudScale) end
-end)
-if workspace.CurrentCamera then
-    workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(RefreshHudScale)
-end
-
--- Dragging, limited to the header so status/cards remain clickable-proof.
 do
-    local dragging = false
-    local dragStart
-    local startPos
-    local dragInput
+    local okUI, uiErr = pcall(function()
+        local UIS = game:GetService("UserInputService")
+        local Lighting = game:GetService("Lighting")
 
-    Header.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = Panel.Position
-            input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+        local function SafeDestroy(obj)
+            pcall(function()
+                if obj then obj:Destroy() end
             end)
         end
-    end)
 
-    Header.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement
-            or input.UserInputType == Enum.UserInputType.Touch then
-            dragInput = input
-        end
-    end)
-
-    UIS.InputChanged:Connect(function(input)
-        if dragging and input == dragInput and dragStart and startPos then
-            local delta = input.Position - dragStart
-            Panel.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-end
-
-local OverlayVisible = true
-local function SetOverlayVisible(visible)
-    visible = visible == true
-    if UITransitionBusy or visible == OverlayVisible then return end
-    UITransitionBusy = true
-    OverlayVisible = visible
-
-    if visible then
-        Panel.Visible = true
-        PanelScale.Scale = HudBaseScale * 0.94
-        Panel.BackgroundTransparency = 0.30
-        TS:Create(PanelScale, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=HudBaseScale}):Play()
-        TS:Create(Panel, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {BackgroundTransparency=0.12}):Play()
-        TS:Create(Blur, TweenInfo.new(0.30, Enum.EasingStyle.Quad), {Size=_G.Settings.MenuBlur}):Play()
-        task.delay(0.30, function() UITransitionBusy = false end)
-    else
-        TS:Create(PanelScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale=HudBaseScale * 0.94}):Play()
-        TS:Create(Panel, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundTransparency=0.45}):Play()
-        TS:Create(Blur, TweenInfo.new(0.20, Enum.EasingStyle.Quad), {Size=0}):Play()
-        task.delay(0.19, function()
-            if not OverlayVisible then Panel.Visible = false end
-            UITransitionBusy = false
-        end)
-    end
-end
-
-ToggleButton.MouseButton1Click:Connect(function()
-    SetOverlayVisible(not OverlayVisible)
-end)
-ToggleButton.MouseEnter:Connect(function()
-    TS:Create(ToggleButton, TweenInfo.new(0.15), {Size=UDim2.new(0,40,0,40), BackgroundTransparency=0}):Play()
-end)
-ToggleButton.MouseLeave:Connect(function()
-    TS:Create(ToggleButton, TweenInfo.new(0.15), {Size=UDim2.new(0,36,0,36), BackgroundTransparency=0.08}):Play()
-end)
-
-pcall(function()
-    UIS.InputBegan:Connect(function(input, processed)
-        if processed then return end
-        if input.KeyCode == Enum.KeyCode.RightControl then
-            SetOverlayVisible(not OverlayVisible)
-        end
-    end)
-end)
-
--- Opening sequence.
-task.spawn(function()
-    PanelScale.Scale = HudBaseScale * 0.94
-    Panel.BackgroundTransparency = 0.40
-    for _, lb in ipairs(FadeTextObjects) do lb.TextTransparency = 1 end
-    task.wait(0.10)
-    TS:Create(Blur, TweenInfo.new(0.50, Enum.EasingStyle.Quad), {Size=_G.Settings.MenuBlur}):Play()
-    TS:Create(Panel, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {BackgroundTransparency=0.12}):Play()
-    TS:Create(PanelScale, TweenInfo.new(0.48, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=HudBaseScale}):Play()
-    for i, lb in ipairs(FadeTextObjects) do
-        task.delay((i-1) * 0.018, function()
-            if lb and lb.Parent and SessionAlive() then
-                TS:Create(lb, TweenInfo.new(0.28, Enum.EasingStyle.Quad), {TextTransparency=0}):Play()
+        local function ResolveUIParent()
+            if type(gethui) == "function" then
+                local ok, hui = pcall(gethui)
+                if ok and hui then return hui end
             end
-        end)
-    end
-end)
+            local okCore = pcall(function() return CoreGui.Name end)
+            if okCore then return CoreGui end
+            return LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+        end
 
--- Low-cost neon animations.
-task.spawn(function()
-    while SessionAlive() and SG.Parent do
-        NeonGradient.Offset = Vector2.new(-1,0)
-        local t = TS:Create(NeonGradient, TweenInfo.new(3.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Offset=Vector2.new(1,0)})
-        t:Play(); t.Completed:Wait()
-        task.wait(0.35)
-    end
-end)
+        local uiParent = ResolveUIParent()
+        if not uiParent then error("No UI parent available") end
 
-task.spawn(function()
-    while SessionAlive() and SG.Parent do
-        TS:Create(OnlineDot, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-            BackgroundTransparency = 0.45,
-            Size = UDim2.new(0,6,0,6),
-        }):Play()
-        TS:Create(OnlineStroke, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency=0.72}):Play()
-        task.wait(0.78)
-        TS:Create(OnlineDot, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-            BackgroundTransparency = 0,
-            Size = UDim2.new(0,8,0,8),
-        }):Play()
-        TS:Create(OnlineStroke, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency=0.20}):Play()
-        task.wait(0.78)
-    end
-end)
-
-task.spawn(function()
-    while SessionAlive() and SG.Parent do
-        TS:Create(PanelStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Color=ACCENT_B, Transparency=0.42}):Play()
-        task.wait(1.45)
-        TS:Create(PanelStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Color=ACCENT_A, Transparency=0.24}):Play()
-        task.wait(1.45)
-    end
-end)
-
-SG.Destroying:Connect(function()
-    pcall(function()
-        if Blur and Blur.Parent then Blur:Destroy() end
-    end)
-end)
-
-local function Fmt(n)
-    local s = tostring(math.floor(tonumber(n) or 0))
-    return s:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
-end
-
-local StatusColors = {
-    Idle         = Color3.fromRGB(190,210,232),
-    Farming      = ACCENT_C,
-    GettingQuest = Color3.fromRGB(255,214,92),
-    GettingItem  = Color3.fromRGB(196,120,255),
-    Bossing      = Color3.fromRGB(255,116,92),
-    UnlockingSea = ACCENT_A,
-    Recovering   = Color3.fromRGB(255,92,115),
-    Dead         = Color3.fromRGB(255,92,115),
-    Respawning   = Color3.fromRGB(255,183,85),
-}
-
-local LastStatusText = ""
-local LastLevel = nil
-local LastKills = nil
-
-local function AnimateStatus(newText)
-    if newText == LastStatusText then return end
-    LastStatusText = newText
-    StatusL.TextTransparency = 0.18
-    StatusL.Position = UDim2.new(StatusBasePos.X.Scale, StatusBasePos.X.Offset + 8,
-        StatusBasePos.Y.Scale, StatusBasePos.Y.Offset)
-    StatusL.Text = newText
-    TS:Create(StatusL, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-        TextTransparency = 0,
-        Position = StatusBasePos,
-    }):Play()
-end
-
-local function Pop(scaleObj, peak)
-    if not scaleObj then return end
-    scaleObj.Scale = peak or 1.10
-    TS:Create(scaleObj, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=1}):Play()
-end
-
-task.spawn(function()
-    while SessionAlive() and task.wait(0.35) do
+        SafeDestroy(uiParent:FindFirstChild("BobonHubUI"))
         pcall(function()
-            local state = _G.State or {}
-            local diag = _G.BobonDiagnostics or {}
-            local elapsed = os.time() - (state.StartTime or os.time())
-            TimeL.Text = ("%02d:%02d:%02d"):format(
-                math.floor(elapsed/3600), math.floor(elapsed%3600/60), elapsed%60)
+            SafeDestroy(Lighting:FindFirstChild("BobonHubBlur"))
+            local cam = workspace.CurrentCamera
+            if cam then SafeDestroy(cam:FindFirstChild("BobonHubBlur")) end
+        end)
 
-            local mode = tostring(state.Mode or "Idle")
-            local modeColor = StatusColors[mode] or ACCENT_A
-            ModeL.Text = string.upper(mode)
-            ModeL.TextColor3 = modeColor
-            StatusDot.BackgroundColor3 = modeColor
-            StatusDotStroke.Color = modeColor
-            AnimateStatus(tostring(_G.BobonStatus or "Idle"))
+        local SG = Instance.new("ScreenGui")
+        SG.Name = "BobonHubUI"
+        SG.ResetOnSpawn = false
+        SG.IgnoreGuiInset = true
+        SG.DisplayOrder = 10000
+        SG.Parent = uiParent
 
-            local d = LP:FindFirstChild("Data")
-            local lv = d and d:FindFirstChild("Level") and d.Level.Value or 1
-            local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
-            local frag = d and d:FindFirstChild("Fragments") and d.Fragments.Value or 0
-            LevelValue.Text = Fmt(lv)
-            SeaValue.Text = "SEA " .. tostring(state.Sea or 1)
-            BeliL.Text = "$ " .. Fmt(beli)
-            FragL.Text = "◈ " .. Fmt(frag)
-            TeamL.Text = string.upper(tostring(_G.Settings.Team or "Pirates")) .. " ✓"
+        local ACCENT_A = Color3.fromRGB(72,223,255)
+        local ACCENT_B = Color3.fromRGB(139,92,246)
+        local ACCENT_C = Color3.fromRGB(55,255,180)
+        local TEXT_MAIN = Color3.fromRGB(244,249,255)
+        local TEXT_MUTED = Color3.fromRGB(145,166,194)
+        local PANEL_TOP = Color3.fromRGB(16,24,40)
+        local PANEL_BOTTOM = Color3.fromRGB(7,12,24)
+        local CARD_BG = Color3.fromRGB(17,29,48)
 
-            if LastLevel ~= nil and lv ~= LastLevel then Pop(LevelScale, 1.13) end
-            LastLevel = lv
+        local function Corner(obj, px)
+            local x = Instance.new("UICorner")
+            x.CornerRadius = UDim.new(0, px or 12)
+            x.Parent = obj
+            return x
+        end
 
-            local kills = tonumber(state.KillCount) or 0
-            KillL.Text = Fmt(kills)
-            if LastKills ~= nil and kills > LastKills then Pop(KillScale, 1.14) end
-            LastKills = kills
+        local function Stroke(obj, color, transparency, thickness)
+            local x = Instance.new("UIStroke")
+            x.Color = color or ACCENT_A
+            x.Transparency = transparency or 0.5
+            x.Thickness = thickness or 1
+            x.Parent = obj
+            return x
+        end
 
-            local clusterMode = tostring(state.ClusterMode or "OFF")
-            local candidateCount = tonumber(diag.BringCandidates) or 0
-            local ownedCount = tonumber(diag.BringOwned) or 0
-            local movedCount = tonumber(diag.BringMoved) or 0
-            if clusterMode ~= "OFF" then
-                ClusterL.Text = ("Cluster %s  •  %d mobs  •  owned %d  •  moved %d")
-                    :format(clusterMode, candidateCount, ownedCount, movedCount)
+        local function Gradient(obj, c1, c2, rotation)
+            local x = Instance.new("UIGradient")
+            x.Color = ColorSequence.new(c1, c2)
+            x.Rotation = rotation or 0
+            x.Parent = obj
+            return x
+        end
+
+        local function Text(parent, value, size, color, bold, align)
+            local x = Instance.new("TextLabel")
+            x.BackgroundTransparency = 1
+            x.BorderSizePixel = 0
+            x.Text = value or ""
+            x.TextColor3 = color or TEXT_MAIN
+            x.TextSize = size or 13
+            x.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
+            x.TextXAlignment = align or Enum.TextXAlignment.Left
+            x.TextYAlignment = Enum.TextYAlignment.Center
+            x.Parent = parent
+            return x
+        end
+
+        local function Card(parent, pos, size)
+            local x = Instance.new("Frame")
+            x.Position = pos
+            x.Size = size
+            x.BackgroundColor3 = CARD_BG
+            x.BackgroundTransparency = 0.26
+            x.BorderSizePixel = 0
+            x.Parent = parent
+            Corner(x, 13)
+            Stroke(x, Color3.fromRGB(110,175,220), 0.78, 1)
+            Gradient(x, Color3.fromRGB(25,45,68), Color3.fromRGB(11,18,34), 90)
+            return x
+        end
+
+        _G.Settings.MenuBlur = tonumber(_G.Settings.MenuBlur) or 7
+        local Blur
+        pcall(function()
+            Blur = Instance.new("BlurEffect")
+            Blur.Name = "BobonHubBlur"
+            Blur.Size = 0
+            Blur.Enabled = true
+            Blur.Parent = Lighting
+        end)
+
+        local Panel = Instance.new("Frame")
+        Panel.Name = "GlassNeonV21"
+        Panel.AnchorPoint = Vector2.new(0,0.5)
+        Panel.Position = UDim2.new(0,24,0.5,0)
+        Panel.Size = UDim2.new(0,470,0,368)
+        Panel.BackgroundColor3 = PANEL_TOP
+        Panel.BackgroundTransparency = 0.10
+        Panel.BorderSizePixel = 0
+        Panel.ClipsDescendants = true
+        Panel.Parent = SG
+        Corner(Panel, 20)
+        Gradient(Panel, PANEL_TOP, PANEL_BOTTOM, 115)
+        local PanelStroke = Stroke(Panel, ACCENT_A, 0.24, 1.4)
+
+        local PanelScale = Instance.new("UIScale")
+        PanelScale.Scale = 0.96
+        PanelScale.Parent = Panel
+
+        local NeonLine = Instance.new("Frame")
+        NeonLine.Position = UDim2.new(0,18,0,0)
+        NeonLine.Size = UDim2.new(1,-36,0,2)
+        NeonLine.BackgroundColor3 = ACCENT_A
+        NeonLine.BorderSizePixel = 0
+        NeonLine.Parent = Panel
+        Corner(NeonLine, 2)
+        local NeonGradient = Gradient(NeonLine, ACCENT_A, ACCENT_B, 0)
+
+        local Header = Instance.new("Frame")
+        Header.Position = UDim2.new(0,18,0,14)
+        Header.Size = UDim2.new(1,-36,0,48)
+        Header.BackgroundTransparency = 1
+        Header.Active = true
+        Header.Parent = Panel
+
+        local Brand = Text(Header, "◈  BOBON HUB", 20, TEXT_MAIN, true)
+        Brand.Position = UDim2.new(0,0,0,0)
+        Brand.Size = UDim2.new(0.58,0,0,24)
+
+        local Sub = Text(Header, "GLASS NEON  •  KAITUN", 10, ACCENT_A, true)
+        Sub.Position = UDim2.new(0,27,0,24)
+        Sub.Size = UDim2.new(0.60,0,0,18)
+
+        local OnlineDot = Instance.new("Frame")
+        OnlineDot.AnchorPoint = Vector2.new(1,0.5)
+        OnlineDot.Position = UDim2.new(1,-63,0,16)
+        OnlineDot.Size = UDim2.new(0,8,0,8)
+        OnlineDot.BackgroundColor3 = ACCENT_C
+        OnlineDot.BorderSizePixel = 0
+        OnlineDot.Parent = Header
+        Corner(OnlineDot, 8)
+        local OnlineL = Text(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
+        OnlineL.AnchorPoint = Vector2.new(1,0)
+        OnlineL.Position = UDim2.new(1,0,0,6)
+        OnlineL.Size = UDim2.new(0,55,0,20)
+        local Ver = Text(Header, "v18.7", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
+        Ver.AnchorPoint = Vector2.new(1,0)
+        Ver.Position = UDim2.new(1,0,0,27)
+        Ver.Size = UDim2.new(0,55,0,16)
+
+        local LevelCard = Card(Panel, UDim2.new(0,18,0,70), UDim2.new(0.5,-22,0,58))
+        local LevelCap = Text(LevelCard, "LEVEL", 9, TEXT_MUTED, true)
+        LevelCap.Position = UDim2.new(0,14,0,7); LevelCap.Size = UDim2.new(1,-28,0,15)
+        local LevelValue = Text(LevelCard, "1", 23, TEXT_MAIN, true)
+        LevelValue.Position = UDim2.new(0,14,0,21); LevelValue.Size = UDim2.new(1,-28,0,30)
+
+        local SeaCard = Card(Panel, UDim2.new(0.5,4,0,70), UDim2.new(0.5,-22,0,58))
+        local SeaCap = Text(SeaCard, "WORLD", 9, TEXT_MUTED, true)
+        SeaCap.Position = UDim2.new(0,14,0,7); SeaCap.Size = UDim2.new(1,-28,0,15)
+        local SeaValue = Text(SeaCard, "SEA 1", 20, ACCENT_A, true)
+        SeaValue.Position = UDim2.new(0,14,0,22); SeaValue.Size = UDim2.new(0.55,-14,0,28)
+        local TeamL = Text(SeaCard, "PIRATES ✓", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
+        TeamL.Position = UDim2.new(0.52,0,0,24); TeamL.Size = UDim2.new(0.48,-14,0,24)
+
+        local StatusCard = Card(Panel, UDim2.new(0,18,0,136), UDim2.new(1,-36,0,78))
+        local StatusDot = Instance.new("Frame")
+        StatusDot.Position = UDim2.new(0,14,0,17)
+        StatusDot.Size = UDim2.new(0,9,0,9)
+        StatusDot.BackgroundColor3 = ACCENT_C
+        StatusDot.BorderSizePixel = 0
+        StatusDot.Parent = StatusCard
+        Corner(StatusDot, 9)
+        local ModeL = Text(StatusCard, "FARMING", 10, ACCENT_C, true)
+        ModeL.Position = UDim2.new(0,31,0,10); ModeL.Size = UDim2.new(0.45,0,0,20)
+        local FlagL = Text(StatusCard, "READY", 9, ACCENT_A, true, Enum.TextXAlignment.Right)
+        FlagL.Position = UDim2.new(0.52,0,0,10); FlagL.Size = UDim2.new(0.48,-14,0,20)
+        local StatusL = Text(StatusCard, "Initializing...", 16, TEXT_MAIN, true)
+        StatusL.Position = UDim2.new(0,14,0,31); StatusL.Size = UDim2.new(1,-28,0,27)
+        local ClusterL = Text(StatusCard, "Cluster: waiting", 10, TEXT_MUTED, false)
+        ClusterL.Position = UDim2.new(0,14,1,-20); ClusterL.Size = UDim2.new(1,-28,0,15)
+
+        local BeliCard = Card(Panel, UDim2.new(0,18,0,222), UDim2.new(0.5,-22,0,54))
+        local BeliCap = Text(BeliCard, "BELI", 9, TEXT_MUTED, true)
+        BeliCap.Position = UDim2.new(0,12,0,7); BeliCap.Size = UDim2.new(1,-24,0,13)
+        local BeliL = Text(BeliCard, "$ 0", 16, Color3.fromRGB(93,255,151), true)
+        BeliL.Position = UDim2.new(0,12,0,21); BeliL.Size = UDim2.new(1,-24,0,25)
+
+        local FragCard = Card(Panel, UDim2.new(0.5,4,0,222), UDim2.new(0.5,-22,0,54))
+        local FragCap = Text(FragCard, "FRAGMENTS", 9, TEXT_MUTED, true)
+        FragCap.Position = UDim2.new(0,12,0,7); FragCap.Size = UDim2.new(1,-24,0,13)
+        local FragL = Text(FragCard, "◈ 0", 16, Color3.fromRGB(194,135,255), true)
+        FragL.Position = UDim2.new(0,12,0,21); FragL.Size = UDim2.new(1,-24,0,25)
+
+        local KillCard = Card(Panel, UDim2.new(0,18,0,284), UDim2.new(0.5,-22,0,48))
+        local KillCap = Text(KillCard, "KILLS", 9, TEXT_MUTED, true)
+        KillCap.Position = UDim2.new(0,12,0,5); KillCap.Size = UDim2.new(0.4,0,0,13)
+        local KillL = Text(KillCard, "0", 15, Color3.fromRGB(255,119,145), true)
+        KillL.Position = UDim2.new(0,12,0,18); KillL.Size = UDim2.new(1,-24,0,23)
+
+        local TimeCard = Card(Panel, UDim2.new(0.5,4,0,284), UDim2.new(0.5,-22,0,48))
+        local TimeCap = Text(TimeCard, "RUNTIME", 9, TEXT_MUTED, true)
+        TimeCap.Position = UDim2.new(0,12,0,5); TimeCap.Size = UDim2.new(0.48,0,0,13)
+        local TimeL = Text(TimeCard, "00:00:00", 15, TEXT_MAIN, true)
+        TimeL.Position = UDim2.new(0,12,0,18); TimeL.Size = UDim2.new(1,-24,0,23)
+
+        local Footer = Instance.new("Frame")
+        Footer.Position = UDim2.new(0,18,1,-28)
+        Footer.Size = UDim2.new(1,-36,0,18)
+        Footer.BackgroundTransparency = 1
+        Footer.Parent = Panel
+        local CombatL = Text(Footer, "COMBAT  WAITING", 9, Color3.fromRGB(255,190,102), true)
+        CombatL.Position = UDim2.new(0,0,0,0); CombatL.Size = UDim2.new(0.52,0,1,0)
+        local BringL = Text(Footer, "BRING  WAITING", 9, TEXT_MUTED, true, Enum.TextXAlignment.Right)
+        BringL.Position = UDim2.new(0.48,0,0,0); BringL.Size = UDim2.new(0.52,0,1,0)
+
+        local Toggle = Instance.new("TextButton")
+        Toggle.AnchorPoint = Vector2.new(0,0.5)
+        Toggle.Position = UDim2.new(0,10,0.5,0)
+        Toggle.Size = UDim2.new(0,36,0,36)
+        Toggle.BackgroundColor3 = Color3.fromRGB(10,22,39)
+        Toggle.BackgroundTransparency = 0.08
+        Toggle.BorderSizePixel = 0
+        Toggle.Text = "◈"
+        Toggle.TextColor3 = ACCENT_A
+        Toggle.TextSize = 17
+        Toggle.Font = Enum.Font.GothamBold
+        Toggle.AutoButtonColor = false
+        Toggle.Parent = SG
+        Corner(Toggle, 12)
+        Stroke(Toggle, ACCENT_A, 0.20, 1.4)
+
+        local function Fmt(n)
+            local s = tostring(math.floor(tonumber(n) or 0))
+            return s:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
+        end
+
+        local visible = true
+        local busy = false
+        local function SetVisible(v)
+            if busy or v == visible then return end
+            busy = true
+            visible = v
+            if v then
+                Panel.Visible = true
+                PanelScale.Scale = 0.95
+                pcall(function() TS:Create(PanelScale, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Scale=1}):Play() end)
+                pcall(function() if Blur then TS:Create(Blur, TweenInfo.new(0.25), {Size=_G.Settings.MenuBlur}):Play() end end)
+                task.delay(0.28, function() busy = false end)
             else
-                ClusterL.Text = "Cluster OFF  •  waiting for farm target"
+                pcall(function() TS:Create(PanelScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Scale=0.95}):Play() end)
+                pcall(function() if Blur then TS:Create(Blur, TweenInfo.new(0.18), {Size=0}):Play() end end)
+                task.delay(0.20, function()
+                    if not visible then Panel.Visible = false end
+                    busy = false
+                end)
             end
+        end
 
-            local flags = {}
-            if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
-                flags[#flags+1] = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
-            end
-            if state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
-                flags[#flags+1] = "CONTESTED"
-            end
-            if #flags == 0 then
-                flags[1] = clusterMode ~= "OFF" and ("CLUSTER ×" .. tostring(candidateCount)) or "READY"
-            end
-            FlagL.Text = table.concat(flags, "  •  ")
-            FlagL.TextColor3 = (#flags > 0 and flags[#flags] == "CONTESTED")
-                and Color3.fromRGB(255,119,145) or ACCENT_A
-
-            local packet = tostring(diag.Packet or "WAITING")
-            local combatReady = packet:find("CONFIRMED", 1, true) ~= nil
-            CombatL.Text = combatReady and "COMBAT  READY" or ("COMBAT  " .. packet)
-            CombatL.TextColor3 = combatReady and ACCENT_C or Color3.fromRGB(255,190,102)
-
-            local bring = tostring(diag.Bring or "WAITING")
-            if movedCount > 0 then
-                BringL.Text = "BRING  FULL BATCH ×" .. tostring(movedCount)
-                BringL.TextColor3 = ACCENT_A
-            else
-                BringL.Text = "BRING  " .. bring
-                BringL.TextColor3 = TEXT_MUTED
+        Toggle.MouseButton1Click:Connect(function() SetVisible(not visible) end)
+        UIS.InputBegan:Connect(function(input, processed)
+            if not processed and input.KeyCode == Enum.KeyCode.RightControl then
+                SetVisible(not visible)
             end
         end)
+
+        -- Header drag. All handler bodies are protected so executor quirks cannot kill core.
+        do
+            local dragging, dragStart, startPos, dragInput = false, nil, nil, nil
+            Header.InputBegan:Connect(function(input)
+                pcall(function()
+                    if input.UserInputType == Enum.UserInputType.MouseButton1
+                        or input.UserInputType == Enum.UserInputType.Touch then
+                        dragging = true
+                        dragStart = input.Position
+                        startPos = Panel.Position
+                        input.Changed:Connect(function()
+                            if input.UserInputState == Enum.UserInputState.End then dragging = false end
+                        end)
+                    end
+                end)
+            end)
+            Header.InputChanged:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseMovement
+                    or input.UserInputType == Enum.UserInputType.Touch then
+                    dragInput = input
+                end
+            end)
+            UIS.InputChanged:Connect(function(input)
+                pcall(function()
+                    if dragging and input == dragInput and dragStart and startPos then
+                        local delta = input.Position - dragStart
+                        Panel.Position = UDim2.new(
+                            startPos.X.Scale, startPos.X.Offset + delta.X,
+                            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                    end
+                end)
+            end)
+        end
+
+        -- Opening animation is optional; errors here are isolated.
+        pcall(function()
+            PanelScale.Scale = 0.94
+            TS:Create(PanelScale, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {Scale=1}):Play()
+            if Blur then TS:Create(Blur, TweenInfo.new(0.35), {Size=_G.Settings.MenuBlur}):Play() end
+        end)
+
+        task.spawn(function()
+            while SessionAlive() and SG.Parent do
+                pcall(function()
+                    local state = _G.State or {}
+                    local diag = _G.BobonDiagnostics or {}
+                    local elapsed = os.time() - (state.StartTime or os.time())
+                    TimeL.Text = ("%02d:%02d:%02d"):format(
+                        math.floor(elapsed/3600), math.floor(elapsed%3600/60), elapsed%60)
+
+                    local d = LP:FindFirstChild("Data")
+                    local lv = d and d:FindFirstChild("Level") and d.Level.Value or 1
+                    local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
+                    local frag = d and d:FindFirstChild("Fragments") and d.Fragments.Value or 0
+                    LevelValue.Text = Fmt(lv)
+                    SeaValue.Text = "SEA " .. tostring(state.Sea or 1)
+                    TeamL.Text = string.upper(tostring(_G.Settings.Team or "Pirates")) .. " ✓"
+                    BeliL.Text = "$ " .. Fmt(beli)
+                    FragL.Text = "◈ " .. Fmt(frag)
+                    KillL.Text = Fmt(state.KillCount or 0)
+
+                    local mode = tostring(state.Mode or "Idle")
+                    ModeL.Text = string.upper(mode)
+                    StatusL.Text = tostring(_G.BobonStatus or "Idle")
+                    if mode == "Farming" then StatusDot.BackgroundColor3 = ACCENT_C
+                    elseif mode == "Recovering" or mode == "Dead" then StatusDot.BackgroundColor3 = Color3.fromRGB(255,92,115)
+                    else StatusDot.BackgroundColor3 = ACCENT_A end
+
+                    local clusterMode = tostring(state.ClusterMode or "OFF")
+                    local candidates = tonumber(diag.BringCandidates) or 0
+                    local owned = tonumber(diag.BringOwned) or 0
+                    local moved = tonumber(diag.BringMoved) or 0
+                    if clusterMode ~= "OFF" then
+                        ClusterL.Text = ("Cluster %s  •  %d mobs  •  owned %d  •  moved %d")
+                            :format(clusterMode, candidates, owned, moved)
+                    else
+                        ClusterL.Text = "Cluster OFF  •  waiting"
+                    end
+
+                    if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
+                        FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
+                    elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
+                        FlagL.Text = "CONTESTED"
+                    elseif clusterMode ~= "OFF" then
+                        FlagL.Text = "CLUSTER ×" .. tostring(candidates)
+                    else
+                        FlagL.Text = "READY"
+                    end
+
+                    local packet = tostring(diag.Packet or "WAITING")
+                    local ready = packet:find("CONFIRMED",1,true) ~= nil
+                    CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
+                    CombatL.TextColor3 = ready and ACCENT_C or Color3.fromRGB(255,190,102)
+                    BringL.Text = moved > 0 and ("BRING  FULL BATCH ×" .. tostring(moved))
+                        or ("BRING  " .. tostring(diag.Bring or "WAITING"))
+                    BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
+                end)
+                task.wait(0.35)
+            end
+        end)
+
+        task.spawn(function()
+            while SessionAlive() and SG.Parent do
+                pcall(function()
+                    NeonGradient.Rotation = (NeonGradient.Rotation + 12) % 360
+                    OnlineDot.BackgroundTransparency = OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
+                    PanelStroke.Color = PanelStroke.Color == ACCENT_A and ACCENT_B or ACCENT_A
+                end)
+                task.wait(0.8)
+            end
+        end)
+    end)
+
+    if not okUI then
+        warn("[BobonHub] UI Error: " .. tostring(uiErr))
+        -- UI is optional. Core kaitun continues even when this executor rejects a GUI API.
     end
-end)
+end
 
 -- ══════════════════════════════════════════════════════════════════
 --                       HELPER FUNCTIONS
