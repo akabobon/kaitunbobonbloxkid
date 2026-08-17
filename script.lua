@@ -1,7 +1,25 @@
 -- =================================================================
---         BOBON HUB v21.2 VIDEO FARM FIX | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.3 GLOBAL MOB CORE FIX | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.1 STARTUP FIX | Version: v21.2
+--         Base: v21.2 VIDEO FARM FIX | Version: v21.3
+--
+--  v21.3 GLOBAL MOB CORE FIX:
+--  [GM-1] Normal quest farming is now explicitly mob-agnostic. Every QDB mob
+--         uses the same dynamic questMobName -> acquire -> cluster -> attack path;
+--         there are no Snowman/name-specific combat fixes.
+--  [GM-2] Quest cluster anchor self-heals globally: if QDB MC is stale/far from
+--         the live matching spawn, the first live quest mob seeds the anchor.
+--         Once seeded, the anchor stays persistent across deaths/respawns.
+--  [GM-3] Global quest chase distance uses the existing GatherMaxDistance instead
+--         of the old 350-stud hard stop, so a stale farm coordinate cannot make
+--         one mob/level work while another stalls just outside MaxFarmDistance.
+--  [GM-4] Global no-damage watchdog is integrated into the SINGLE main loop. If
+--         any quest mob takes no HP damage while the bot is at a combat anchor,
+--         its local cluster verification is revoked and Farm travel is replanned
+--         against the real live mob. No extra movement coroutine is created.
+--  [GM-5] Cluster multi-hit remains dynamic: only the current quest mob name is
+--         collected, every verified same-name mob is included up to the existing
+--         cluster cap, and primary death promotes another same-name mob.
 --
 --  v21.2 VIDEO FARM HOTFIX:
 --  [VF-1] Combat legacy RegisterAttack/RegisterHit probe is no longer disabled
@@ -347,7 +365,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.2 VIDEO FARM FIX + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.3 GLOBAL MOB CORE FIX + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1168,7 +1186,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.2", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.3", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -9173,6 +9191,73 @@ if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function(
 --   [A-5] Farm state machine FState chạy trong loop DUY NHẤT này
 -- ══════════════════════════════════════════════════════════════════
 local lastAttackLog = 0
+
+-- v21.3 GLOBAL MOB CORE: these helpers are deliberately name-agnostic.
+-- They consume the current QDB/active quest mob instead of hard-coding any NPC.
+local FarmDamageWatch = {Target=nil, Health=nil, StartedAt=0, LastDamageAt=0}
+
+local function ResetFarmDamageWatch(target)
+    FarmDamageWatch.Target = target
+    FarmDamageWatch.Health = nil
+    FarmDamageWatch.StartedAt = tick()
+    FarmDamageWatch.LastDamageAt = tick()
+    local hum = target and target:FindFirstChildOfClass("Humanoid")
+    if hum then FarmDamageWatch.Health = hum.Health end
+end
+
+local function ObserveFarmDamage(target)
+    if not target or not _G.State:IsTargetValid(target) then
+        ResetFarmDamageWatch(nil)
+        return false
+    end
+    if FarmDamageWatch.Target ~= target then
+        ResetFarmDamageWatch(target)
+        return false
+    end
+    local hum = target:FindFirstChildOfClass("Humanoid")
+    if not hum then return false end
+    local now = tick()
+    local hp = hum.Health
+    if FarmDamageWatch.Health == nil or hp < FarmDamageWatch.Health then
+        FarmDamageWatch.LastDamageAt = now
+    end
+    FarmDamageWatch.Health = hp
+    local noDamageFor = now - math.max(FarmDamageWatch.StartedAt or now, FarmDamageWatch.LastDamageAt or now)
+    return noDamageFor >= math.max(3.0, (_G.Settings.CombatProbeTimeout or 0.9) * 3)
+end
+
+local function QuestChaseLimit()
+    return math.max(
+        (_G.Settings.MaxFarmDistance or 300) + 50,
+        tonumber(_G.Settings.GatherMaxDistance) or 3000
+    )
+end
+
+local function ResolveQuestClusterAnchor(q, mobName)
+    local state = _G.State
+    -- Once an anchor for this quest mob exists, keep it stable across kills.
+    if state.ClusterMode == "QUEST" and state.ClusterAnchor
+        and state.ClusterMobName and string.lower(tostring(state.ClusterMobName))
+            == string.lower(tostring(mobName)) then
+        return state.ClusterAnchor
+    end
+
+    local base = q and q.MC
+    local mob = FindNearestMob(mobName)
+    local root = mob and mob:FindFirstChild("HumanoidRootPart")
+    if root then
+        local ok, pos = pcall(function() return root.Position end)
+        if ok and IsAllowedWorldPosition(pos) then
+            if not base or typeof(base) ~= "CFrame"
+                or (pos - base.Position).Magnitude > ((_G.Settings.MaxFarmDistance or 300) + 50) then
+                DLog("FARM", "Adaptive quest anchor -> live " .. tostring(mobName))
+                return CFrame.new(pos)
+            end
+        end
+    end
+    return base
+end
+
 task.spawn(function()
     while SessionAlive() and task.wait(0.15) do
         -- Skip nếu subsystem đang giữ ActionToken
@@ -9493,7 +9578,8 @@ task.spawn(function()
 
             -- v18.7 QUEST CLUSTER: q.MC is the stable spawn-area anchor.
             -- A mob death no longer destroys the cluster or forces player travel.
-            ClusterFarmController:Activate("QUEST", {questMobName}, q.MC, "Farm")
+            local questAnchor = ResolveQuestClusterAnchor(q, questMobName) or q.MC
+            ClusterFarmController:Activate("QUEST", {questMobName}, questAnchor, "Farm")
             ClusterFarmController:Tick()
 
             local anchorHeight = _G.Settings.FarmHeight or 22
@@ -9540,8 +9626,8 @@ task.spawn(function()
                 -- player is attacking. Chase it while preserving the cluster anchor.
                 local targetPos = targetRoot.Position
                 local dist = (hrp.Position - targetPos).Magnitude
-                local normalTooFar = dist > _G.Settings.MaxFarmDistance + 50
-                local contestTooFar = dist > (_G.Settings.ContestChaseDistance or 900)
+                local normalTooFar = dist > QuestChaseLimit()
+                local contestTooFar = dist > math.max((_G.Settings.ContestChaseDistance or 900), QuestChaseLimit())
                 if not IsAllowedWorldPosition(targetPos)
                     or (normalTooFar and (not contested or contestTooFar)) then
                     _G.State.FarmTarget = nil
@@ -9576,7 +9662,7 @@ task.spawn(function()
                         _G.State.CurrentTarget = mob
                         PrepareCombatTarget(mob)
                         if (_G.State.ClusterLastMoved or 0) == 0
-                            and dist <= _G.Settings.MaxFarmDistance
+                            and dist <= QuestChaseLimit()
                             and _G.State:CanRequestTravel() then
                             TravelManager:Request(mob.HumanoidRootPart, "Farm", {
                                 arrivalThreshold = _G.Settings.FarmArrivalThreshold,
@@ -9595,6 +9681,24 @@ task.spawn(function()
             hrp = HRP()
             if target and targetRoot and hrp and _G.State:IsTargetValid(target) then
                 PrepareCombatTarget(target)
+
+                -- v21.3 GLOBAL no-damage recovery: applies to every active quest
+                -- mob. A locally stacked-looking root is not allowed to trap the
+                -- farm forever if the server is not actually taking damage.
+                if TravelManager:IsAtCombatAnchor() and ObserveFarmDamage(target) then
+                    VerifiedGatherRoots[targetRoot] = nil
+                    if _G.State.ClusterPrimary == target then _G.State.ClusterPrimary = nil end
+                    if CombatController.PendingBackend then
+                        CombatController:AbortPending("GLOBAL-MOB-NO-DAMAGE")
+                    end
+                    if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+                        TravelManager:Stop("GlobalMobNoDamageReacquire")
+                    end
+                    _G.BobonStatus = "Farm: Reacquiring " .. tostring(questMobName)
+                    ResetFarmDamageWatch(target)
+                    return
+                end
+
                 local flatDist = (Vector3.new(hrp.Position.X,0,hrp.Position.Z)
                     - Vector3.new(targetRoot.Position.X,0,targetRoot.Position.Z)).Magnitude
                 local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
@@ -9609,6 +9713,7 @@ task.spawn(function()
                     end
                 end
             else
+                ResetFarmDamageWatch(nil)
                 _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
             end
         end)
@@ -9804,10 +9909,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.2] Full Script Loaded Successfully!")
-print("[BobonHub v21.2] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.2] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.2] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.2] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.2] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.2] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.3] Full Script Loaded Successfully!")
+print("[BobonHub v21.3] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.3] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.3] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.3] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
