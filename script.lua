@@ -326,7 +326,7 @@ pcall(function()
         backdrop.Size = UDim2.fromScale(1,1)
         backdrop.Position = UDim2.fromScale(0,0)
         backdrop.BackgroundColor3 = Color3.fromRGB(5,10,20)
-        backdrop.BackgroundTransparency = 0.08
+        backdrop.BackgroundTransparency = 1
         backdrop.BorderSizePixel = 0
         backdrop.Parent = BootGui
 
@@ -335,7 +335,7 @@ pcall(function()
         card.Size = UDim2.new(0, 520, 0, 120)
         card.Position = UDim2.fromScale(0.5,0.5)
         card.BackgroundColor3 = Color3.fromRGB(10,18,31)
-        card.BackgroundTransparency = 0.08
+        card.BackgroundTransparency = 0.62
         card.BorderSizePixel = 0
         card.Parent = backdrop
 
@@ -345,7 +345,7 @@ pcall(function()
 
         local stroke = Instance.new("UIStroke")
         stroke.Color = Color3.fromRGB(72,223,255)
-        stroke.Transparency = 0.25
+        stroke.Transparency = 0.62
         stroke.Thickness = 1.2
         stroke.Parent = card
 
@@ -433,7 +433,7 @@ _G.Settings = {
     AttackRange         = 100,
     FastAttackRange     = 100,
     ClientAttackRange   = 8,
-    FastAttackMaxTargets= 12,
+    FastAttackMaxTargets= 32,
     CombatProbeTimeout  = 1.2,
     CombatProbeAttempts = 3,
     CombatBackendRetry  = 12,
@@ -499,16 +499,17 @@ _G.Settings = {
     SkipLevelRoute      = true,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
-    GatherMaxDistance   = 2000,
-    GatherSimulationRefresh = 0.08,
-    GatherVerifiedTTL   = 1.50,
+    GatherMaxDistance   = 3000,
+    GatherSimulationRefresh = 0.03,
+    GatherVerifiedTTL   = 2.50,
     -- v19.0 all-mob cluster: gather ALL matching mobs in the current farm
     -- area in one magnet pass. Attack target count stays separately bounded.
-    ClusterRefresh      = 0.03,
+    ClusterRefresh      = 0.015,
     ClusterStackRadius  = 0,
     ClusterAcquireGrace = 0.75,
     ClusterAnchorMaxDrift = 18,
-    ClusterSimulationRadius = 5000,
+    ClusterSimulationRadius = 10000,
+    ClusterAttackMaxTargets = 32,
     -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
     AutoFragmentRaid     = true,
     RaidPreferredNames   = {"Flame","Dark","Ice","Sand","Smoke"},
@@ -888,9 +889,9 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---             UI — BOBON FULLSCREEN HUD v3
---   Full-screen fixed overlay. Centered content. No drag / no floating menu.
---   UI failure is isolated and must never stop kaitun core.
+--             UI — BOBON TRANSPARENT FULLSCREEN HUD v4
+--   Fixed full-screen overlay. Centered dashboard. No drag, no outer side bars.
+--   The game remains clearly visible through every dark surface.
 -- ══════════════════════════════════════════════════════════════════
 do
     local okUI, uiErr = pcall(function()
@@ -898,9 +899,7 @@ do
         local Lighting = game:GetService("Lighting")
 
         local function SafeDestroy(obj)
-            pcall(function()
-                if obj then obj:Destroy() end
-            end)
+            pcall(function() if obj then obj:Destroy() end end)
         end
 
         local function ResolveUIParent()
@@ -917,7 +916,6 @@ do
 
         local uiParent = ResolveUIParent()
         if not uiParent then error("No UI parent available") end
-
         SafeDestroy(uiParent:FindFirstChild("BobonHubUI"))
         pcall(function()
             SafeDestroy(Lighting:FindFirstChild("BobonHubBlur"))
@@ -937,10 +935,8 @@ do
         local ACCENT_B = Color3.fromRGB(139,92,246)
         local ACCENT_C = Color3.fromRGB(55,255,180)
         local TEXT_MAIN = Color3.fromRGB(244,249,255)
-        local TEXT_MUTED = Color3.fromRGB(145,166,194)
-        local PANEL_TOP = Color3.fromRGB(9,16,30)
-        local PANEL_BOTTOM = Color3.fromRGB(4,8,18)
-        local CARD_BG = Color3.fromRGB(15,27,46)
+        local TEXT_MUTED = Color3.fromRGB(165,181,205)
+        local CARD_BG = Color3.fromRGB(8,15,28)
 
         local function Corner(obj, px)
             local x = Instance.new("UICorner")
@@ -952,16 +948,8 @@ do
         local function Stroke(obj, color, transparency, thickness)
             local x = Instance.new("UIStroke")
             x.Color = color or ACCENT_A
-            x.Transparency = transparency or 0.5
+            x.Transparency = transparency or 0.65
             x.Thickness = thickness or 1
-            x.Parent = obj
-            return x
-        end
-
-        local function Gradient(obj, c1, c2, rotation)
-            local x = Instance.new("UIGradient")
-            x.Color = ColorSequence.new(c1, c2)
-            x.Rotation = rotation or 0
             x.Parent = obj
             return x
         end
@@ -986,59 +974,34 @@ do
             x.Position = pos
             x.Size = size
             x.BackgroundColor3 = CARD_BG
-            x.BackgroundTransparency = 0.18
+            x.BackgroundTransparency = 0.68
             x.BorderSizePixel = 0
             x.Parent = parent
             Corner(x, 14)
-            Stroke(x, Color3.fromRGB(110,175,220), 0.72, 1)
-            Gradient(x, Color3.fromRGB(24,44,68), Color3.fromRGB(9,16,31), 90)
+            Stroke(x, Color3.fromRGB(125,185,225), 0.72, 1)
             return x
         end
 
-        _G.Settings.MenuBlur = tonumber(_G.Settings.MenuBlur) or 8
-        local Blur
-        pcall(function()
-            Blur = Instance.new("BlurEffect")
-            Blur.Name = "BobonHubBlur"
-            Blur.Size = 0
-            Blur.Enabled = true
-            Blur.Parent = Lighting
-        end)
-
-        -- Full-screen menu background.
+        -- No black full-screen plate and no blur wall: the world stays visible.
         local Panel = Instance.new("Frame")
         Panel.Name = "BobonFullscreen"
         Panel.AnchorPoint = Vector2.new(0.5,0.5)
         Panel.Position = UDim2.fromScale(0.5,0.5)
         Panel.Size = UDim2.fromScale(1,1)
-        Panel.BackgroundColor3 = PANEL_TOP
-        Panel.BackgroundTransparency = 0.08
+        Panel.BackgroundTransparency = 1
         Panel.BorderSizePixel = 0
         Panel.Parent = SG
-        Gradient(Panel, PANEL_TOP, PANEL_BOTTOM, 115)
 
-        local ScreenGlow = Instance.new("Frame")
-        ScreenGlow.AnchorPoint = Vector2.new(0.5,0)
-        ScreenGlow.Position = UDim2.new(0.5,0,0,0)
-        ScreenGlow.Size = UDim2.new(0.72,0,0,3)
-        ScreenGlow.BackgroundColor3 = ACCENT_A
-        ScreenGlow.BorderSizePixel = 0
-        ScreenGlow.Parent = Panel
-        local NeonGradient = Gradient(ScreenGlow, ACCENT_A, ACCENT_B, 0)
-
-        -- Centered dashboard. It cannot be dragged.
+        -- Centered information canvas only; transparent and borderless, so the
+        -- previous two tall cyan/purple vertical lines are gone completely.
         local Content = Instance.new("Frame")
         Content.Name = "Dashboard"
         Content.AnchorPoint = Vector2.new(0.5,0.5)
         Content.Position = UDim2.fromScale(0.5,0.5)
         Content.Size = UDim2.new(0.78,0,0.78,0)
-        Content.BackgroundColor3 = Color3.fromRGB(10,18,33)
-        Content.BackgroundTransparency = 0.12
+        Content.BackgroundTransparency = 1
         Content.BorderSizePixel = 0
         Content.Parent = Panel
-        Corner(Content, 22)
-        Gradient(Content, Color3.fromRGB(15,27,47), Color3.fromRGB(6,11,23), 110)
-        local PanelStroke = Stroke(Content, ACCENT_A, 0.20, 1.5)
 
         local SizeLimit = Instance.new("UISizeConstraint")
         SizeLimit.MinSize = Vector2.new(620,430)
@@ -1058,7 +1021,6 @@ do
         local Brand = Text(Header, "◈  BOBON HUB", 28, TEXT_MAIN, true, Enum.TextXAlignment.Center)
         Brand.Position = UDim2.new(0,0,0,0)
         Brand.Size = UDim2.new(1,0,0,32)
-
         local Sub = Text(Header, "BLOX FRUITS  •  KAITUN", 11, ACCENT_A, true, Enum.TextXAlignment.Center)
         Sub.Position = UDim2.new(0,0,0,34)
         Sub.Size = UDim2.new(1,0,0,18)
@@ -1071,13 +1033,11 @@ do
         OnlineDot.BorderSizePixel = 0
         OnlineDot.Parent = Header
         Corner(OnlineDot, 8)
-
         local OnlineL = Text(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-
-        local Ver = Text(Header, "v19.0", 9, TEXT_MUTED, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v19.1", 9, TEXT_MUTED, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -1142,14 +1102,33 @@ do
         local BringL = Text(Footer, "BRING  WAITING", 10, TEXT_MUTED, true, Enum.TextXAlignment.Right)
         BringL.Position = UDim2.new(0.52,0,0,0); BringL.Size = UDim2.new(0.48,-16,1,0)
 
+        -- Fixed toggle button remains visible when the full overlay is hidden.
+        local Toggle = Instance.new("TextButton")
+        Toggle.Name = "BobonToggle"
+        Toggle.AnchorPoint = Vector2.new(1,0)
+        Toggle.Position = UDim2.new(1,-18,0,18)
+        Toggle.Size = UDim2.new(0,42,0,42)
+        Toggle.BackgroundColor3 = Color3.fromRGB(8,15,28)
+        Toggle.BackgroundTransparency = 0.38
+        Toggle.BorderSizePixel = 0
+        Toggle.Text = "◈"
+        Toggle.TextColor3 = ACCENT_A
+        Toggle.TextSize = 19
+        Toggle.Font = Enum.Font.GothamBold
+        Toggle.AutoButtonColor = false
+        Toggle.ZIndex = 100
+        Toggle.Parent = SG
+        Corner(Toggle, 13)
+        Stroke(Toggle, ACCENT_A, 0.45, 1.2)
+
         local Hint = Text(Content, "Right Ctrl  •  Hide / Show", 9, TEXT_MUTED, false, Enum.TextXAlignment.Center)
         Hint.AnchorPoint = Vector2.new(0.5,1)
         Hint.Position = UDim2.new(0.5,0,1,-8)
         Hint.Size = UDim2.new(0.6,0,0,16)
 
         local function Fmt(n)
-            local s = tostring(math.floor(tonumber(n) or 0))
-            return s:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
+            local st = tostring(math.floor(tonumber(n) or 0))
+            return st:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
         end
 
         local visible = true
@@ -1162,26 +1141,21 @@ do
                 Panel.Visible = true
                 ContentScale.Scale = 0.96
                 pcall(function()
-                    TS:Create(ContentScale, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {Scale=1}):Play()
+                    TS:Create(ContentScale, TweenInfo.new(0.20, Enum.EasingStyle.Quad), {Scale=1}):Play()
                 end)
-                pcall(function()
-                    if Blur then TS:Create(Blur, TweenInfo.new(0.22), {Size=_G.Settings.MenuBlur}):Play() end
-                end)
-                task.delay(0.24, function() busy = false end)
+                task.delay(0.21, function() busy = false end)
             else
                 pcall(function()
-                    TS:Create(ContentScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad), {Scale=0.96}):Play()
+                    TS:Create(ContentScale, TweenInfo.new(0.15, Enum.EasingStyle.Quad), {Scale=0.96}):Play()
                 end)
-                pcall(function()
-                    if Blur then TS:Create(Blur, TweenInfo.new(0.16), {Size=0}):Play() end
-                end)
-                task.delay(0.18, function()
+                task.delay(0.16, function()
                     if not visible then Panel.Visible = false end
                     busy = false
                 end)
             end
         end
 
+        Toggle.MouseButton1Click:Connect(function() SetVisible(not visible) end)
         UIS.InputBegan:Connect(function(input, processed)
             if not processed and input.KeyCode == Enum.KeyCode.RightControl then
                 SetVisible(not visible)
@@ -1190,8 +1164,7 @@ do
 
         pcall(function()
             ContentScale.Scale = 0.94
-            TS:Create(ContentScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad), {Scale=1}):Play()
-            if Blur then TS:Create(Blur, TweenInfo.new(0.32), {Size=_G.Settings.MenuBlur}):Play() end
+            TS:Create(ContentScale, TweenInfo.new(0.28, Enum.EasingStyle.Quad), {Scale=1}):Play()
         end)
 
         task.spawn(function()
@@ -1202,7 +1175,6 @@ do
                     local elapsed = os.time() - (state.StartTime or os.time())
                     TimeL.Text = ("%02d:%02d:%02d"):format(
                         math.floor(elapsed/3600), math.floor(elapsed%3600/60), elapsed%60)
-
                     local d = LP:FindFirstChild("Data")
                     local lv = d and d:FindFirstChild("Level") and d.Level.Value or 1
                     local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
@@ -1213,18 +1185,16 @@ do
                     BeliL.Text = "$ " .. Fmt(beli)
                     FragL.Text = "◈ " .. Fmt(frag)
                     KillL.Text = Fmt(state.KillCount or 0)
-
                     local mode = tostring(state.Mode or "Idle")
                     ModeL.Text = string.upper(mode)
                     StatusL.Text = tostring(_G.BobonStatus or "Idle")
-                    if mode == "Farming" then
+                    if mode == "Farming" or mode == "Raiding" then
                         StatusDot.BackgroundColor3 = ACCENT_C
                     elseif mode == "Recovering" or mode == "Dead" then
                         StatusDot.BackgroundColor3 = Color3.fromRGB(255,92,115)
                     else
                         StatusDot.BackgroundColor3 = ACCENT_A
                     end
-
                     local clusterMode = tostring(state.ClusterMode or "OFF")
                     local candidates = tonumber(diag.BringCandidates) or 0
                     local owned = tonumber(diag.BringOwned) or 0
@@ -1235,17 +1205,15 @@ do
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
-
                     if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
                         FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
                         FlagL.Text = "CONTESTED"
                     elseif clusterMode ~= "OFF" then
-                        FlagL.Text = "STACK ×" .. tostring(candidates)
+                        FlagL.Text = "STACK ×" .. tostring(moved)
                     else
                         FlagL.Text = "READY"
                     end
-
                     local packet = tostring(diag.Packet or "WAITING")
                     local ready = packet:find("CONFIRMED",1,true) ~= nil
                     CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
@@ -1254,26 +1222,21 @@ do
                         or ("BRING  " .. tostring(diag.Bring or "WAITING"))
                     BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
                 end)
-                task.wait(0.30)
+                task.wait(0.25)
             end
         end)
 
         task.spawn(function()
             while SessionAlive() and SG.Parent do
                 pcall(function()
-                    NeonGradient.Rotation = (NeonGradient.Rotation + 10) % 360
-                    OnlineDot.BackgroundTransparency =
-                        OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
-                    PanelStroke.Color = PanelStroke.Color == ACCENT_A and ACCENT_B or ACCENT_A
+                    OnlineDot.BackgroundTransparency = OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
+                    Toggle.TextColor3 = Toggle.TextColor3 == ACCENT_A and ACCENT_B or ACCENT_A
                 end)
                 task.wait(0.8)
             end
         end)
     end)
-
-    if not okUI then
-        warn("[BobonHub] UI Error: " .. tostring(uiErr))
-    end
+    if not okUI then warn("[BobonHub] UI Error: " .. tostring(uiErr)) end
 end
 
 -- ══════════════════════════════════════════════════════════════════
@@ -2110,18 +2073,18 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
             end
         end
     elseif mobName then
+        local cap = (questGatherActive or clusterGatherActive)
+            and (_G.Settings.ClusterAttackMaxTargets or 32)
+            or (_G.Settings.FastAttackMaxTargets or 32)
         for _, enemy in ipairs(folder:GetChildren()) do
-            if #results >= (_G.Settings.FastAttackMaxTargets or 12) then break end
+            if #results >= cap then break end
             if IsEnemyNamed(enemy, mobName) then
                 local allowExtra = true
                 if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
                     local root = enemy:FindFirstChild("HumanoidRootPart")
                     local verifiedAt = root and VerifiedGatherRoots[root]
                     allowExtra = verifiedAt ~= nil
-                        and now - verifiedAt
-                            <= (_G.Settings.GatherVerifiedTTL or 0.9)
-                        and type(ClientOwnsMob) == "function"
-                        and ClientOwnsMob(root) ~= false
+                        and now - verifiedAt <= (_G.Settings.GatherVerifiedTTL or 2.5)
                 end
                 if allowExtra then add(enemy) end
             end
@@ -2159,9 +2122,11 @@ function CombatController:ConfirmDamage(backend, delta)
     self.FastVerifiedAt = now
     self.LastConfirmedAt = self.FastVerifiedAt
     self.DesiredClientRange = IsClientInputBackend(backend)
-    if IsClientInputBackend(backend) and self.NextFastUpgrade <= 0 then
-        self.NextFastUpgrade = tick()
-            + (_G.Settings.CombatFastUpgradeInterval or 90)
+    if IsClientInputBackend(backend) then
+        local clustered = _G.State and _G.State.ClusterMode ~= "OFF"
+            and (tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates) or 0) >= 2
+        self.NextFastUpgrade = tick() + (clustered and 2.0
+            or (_G.Settings.CombatFastUpgradeInterval or 90))
     end
     self.PendingBackend = nil
     self.PendingTarget = nil
@@ -2364,9 +2329,23 @@ function CombatController:SelectBackend(now)
         return self.PendingBackend
     end
     if now < self.NextProbeAt then return nil end
+
+    -- A verified real-click backend is fine for one mob, but it cannot fan out
+    -- to a whole cluster. Whenever 2+ mobs are in the magnet, immediately prefer
+    -- helper/token/legacy fast paths instead of waiting the old 90-second upgrade.
+    local clusterNeedsFanout = _G.State and _G.State.ClusterMode ~= "OFF"
+        and (tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates) or 0) >= 2
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
-        if not IsClientInputBackend(self.VerifiedBackend) or now < self.NextFastUpgrade then
+        if not IsClientInputBackend(self.VerifiedBackend) then
             return self.VerifiedBackend
+        elseif not clusterNeedsFanout and now < self.NextFastUpgrade then
+            return self.VerifiedBackend
+        end
+    end
+
+    if clusterNeedsFanout then
+        for _, name in ipairs({"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}) do
+            if self:BackendAvailable(name) then return name end
         end
     end
     for _, name in ipairs({
@@ -2640,7 +2619,11 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     -- Probe only the watched primary. Once that backend has produced real HP
     -- deltas, helper/remote backends may fan out to the matching cluster.
     local dispatchEntries = entries
-    if self.VerifiedBackend ~= backend or not self:IsFastReady() then
+    local clusterFanout = _G.State and _G.State.ClusterMode ~= "OFF"
+        and not IsClientInputBackend(backend)
+        and self.VerifiedBackend == backend
+        and self:IsDamageReady()
+    if not clusterFanout and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
         dispatchEntries = { entries[1] }
     end
     local attempted = self:Dispatch(backend, tool, dispatchEntries, preferredRoot)
@@ -3288,6 +3271,7 @@ end
 function FarmPositionController:ReleaseCluster()
     GatherGeneration = GatherGeneration + 1
     VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+    if ClusterFarmController then ClusterFarmController.LastBatch = {} end
     if _G.State then
         _G.State.ClusterMode = "OFF"
         _G.State.ClusterAnchor = nil
@@ -3387,6 +3371,8 @@ end
 ClusterFarmController = {
     LastTick = 0,
     LastReason = "OFF",
+    LastBatch = {},
+    LastBatchAt = 0,
 }
 
 local function NormalizeClusterNames(names)
@@ -3499,13 +3485,7 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
     local at = VerifiedGatherRoots[root]
-    if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 1.5) then
-        return false
-    end
-    -- Explicit false means another owner/server still controls the assembly.
-    -- nil only means the executor has no ownership-query API; the recent successful
-    -- same-anchor move is kept eligible instead of forcing one-by-one fallback.
-    return ClientOwnsMob(root) ~= false
+    return at ~= nil and tick() - at <= (_G.Settings.GatherVerifiedTTL or 2.5)
 end
 
 function ClusterFarmController:SelectPrimary()
@@ -3535,8 +3515,41 @@ function ClusterFarmController:SelectPrimary()
     return best
 end
 
+function ClusterFarmController:RestackBatch()
+    if not self:PolicyValid() then return 0 end
+    local state = _G.State
+    local anchorCF = state and state.ClusterAnchor
+    if not anchorCF then return 0 end
+    local anchor = anchorCF.Position
+    local now = tick()
+    local kept, moved = {}, 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model = entry.Model
+        local root = model and model:FindFirstChild("HumanoidRootPart")
+        local hum = model and model:FindFirstChildOfClass("Humanoid")
+        if model and model.Parent and root and root.Parent and hum and hum.Health > 0
+            and self:IsModelAllowed(model) then
+            kept[#kept + 1] = {Model=model, Humanoid=hum, Root=root}
+            local ok = pcall(function()
+                local rot = root.CFrame.Rotation
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.new(anchor) * rot
+            end)
+            if ok then
+                VerifiedGatherRoots[root] = now
+                moved = moved + 1
+            end
+        end
+    end
+    self.LastBatch = kept
+    if moved > 0 then state.ClusterLastMoved = now end
+    return moved
+end
+
 function ClusterFarmController:Tick()
     if not self:PolicyValid() then
+        self.LastBatch = {}
         if _G.State and _G.State.ClusterMode ~= "OFF" then
             FarmPositionController:ReleaseCluster()
         end
@@ -3544,8 +3557,8 @@ function ClusterFarmController:Tick()
     end
 
     local now = tick()
-    if now - (self.LastTick or 0) < (_G.Settings.ClusterRefresh or 0.03) then
-        return 0
+    if now - (self.LastTick or 0) < (_G.Settings.ClusterRefresh or 0.015) then
+        return self:RestackBatch()
     end
     self.LastTick = now
 
@@ -3554,22 +3567,19 @@ function ClusterFarmController:Tick()
     local anchor = anchorCF.Position
     local folder = workspace:FindFirstChild("Enemies")
     if not folder then return 0 end
-
     ExpandSimulationRadius()
 
-    local ttl = _G.Settings.GatherVerifiedTTL or 1.5
+    local ttl = _G.Settings.GatherVerifiedTTL or 2.5
     for root, at in pairs(VerifiedGatherRoots) do
-        if not root.Parent or now - at > ttl then
-            VerifiedGatherRoots[root] = nil
-        end
+        if not root.Parent or now - at > ttl then VerifiedGatherRoots[root] = nil end
     end
 
-    -- Collect ALL matching mobs in the current farm field before moving any of
-    -- them. This avoids "pick one -> move -> rescan -> next one" behaviour.
+    -- Snapshot the WHOLE active spawn before moving anything. No primary-target
+    -- gate, no network-owner gate, no per-mob queue and no gather limit.
     local candidates = {}
     local maxDistance = state.ClusterMode == "RAID"
         and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
-        or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 2000)
+        or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000)
     for _, mob in ipairs(folder:GetChildren()) do
         if self:IsModelAllowed(mob) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -3579,94 +3589,36 @@ function ClusterFarmController:Tick()
                 if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                     and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
                     and (pos - anchor).Magnitude <= maxDistance then
-                    candidates[#candidates + 1] = {
-                        Model = mob,
-                        Humanoid = hum,
-                        Root = root,
-                        Position = pos,
-                        Ownership = nil,
-                    }
+                    candidates[#candidates + 1] = {Model=mob, Humanoid=hum, Root=root, Position=pos}
                 end
             end
         end
     end
 
+    self.LastBatch = candidates
+    self.LastBatchAt = now
     state.ClusterLastSeen = #candidates > 0 and now or (state.ClusterLastSeen or 0)
 
-    -- Phase 1: query every candidate first. No distance sorting and no gather cap.
-    local owned, unknown, explicitOther = 0, 0, 0
+    -- Ownership is counted only for diagnostics. Every live candidate gets the
+    -- same CFrame write in this pass; otherwise the old code could wait until the
+    -- current target died before the next NPC became locally movable.
+    local owned, unknown, other = 0, 0, 0
     for _, entry in ipairs(candidates) do
-        entry.Ownership = ClientOwnsMob(entry.Root)
-        if entry.Ownership == true then
-            owned = owned + 1
-        elseif entry.Ownership == nil then
-            unknown = unknown + 1
-        else
-            explicitOther = explicitOther + 1
-        end
+        local own = ClientOwnsMob(entry.Root)
+        if own == true then owned = owned + 1 elseif own == nil then unknown = unknown + 1 else other = other + 1 end
     end
 
-    -- Phase 2: one tight pass to the exact same anchor.
-    -- true: proven local ownership.
-    -- nil: executor cannot query ownership, so still attempt the real CFrame write.
-    -- false: do not mark verified; keep retrying after the next simulation refresh.
-    local moved = 0
-    local generation = GatherGeneration
-    for _, entry in ipairs(candidates) do
-        if generation ~= GatherGeneration then return 0 end
-        if entry.Ownership ~= false and entry.Root and entry.Root.Parent then
-            local okMove = pcall(function()
-                entry.Root.AssemblyLinearVelocity = Vector3.zero
-                entry.Root.AssemblyAngularVelocity = Vector3.zero
-                entry.Root.CFrame = CFrame.new(anchor) * entry.Root.CFrame.Rotation
-            end)
-            if okMove then
-                -- A second zero prevents NPC AI/physics from immediately peeling
-                -- individual mobs away between cluster refreshes.
-                pcall(function()
-                    entry.Root.AssemblyLinearVelocity = Vector3.zero
-                    entry.Root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                VerifiedGatherRoots[entry.Root] = now
-                moved = moved + 1
-                if not state.ClusterPrimary or not self:IsVerified(state.ClusterPrimary) then
-                    state.ClusterPrimary = entry.Model
-                end
-            else
-                VerifiedGatherRoots[entry.Root] = nil
-            end
-        else
-            VerifiedGatherRoots[entry.Root] = nil
-        end
-    end
-
-    -- One immediate re-stack pass for every moved root. All writes happen within
-    -- the same magnet tick so a whole spawn looks like one batch rather than a queue.
-    if moved > 1 then
-        for _, entry in ipairs(candidates) do
-            if VerifiedGatherRoots[entry.Root] == now and entry.Root.Parent then
-                pcall(function()
-                    entry.Root.CFrame = CFrame.new(anchor) * entry.Root.CFrame.Rotation
-                    entry.Root.AssemblyLinearVelocity = Vector3.zero
-                    entry.Root.AssemblyAngularVelocity = Vector3.zero
-                end)
-            end
-        end
-    end
-
-    if moved > 0 then state.ClusterLastMoved = now end
+    local moved = self:RestackBatch()
     local primary = self:SelectPrimary()
     state.ClusterPrimary = primary
-
     _G.BobonDiagnostics.BringCandidates = #candidates
     _G.BobonDiagnostics.BringOwned = owned
     _G.BobonDiagnostics.BringMoved = moved
-    _G.BobonDiagnostics.Bring = moved > 0 and ("ALL-MOB-" .. state.ClusterMode)
+    _G.BobonDiagnostics.Bring = moved > 0 and ("TRUE-ALL-" .. state.ClusterMode)
         or (#candidates == 0 and "WAIT-SPAWN")
-        or (unknown > 0 and "TRY-NO-OWNERSHIP-API")
-        or (explicitOther > 0 and "WAIT-NETWORK-OWNER")
-        or "WAIT-OWNERSHIP"
-
+        or (unknown > 0 and "STACK-NO-OWNER-API")
+        or (other > 0 and "STACK-RETRY-NET")
+        or "WAIT-STACK"
     return moved
 end
 
@@ -3681,11 +3633,21 @@ function FarmPositionController:GatherMobCluster(mobName, primary)
     return ClusterFarmController:Tick()
 end
 
--- NPC magnet loop only. It never writes MovementOwner and never moves player.
+-- TRUE ALL-MOB magnet: Heartbeat keeps every member of the latest full-spawn
+-- snapshot pinned to one anchor while a light rescan discovers new respawns.
+local ClusterHeartbeatConnection
+pcall(function()
+    ClusterHeartbeatConnection = RunService.Heartbeat:Connect(function()
+        if not SessionAlive() then return end
+        if _G.State and _G.State.ClusterMode ~= "OFF" then
+            pcall(function() ClusterFarmController:RestackBatch() end)
+        end
+    end)
+end)
 task.spawn(function()
-    while SessionAlive() and task.wait(_G.Settings.ClusterRefresh or 0.03) do
+    while SessionAlive() and task.wait(0.03) do
         local ok, err = pcall(function() ClusterFarmController:Tick() end)
-        if not ok and _G.Settings.Debug then warn("[BobonHub] Cluster Error: " .. tostring(err)) end
+        if not ok and _G.Settings.DEBUG then warn("[BobonHub] Cluster Error: " .. tostring(err)) end
     end
 end)
 
@@ -8295,15 +8257,16 @@ _G.BobonUnload = function()
     pcall(function() CombatController:Cleanup() end)
     pcall(function() if FruitManager then FruitManager.Busy = false end end)
     pcall(function() FarmPositionController:ReleaseCluster() end)
+    pcall(function() if ClusterHeartbeatConnection then ClusterHeartbeatConnection:Disconnect() end end)
     pcall(function() BindPlayerDamage(nil, nil) end)
     pcall(function() if SG and SG.Parent then SG:Destroy() end end)
 end
 
 
-print("[BobonHub v19.0] Full Script Loaded Successfully!")
-print("[BobonHub v19.0] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v19.0] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v19.0] Modules: QuestFarm | Health-Verified Combat | ALL-MOB Cluster | Full Melee | Kaitun Swords | Fullscreen HUD")
-print("[BobonHub v19.0] Progression: Farm | Sea2/3 | TTK/CDK | Full Melee | Soul Guitar | Dough King | Continuity")
-print("[BobonHub v19.0] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v19.0] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v19.1] Full Script Loaded Successfully!")
+print("[BobonHub v19.1] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v19.1] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v19.1] Modules: QuestFarm | Health-Verified Combat | TRUE ALL-MOB Cluster | Full Melee | Kaitun Swords | Transparent Fullscreen HUD")
+print("[BobonHub v19.1] Progression: Farm | Sea2/3 | TTK/CDK | Full Melee | Soul Guitar | Dough King | Continuity")
+print("[BobonHub v19.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v19.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
