@@ -1,9 +1,38 @@
 -- =================================================================
---         BOBON HUB v21.18 AUTHORITY CLUSTER FIX | SERVER-PROVEN STACK | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.19 SHADOW-RANGE CLUSTER | TRUE MULTI-DAMAGE | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.17 FULL-CONTEXT CLUSTER DAMAGE | Version: v21.18
+--         Base: v21.18 AUTHORITY CLUSTER FIX | Version: v21.19
 --
---
+--  v21.19 ROOT-CAUSE FIX (Roblox(9).mp4):
+--  [SR-1] v21.18 deadlocked because it moved ONE unknown-owner mob locally to the
+--         anchor, then tried to prove HP at that fake client position. The server can
+--         still keep the NPC at its original position, so CLIENT-HELPER pcall succeeds
+--         while quest/HP remains unchanged (`found 4 / proven 0 / stacked 0`).
+--  [SR-2] Server-shadow positions are now captured BEFORE any visual magnet write and
+--         are used for attack-range eligibility. A local CFrame can never widen range.
+--  [SR-3] Normal QUEST attack no longer waits for one authority probe. Every same-name
+--         mob whose server-shadow position is inside the real 100-stud field is included
+--         in the SAME combat cycle immediately.
+--  [SR-4] Visual magnet is restored for the whole field, but it is presentation only
+--         until OWNED or real per-Humanoid HP delta proves authority. `visual` and
+--         `proven/stacked` are intentionally separate diagnostics.
+--  [SR-5] Air-farm QUEST prefers the canonical direct RegisterAttack + RegisterHit
+--         batch path first. The stale COMBAT_REMOTE_THREAD flag no longer blocks this
+--         HP-verified path; if it truly causes no damage, normal backend failure rotates.
+--  [SR-6] Canonical batch is built only from server-shadow-in-range victims, fixing the
+--         v21.15 false batch where visually stacked ghosts were outside server range.
+--  [SR-7] CLIENT-HELPER/TOKEN fallback remains, but a globally proven helper cannot
+--         monopolize a new zero-damage field forever because LEGACY-2 gets first probe.
+--  [SR-8] Global primary-only no-damage recovery is disabled while shadow multi-target
+--         combat is active; exact aggregate HP snapshots remain the source of truth.
+--  [SR-9] Normal QUEST never resumes the old per-mob ownership tour. SKIP keeps its
+--         dedicated physical acquisition route. No anti-cheat/kick bypass is added.
+-- [SR-10] If one real 100-stud combat circle cannot cover the whole spawn, a greedy
+--         field-coverage planner moves between a small number of shared centers. It
+--         prioritizes mobs without recent HP proof and never chases mob-by-mob.
+-- [SR-11] Direct LEGACY combat starts with the canonical one-swing multi-target batch.
+--         Exact per-Humanoid HP proof identifies misses; only missed victims then receive
+--         fresh independent swings. This self-adapts instead of hard-coding one payload.
 --
 --  v21.18 ROOT-CAUSE / AUTHORITY CLUSTER FIX (Roblox(8).mp4):
 --  [AC-1] The old `stacked` counter was false-positive on executors with no
@@ -540,7 +569,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.18 AUTHORITY CLUSTER FIX + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.19 SHADOW-RANGE CLUSTER + TRUE MULTI-DAMAGE + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -755,6 +784,23 @@ _G.Settings = {
     ClusterAuthorityFieldRadius = 180,
     ClusterQuestPhysicalFallback = false,
     ClusterSkipPhysicalFallback = true,
+    -- v21.19 dual-coordinate cluster: server-shadow range drives DAMAGE, while
+    -- local CFrame pinning is only the visual magnet. Never use the visual write
+    -- to decide whether a server hit is plausible.
+    ClusterShadowCombatEnabled = true,
+    ClusterShadowVisualMagnet = true,
+    ClusterShadowAttackRange = 100,
+    ClusterShadowRangeSlack = 0,
+    ClusterShadowVisualRefresh = 0.05,
+    ClusterShadowMaxTargets = 12,
+    ClusterShadowPreferLegacy = true,
+    -- If one 100-stud circle cannot cover the whole spawn, move between a tiny
+    -- number of FIELD coverage centers (never chase mob-by-mob). A center is held
+    -- briefly, then stale/not-yet-damaged server-shadow targets get priority.
+    ClusterShadowCoverageEnabled = true,
+    ClusterShadowCoverageHold = 0.70,
+    ClusterShadowCoverageFresh = 0.55,
+    ClusterShadowCoverageSafety = 2.0,
     -- Current live public combat examples register a fresh attack before each
     -- tokenized single-target hit. Do the same for every proven stack member
     -- instead of relying on one batch swing being consumed for multiple victims.
@@ -1445,7 +1491,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.18", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.19", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -1610,11 +1656,13 @@ do
                     local owned = tonumber(diag.BringOwned) or 0
                     local proven = tonumber(diag.BringDamageProven) or 0
                     local probes = tonumber(diag.BringProbe) or 0
+                    local reachable = tonumber(diag.BringReachable) or 0
+                    local visual = tonumber(diag.BringVisual) or 0
                     local unknown = tonumber(diag.BringUnknown) or 0
                     local moved = tonumber(diag.BringMoved) or 0
                     if clusterMode ~= "OFF" then
-                        ClusterL.Text = ("ALL-MOB %s  • found %d • owned %d • proven %d • stacked %d • testing %d • unknown %d")
-                            :format(clusterMode, candidates, owned, proven, moved, probes, unknown)
+                        ClusterL.Text = ("ALL-MOB %s  • found %d • reachable %d • visual %d • proven %d • stacked %d")
+                            :format(clusterMode, candidates, reachable, visual, proven, moved)
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
@@ -1622,6 +1670,8 @@ do
                         FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
                         FlagL.Text = "CONTESTED"
+                    elseif reachable > 0 and visual > 0 and moved == 0 then
+                        FlagL.Text = "RANGE ×" .. tostring(reachable)
                     elseif probes > 0 then
                         FlagL.Text = "VERIFYING ×" .. tostring(probes)
                     elseif clusterMode ~= "OFF" then
@@ -1633,9 +1683,16 @@ do
                     local ready = packet:find("CONFIRMED",1,true) ~= nil
                     CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
                     CombatL.TextColor3 = ready and READY_GREEN or ACCENT_C
-                    BringL.Text = moved > 0 and ("BRING  VERIFIED ×" .. tostring(moved))
-                        or ("BRING  " .. tostring(diag.Bring or "WAITING"))
-                    BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
+                    if moved > 0 then
+                        BringL.Text = "BRING  VERIFIED ×" .. tostring(moved)
+                        BringL.TextColor3 = ACCENT_A
+                    elseif reachable > 0 then
+                        BringL.Text = "BRING  SHADOW-RANGE ×" .. tostring(reachable)
+                        BringL.TextColor3 = ACCENT_C
+                    else
+                        BringL.Text = "BRING  " .. tostring(diag.Bring or "WAITING")
+                        BringL.TextColor3 = TEXT_MUTED
+                    end
                 end)
                 task.wait(0.25)
             end
@@ -2219,7 +2276,10 @@ local GatherAuthorityClass = setmetatable({}, { __mode = "k" })
 local GatherProbeCandidates = setmetatable({}, { __mode = "k" })
 local GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
 local GatherProbeAttempts = setmetatable({}, { __mode = "k" })
+-- Server-shadow positions are captured before a local magnet write. They are never
+-- overwritten by the visual anchor and therefore remain usable for real range gating.
 local GatherOriginalPositions = setmetatable({}, { __mode = "k" })
+local GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
 local GatherGeneration = 0
 
 local function ToolCombatKind(tool)
@@ -2571,11 +2631,15 @@ end
 
 function CombatController:LegacyAllowed()
     if not self:ResolveRemotes() then return false end
+    -- v21.19: the current public fast-attack shape talks to these two remotes
+    -- directly. COMBAT_REMOTE_THREAD being true does not prove that direct
+    -- RegisterAttack/RegisterHit is invalid. Shadow QUEST probes it and trusts
+    -- only a real HP delta; outside that mode preserve the older conservative gate.
+    if ClusterFarmController and ClusterFarmController:IsShadowCombatActive() then
+        return true
+    end
     local gameGlobal = self:GetGameGlobal()
     local flag = gameGlobal and rawget(gameGlobal, "COMBAT_REMOTE_THREAD")
-    -- Missing flag is not evidence that the 2-argument RegisterHit path is
-    -- invalid. Let the normal HP-delta verifier probe it once and blacklist it
-    -- only when the server actually produces no damage.
     return flag ~= true
 end
 
@@ -2595,69 +2659,108 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
     local me = HRP()
     local folder = workspace:FindFirstChild("Enemies")
     if not me or not folder then return {} end
+
     local results, seen = {}, {}
     local activeQuestMob = _G.State and _G.State.ActiveQuestMob
     local questGatherActive = _G.State.Mode == "Farming"
-        and activeQuestMob ~= nil
-        and mobName ~= nil
-        and string.lower(tostring(activeQuestMob))
-            == string.lower(tostring(mobName))
+        and activeQuestMob ~= nil and mobName ~= nil
+        and string.lower(tostring(activeQuestMob)) == string.lower(tostring(mobName))
     local clusterGatherActive = ClusterFarmController
         and ClusterFarmController:IsAttackCluster(mobName) == true
-    local now = tick()
-    local function add(enemy)
+    local shadowQuest = questGatherActive and ClusterFarmController
+        and ClusterFarmController:IsShadowCombatActive()
+
+    local function add(enemy, shadowRange)
         if not enemy or seen[enemy] then return end
         local hum = enemy:FindFirstChildOfClass("Humanoid")
         local root = enemy:FindFirstChild("HumanoidRootPart")
         local part = SelectEnemyHitPart(enemy)
-        local okPosition, rootPosition = pcall(function() return root.Position end)
-        if hum and hum.Health > 0 and root and root.Parent and part and part.Parent
-            and okPosition and IsValidPos(rootPosition)
-            and (rootPosition - me.Position).Magnitude <= maxRange then
+        if not hum or hum.Health <= 0 or not root or not root.Parent
+            or not part or not part.Parent then
+            return
+        end
+
+        local rangeOK = false
+        local gatePosition = nil
+        if shadowRange and ClusterFarmController then
+            gatePosition = ClusterFarmController:GetServerShadowPosition(enemy)
+            if gatePosition then
+                local range = tonumber(maxRange)
+                    or tonumber(_G.Settings.ClusterShadowAttackRange)
+                    or tonumber(_G.Settings.FastAttackRange) or 100
+                range = range + (tonumber(_G.Settings.ClusterShadowRangeSlack) or 0)
+                rangeOK = (gatePosition - me.Position).Magnitude <= range
+            end
+        else
+            local okPosition, rootPosition = pcall(function() return root.Position end)
+            if okPosition and IsValidPos(rootPosition) then
+                gatePosition = rootPosition
+                rangeOK = (rootPosition - me.Position).Magnitude <= maxRange
+            end
+        end
+
+        if rangeOK then
             seen[enemy] = true
-            results[#results + 1] = { Model=enemy, Humanoid=hum, Root=root, Part=part }
+            results[#results + 1] = {
+                Model=enemy, Humanoid=hum, Root=root, Part=part,
+                ShadowPosition=shadowRange and gatePosition or nil,
+            }
         end
     end
-    add(preferred)
+
+    if preferred then
+        add(preferred, shadowQuest)
+    end
+
     local raidClusterActive = _G.State and _G.State.Mode == "Raiding"
         and _G.State.ClusterMode == "RAID" and ClusterFarmController ~= nil
     if raidClusterActive then
-        local cap = _G.Settings.RaidFastAttackMaxTargets or _G.Settings.FastAttackMaxTargets or 12
+        local cap = _G.Settings.RaidFastAttackMaxTargets
+            or _G.Settings.FastAttackMaxTargets or 12
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= cap then break end
             if enemy ~= preferred and not IsRaidBossModel(enemy)
                 and (ClusterFarmController:IsVerified(enemy)
                     or ClusterFarmController:IsProbeCandidate(enemy)) then
-                add(enemy)
+                add(enemy, false)
             end
         end
     elseif _G.State and _G.State.ClusterMode == "ITEM"
         and _G.State.Mode == "GettingItem" and ClusterFarmController then
-        local cap = _G.Settings.ClusterAttackMaxTargets or _G.Settings.FastAttackMaxTargets or 64
+        local cap = _G.Settings.ClusterAttackMaxTargets
+            or _G.Settings.FastAttackMaxTargets or 64
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= cap then break end
             if enemy ~= preferred and ClusterFarmController:IsModelAllowed(enemy)
                 and (ClusterFarmController:IsVerified(enemy)
                     or ClusterFarmController:IsProbeCandidate(enemy)) then
-                add(enemy)
+                add(enemy, false)
             end
         end
     elseif mobName then
-        local cap = (questGatherActive or clusterGatherActive)
-            and (_G.Settings.ClusterAttackMaxTargets or 32)
-            or (_G.Settings.FastAttackMaxTargets or 32)
+        local cap = shadowQuest
+            and (tonumber(_G.Settings.ClusterShadowMaxTargets) or 12)
+            or ((questGatherActive or clusterGatherActive)
+                and (_G.Settings.ClusterAttackMaxTargets or 32)
+                or (_G.Settings.FastAttackMaxTargets or 32))
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= cap then break end
             if IsEnemyNamed(enemy, mobName) then
-                local allowExtra = true
-                if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
-                    local verified = ClusterFarmController
-                        and ClusterFarmController:IsVerified(enemy)
-                    local probe = ClusterFarmController
-                        and ClusterFarmController:IsProbeCandidate(enemy)
-                    allowExtra = verified or probe
+                if shadowQuest then
+                    -- Key v21.19 rule: attack eligibility comes from the server-shadow
+                    -- position captured before magnet writes, NOT root.Position after pin.
+                    add(enemy, true)
+                else
+                    local allowExtra = true
+                    if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
+                        local verified = ClusterFarmController
+                            and ClusterFarmController:IsVerified(enemy)
+                        local probe = ClusterFarmController
+                            and ClusterFarmController:IsProbeCandidate(enemy)
+                        allowExtra = verified or probe
+                    end
+                    if allowExtra then add(enemy, false) end
                 end
-                if allowExtra then add(enemy) end
             end
         end
     end
@@ -2984,6 +3087,8 @@ end
 
 function CombatController:SelectBackend(now)
     local airFarm = IsAirFarmCombat()
+    local shadowQuest = airFarm and ClusterFarmController
+        and ClusterFarmController:IsShadowCombatActive()
     local stackedCount = tonumber(_G.BobonDiagnostics
         and _G.BobonDiagnostics.BringMoved) or 0
     local clusterMulti = airFarm
@@ -2991,26 +3096,40 @@ function CombatController:SelectBackend(now)
         and stackedCount >= 2
 
     if self.PendingBackend then
-        local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
-        local provenAirRemote = airFarm
-            and not IsClientInputBackend(self.PendingBackend)
-            and self.VerifiedBackend == self.PendingBackend
-            and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
-        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
-            and not provenAirRemote then
-            return nil
-        end
-        if airFarm and IsClientInputBackend(self.PendingBackend) then
-            self:AbortPending("AIR-FARM-REMOTE-ONLY")
+        -- A stale helper pending from the previous target/field must not block the
+        -- direct shadow-batch probe. This was visible in Roblox(9): helper -> wait ->
+        -- helper while quest stayed 0/7.
+        if shadowQuest and _G.Settings.ClusterShadowPreferLegacy ~= false
+            and self.PendingBackend ~= "LEGACY-2"
+            and self:BackendAvailable("LEGACY-2") then
+            self:AbortPending("SHADOW-DIRECT-UPGRADE")
         else
-            return self.PendingBackend
+            local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+            local provenAirRemote = airFarm
+                and not IsClientInputBackend(self.PendingBackend)
+                and self.VerifiedBackend == self.PendingBackend
+                and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+            if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
+                and not provenAirRemote then
+                return nil
+            end
+            if airFarm and IsClientInputBackend(self.PendingBackend) then
+                self:AbortPending("AIR-FARM-REMOTE-ONLY")
+            else
+                return self.PendingBackend
+            end
         end
     end
     if now < self.NextProbeAt then return nil end
 
-    -- Never discard a backend that has already caused real HP loss merely because
-    -- the cluster grew from one target to several. v21.18 changes HOW that backend
-    -- fans out: every target gets its own registered swing.
+    -- v21.19: do NOT let a globally-proven CLIENT-HELPER monopolize a new field.
+    -- Roblox(9).mp4 showed repeated AIR-ATTACK:CLIENT-HELPER with zero quest/HP.
+    -- Probe the canonical direct remote first for shadow-qualified targets.
+    if shadowQuest and _G.Settings.ClusterShadowPreferLegacy ~= false
+        and self:BackendAvailable("LEGACY-2") then
+        return "LEGACY-2"
+    end
+
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
@@ -3018,12 +3137,11 @@ function CombatController:SelectBackend(now)
     end
 
     if airFarm then
-        -- TOKEN-4 is the current single-target shape also seen in public 2026 farm
-        -- code. With independent fan-out we repeat that proven shape per NPC instead
-        -- of converting it into the legacy one-batch payload.
-        local order = clusterMulti
-            and {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"}
-            or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}
+        local order = shadowQuest
+            and {"LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
+            or (clusterMulti
+                and {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"}
+                or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"})
         for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
         end
@@ -3189,6 +3307,73 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
         end)
 
     elseif backend == "LEGACY-2" then
+        local shadowQuest = ClusterFarmController
+            and ClusterFarmController:IsShadowCombatActive()
+        if shadowQuest then
+            -- v21.19 adaptive TRUE multi-damage:
+            -- Start with the canonical current public shape: ONE RegisterAttack and
+            -- ONE RegisterHit containing every server-shadow-in-range {Model,Head}.
+            -- Exact per-Humanoid HP snapshots then reveal which victims the server
+            -- actually accepted. If only a subset takes damage, subsequent ticks give
+            -- ONLY the unproven victims fresh independent swings until each is proven.
+            local limit = math.min(#entries,
+                math.max(1, math.floor(tonumber(_G.Settings.ClusterShadowMaxTargets) or 12)))
+            local unproven = {}
+            for i = 1, limit do
+                local entry = entries[i]
+                if not (ClusterFarmController
+                    and ClusterFarmController:IsDamageProven(entry.Model)) then
+                    unproven[#unproven + 1] = entry
+                end
+            end
+
+            local function sendCanonicalBatch()
+                local hitList, basePart = {}, nil
+                for i = 1, limit do
+                    local entry = entries[i]
+                    local part = entry.Model:FindFirstChild("Head") or entry.Part
+                    if part and part:IsA("BasePart") then
+                        hitList[#hitList + 1] = {entry.Model, part}
+                        basePart = basePart or part
+                    end
+                end
+                if not basePart or #hitList == 0 then return false end
+                pcall(function() self.RegisterAttack:FireServer(0) end)
+                return pcall(function()
+                    self.RegisterHit:FireServer(basePart, hitList)
+                end)
+            end
+
+            -- First contact: use the exact one-swing batch layout.  This avoids
+            -- replacing a known-good public shape with speculative per-target spam.
+            if #unproven == limit and limit >= 2 then
+                return sendCanonicalBatch()
+            end
+
+            -- Partial proof means the batch is genuinely reaching the server but one
+            -- or more victims were ignored. Retry only those victims with a fresh swing.
+            if #unproven > 0 then
+                local anyOk = false
+                local oneGap = math.max(0.01,
+                    tonumber(_G.Settings.ClusterIndependentSwingGap) or 0.022)
+                for i, entry in ipairs(unproven) do
+                    local part = entry.Model:FindFirstChild("Head") or entry.Part
+                    if part and part:IsA("BasePart") then
+                        pcall(function() self.RegisterAttack:FireServer(0) end)
+                        local ok = pcall(function()
+                            self.RegisterHit:FireServer(part, {{entry.Model, part}})
+                        end)
+                        anyOk = anyOk or ok
+                        if oneGap > 0 and i < #unproven then task.wait(oneGap) end
+                    end
+                end
+                return anyOk
+            end
+
+            -- All current victims proved real damage recently: efficient batch mode.
+            return sendCanonicalBatch()
+        end
+
         if clusterIndependent then
             local anyOk = false
             local limit = math.min(#entries, maxFanout)
@@ -4269,6 +4454,7 @@ function FarmPositionController:ReleaseCluster()
     GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
     GatherProbeAttempts = setmetatable({}, { __mode = "k" })
     GatherOriginalPositions = setmetatable({}, { __mode = "k" })
+    GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
     if ClusterFarmController then
         ClusterFarmController.LastBatch = {}
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
@@ -4293,6 +4479,12 @@ function FarmPositionController:ReleaseCluster()
         _G.State.ClusterAuthorityProbeTarget = nil
         _G.State.ClusterAuthorityProbeStartedAt = 0
         _G.State.ClusterAuthorityProbeFirstAttackAt = 0
+        _G.State.ClusterShadowCoverageCF = nil
+        _G.State.ClusterShadowCoverageGround = nil
+        _G.State.ClusterShadowCoverageSelectedAt = 0
+        _G.State.ClusterShadowCoverageReachable = 0
+        _G.State.ClusterShadowCoverageTotal = 0
+        _G.State.ClusterShadowVisualAnchor = nil
     end
     _G.BobonDiagnostics.Bring = "OFF"
     _G.BobonDiagnostics.BringCandidates = 0
@@ -4301,6 +4493,8 @@ function FarmPositionController:ReleaseCluster()
     _G.BobonDiagnostics.BringUnknown = 0
     _G.BobonDiagnostics.BringServerOwned = 0
     _G.BobonDiagnostics.BringProbe = 0
+    _G.BobonDiagnostics.BringReachable = 0
+    _G.BobonDiagnostics.BringVisual = 0
     _G.BobonDiagnostics.BringMoved = 0
 end
 
@@ -4489,6 +4683,7 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         GatherProbeFailedUntil = setmetatable({}, { __mode = "k" })
         GatherProbeAttempts = setmetatable({}, { __mode = "k" })
         GatherOriginalPositions = setmetatable({}, { __mode = "k" })
+        GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
@@ -4503,6 +4698,12 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         state.ClusterAuthorityProbeTarget = nil
         state.ClusterAuthorityProbeStartedAt = 0
         state.ClusterAuthorityProbeFirstAttackAt = 0
+        state.ClusterShadowCoverageCF = nil
+        state.ClusterShadowCoverageGround = nil
+        state.ClusterShadowCoverageSelectedAt = 0
+        state.ClusterShadowCoverageReachable = 0
+        state.ClusterShadowCoverageTotal = 0
+        state.ClusterShadowVisualAnchor = nil
         DLog("CLUSTER", "Activate " .. tostring(mode) .. " / " .. tostring(list[1]))
     end
     state.ClusterMode = mode
@@ -4565,6 +4766,12 @@ function ClusterFarmController:IsVerified(model)
     if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 2.5) then
         return false
     end
+    -- Shadow QUEST may move its visual pocket between FIELD coverage centers.
+    -- Authority is OWNED/real HP proof, not residence at the original static anchor.
+    -- Do not revoke a genuinely proven victim merely because the presentation anchor
+    -- moved 20-80 studs to cover another part of the same spawn.
+    if self:IsShadowCombatActive() then return true end
+
     local anchor = _G.State and _G.State.ClusterAnchor
     local ok, pos = pcall(function() return root.Position end)
     if not anchor or not ok or not IsValidPos(pos)
@@ -4577,6 +4784,9 @@ function ClusterFarmController:IsVerified(model)
 end
 
 function ClusterFarmController:IsProbeCandidate(model)
+    -- v21.19 normal QUEST no longer serializes the whole field through one
+    -- fake-position HP probe. SKIP/ITEM/RAID may still use the legacy probe path.
+    if self:IsShadowCombatActive() then return false end
     if _G.Settings.ClusterAuthorityEnabled == false then return false end
     if not model or not self:IsModelAllowed(model) or self:IsVerified(model) then return false end
     local root = model:FindFirstChild("HumanoidRootPart")
@@ -4586,8 +4796,194 @@ function ClusterFarmController:IsProbeCandidate(model)
     return GatherProbeCandidates[root] == true
 end
 
+function ClusterFarmController:IsShadowCombatActive()
+    local state = _G.State
+    return _G.Settings.ClusterShadowCombatEnabled ~= false
+        and state ~= nil and state.Mode == "Farming"
+        and state.ClusterMode == "QUEST"
+        and state.ActiveQuestMob ~= nil
+end
+
+function ClusterFarmController:GetServerShadowPosition(model)
+    if not model then return nil end
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+    local shadow = GatherOriginalPositions[root]
+    if shadow and IsValidPos(shadow) then return shadow end
+    local ok, pos = pcall(function() return root.Position end)
+    if ok and IsValidPos(pos) then
+        GatherOriginalPositions[root] = pos
+        return pos
+    end
+    return nil
+end
+
+function ClusterFarmController:IsShadowAttackEligible(model, maxRange)
+    if not self:IsShadowCombatActive() or not model or not self:IsModelAllowed(model) then
+        return false
+    end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+    local me = HRP()
+    if not hum or hum.Health <= 0 or not root or not root.Parent or not me then return false end
+    local shadow = self:GetServerShadowPosition(model)
+    if not shadow then return false end
+    local range = tonumber(maxRange)
+        or tonumber(_G.Settings.ClusterShadowAttackRange)
+        or tonumber(_G.Settings.FastAttackRange)
+        or 100
+    range = range + (tonumber(_G.Settings.ClusterShadowRangeSlack) or 0)
+    return (shadow - me.Position).Magnitude <= range
+end
+
+function ClusterFarmController:GetShadowReachableCount(maxRange)
+    if not self:IsShadowCombatActive() then return 0 end
+    local count = 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        if entry.Model and self:IsShadowAttackEligible(entry.Model, maxRange) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- v21.19 FIELD-COVERAGE PLANNER.  If every real/server-shadow spawn point fits
+-- inside one 100-stud combat circle this returns the stable cluster center. If the
+-- field is wider, it chooses a center covering the most stale/unproven mobs and
+-- changes centers only after a short hold.  This is field-level movement, not a
+-- per-NPC ownership tour.
+function ClusterFarmController:GetShadowCoverageHoverCFrame(height)
+    if not self:IsShadowCombatActive() or _G.Settings.ClusterShadowCoverageEnabled == false then
+        return self:GetHoverCFrame(height)
+    end
+    local state = _G.State
+    local baseAnchor = state and state.ClusterAnchor
+    if not state or not baseAnchor then return self:GetHoverCFrame(height) end
+
+    local rows = {}
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, root, hum = entry.Model, entry.Root, entry.Humanoid
+        if model and model.Parent and root and root.Parent and hum and hum.Health > 0
+            and self:IsModelAllowed(model) then
+            local shadow = self:GetServerShadowPosition(model)
+            if shadow and IsValidPos(shadow) then
+                rows[#rows + 1] = {Model=model, Root=root, Position=shadow}
+            end
+        end
+    end
+    if #rows == 0 then return self:GetHoverCFrame(height) end
+
+    local h = height or _G.Settings.FarmHeight or 22
+    if FarmSafetyActive() then h = math.max(h, _G.Settings.EmergencyHoverHeight or 28) end
+    local offsetX = _G.Settings.FarmOffsetX or 0
+    local range = tonumber(_G.Settings.ClusterShadowAttackRange)
+        or tonumber(_G.Settings.FastAttackRange) or 100
+    range = math.max(20, range - math.max(0, tonumber(_G.Settings.ClusterShadowCoverageSafety) or 2))
+    local freshWindow = math.max(0.15, tonumber(_G.Settings.ClusterShadowCoverageFresh) or 0.55)
+    local now = tick()
+
+    local candidates, seen = {}, {}
+    local function addGround(p)
+        if not p or not IsValidPos(p) then return end
+        local key = string.format("%.1f:%.1f:%.1f", p.X, p.Y, p.Z)
+        if seen[key] then return end
+        seen[key] = true
+        candidates[#candidates + 1] = p
+    end
+
+    addGround(baseAnchor.Position)
+    local sum = Vector3.zero
+    local minX, maxX = math.huge, -math.huge
+    local minY, maxY = math.huge, -math.huge
+    local minZ, maxZ = math.huge, -math.huge
+    for _, row in ipairs(rows) do
+        local p = row.Position
+        sum = sum + p
+        minX, maxX = math.min(minX,p.X), math.max(maxX,p.X)
+        minY, maxY = math.min(minY,p.Y), math.max(maxY,p.Y)
+        minZ, maxZ = math.min(minZ,p.Z), math.max(maxZ,p.Z)
+        addGround(p)
+    end
+    addGround(sum / #rows)
+    addGround(Vector3.new((minX+maxX)*0.5, (minY+maxY)*0.5, (minZ+maxZ)*0.5))
+    -- Pair midpoints are cheap for normal 3-8 mob quest fields and often produce
+    -- a better two-zone cover than parking directly on either NPC.
+    local pairLimit = math.min(#rows, 12)
+    for i = 1, pairLimit do
+        for j = i + 1, pairLimit do
+            addGround((rows[i].Position + rows[j].Position) * 0.5)
+        end
+    end
+
+    local function hoverFromGround(g)
+        local y = math.max(g.Y + h,
+            IsSubmergedPosition(g) and (_G.Settings.UnderwaterMinY + 25) or _G.Settings.MinY)
+        return Vector3.new(g.X + offsetX, y, g.Z)
+    end
+
+    local function evaluate(g)
+        local hover = hoverFromGround(g)
+        local reachable, stale, totalDist, maxDist = 0, 0, 0, 0
+        for _, row in ipairs(rows) do
+            local d = (row.Position - hover).Magnitude
+            if d <= range then
+                reachable = reachable + 1
+                totalDist = totalDist + d
+                maxDist = math.max(maxDist, d)
+                local proofAt = DamageProvenGatherRoots[row.Root]
+                if not proofAt or now - proofAt > freshWindow then stale = stale + 1 end
+            end
+        end
+        local avg = reachable > 0 and totalDist / reachable or math.huge
+        return reachable, stale, avg, maxDist, hover
+    end
+
+    -- Hold the current FIELD center briefly while it is still useful. This prevents
+    -- 0.15s main-loop oscillation between two equally-good coverage circles.
+    local currentGround = state.ClusterShadowCoverageGround
+    local selectedAt = tonumber(state.ClusterShadowCoverageSelectedAt) or 0
+    local hold = math.max(0.25, tonumber(_G.Settings.ClusterShadowCoverageHold) or 0.70)
+    if currentGround and IsValidPos(currentGround) and now - selectedAt < hold then
+        local r, st, _, _, hover = evaluate(currentGround)
+        if r > 0 and (st > 0 or r == #rows) then
+            state.ClusterShadowCoverageReachable = r
+            state.ClusterShadowCoverageTotal = #rows
+            state.ClusterShadowCoverageCF = CFrame.new(hover)
+            state.ClusterShadowVisualAnchor = Vector3.new(currentGround.X, currentGround.Y, currentGround.Z)
+            return state.ClusterShadowCoverageCF
+        end
+    end
+
+    local bestGround, bestHover
+    local bestStale, bestReach, bestAvg, bestMax = -1, -1, math.huge, math.huge
+    for _, g in ipairs(candidates) do
+        local reach, stale, avg, maxDist, hover = evaluate(g)
+        if stale > bestStale
+            or (stale == bestStale and reach > bestReach)
+            or (stale == bestStale and reach == bestReach and avg < bestAvg - 0.01)
+            or (stale == bestStale and reach == bestReach
+                and math.abs(avg-bestAvg) <= 0.01 and maxDist < bestMax) then
+            bestGround, bestHover = g, hover
+            bestStale, bestReach, bestAvg, bestMax = stale, reach, avg, maxDist
+        end
+    end
+
+    if bestGround and bestHover then
+        local changed = not currentGround or (currentGround - bestGround).Magnitude > 2.0
+        if changed then state.ClusterShadowCoverageSelectedAt = now end
+        state.ClusterShadowCoverageGround = bestGround
+        state.ClusterShadowCoverageCF = CFrame.new(bestHover)
+        state.ClusterShadowCoverageReachable = bestReach
+        state.ClusterShadowCoverageTotal = #rows
+        state.ClusterShadowVisualAnchor = bestGround
+        return state.ClusterShadowCoverageCF
+    end
+    return self:GetHoverCFrame(height)
+end
+
 function ClusterFarmController:IsAttackEligible(model)
     return self:IsVerified(model) or self:IsProbeCandidate(model)
+        or self:IsShadowAttackEligible(model)
 end
 
 function ClusterFarmController:ConfirmDamageProof(model)
@@ -4615,11 +5011,15 @@ function ClusterFarmController:ConfirmDamageProof(model)
     -- never "stacked" authority.
     local anchorCF = state and state.ClusterAnchor
     if anchorCF then
+        local visualAnchor = state.ClusterShadowVisualAnchor
+        if not visualAnchor or not IsValidPos(visualAnchor) then
+            visualAnchor = anchorCF.Position
+        end
         pcall(function()
             local rot = root.CFrame.Rotation
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(anchorCF.Position) * rot
+            root.CFrame = CFrame.new(visualAnchor) * rot
         end)
         VerifiedGatherRoots[root] = now
     end
@@ -4783,8 +5183,27 @@ function ClusterFarmController:SelectPrimary()
 end
 
 function ClusterFarmController:SelectProbePrimary()
-    if _G.Settings.ClusterAuthorityEnabled == false then return nil end
     local me = HRP()
+
+    if self:IsShadowCombatActive() then
+        local best, bestDist
+        for _, entry in ipairs(self.LastBatch or {}) do
+            local model, hum, root = entry.Model, entry.Humanoid, entry.Root
+            if model and hum and hum.Health > 0 and root and root.Parent
+                and self:IsShadowAttackEligible(model) then
+                local shadow = self:GetServerShadowPosition(model)
+                if shadow then
+                    local d = me and (shadow - me.Position).Magnitude or 0
+                    if not bestDist or d < bestDist then
+                        best, bestDist = model, d
+                    end
+                end
+            end
+        end
+        return best
+    end
+
+    if _G.Settings.ClusterAuthorityEnabled == false then return nil end
     local best, bestDist
     for _, entry in ipairs(self.LastBatch or {}) do
         local model, hum, root = entry.Model, entry.Humanoid, entry.Root
@@ -4813,6 +5232,71 @@ function ClusterFarmController:RestackBatch()
     local damageTTL = tonumber(_G.Settings.ClusterAuthorityDamageTTL) or 1.50
     local warmup = math.max(0, tonumber(_G.Settings.ClusterAuthorityWarmup) or 0.45)
     local warmReady = now - (state.ClusterActivatedAt or now) >= warmup
+
+    -- v21.19 normal QUEST: visually collapse the WHOLE field, but keep attack
+    -- authority separate. Every unowned root remains unverified until OWNED or real
+    -- HP delta proves it. Damage range later uses GatherOriginalPositions, never the
+    -- local anchor written here.
+    if self:IsShadowCombatActive() then
+        local verifiedCount, visualCount = 0, 0
+        local refresh = math.max(0.03,
+            tonumber(_G.Settings.ClusterShadowVisualRefresh) or 0.05)
+        local visualEnabled = _G.Settings.ClusterShadowVisualMagnet ~= false
+        -- Follow the active FIELD coverage center visually. Server-shadow positions
+        -- remain frozen separately and are still the only range authority.
+        local visualAnchor = state.ClusterShadowVisualAnchor
+        if not visualAnchor or not IsValidPos(visualAnchor) then visualAnchor = anchor end
+
+        for _, entry in ipairs(self.LastBatch or {}) do
+            local model, root, hum = entry.Model, entry.Root, entry.Humanoid
+            if model and model.Parent and root and root.Parent and hum and hum.Health > 0
+                and self:IsModelAllowed(model) then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and not GatherOriginalPositions[root] then
+                    GatherOriginalPositions[root] = pos
+                end
+
+                local own = ClientOwnsMob(root)
+                local damageAt = DamageProvenGatherRoots[root]
+                local damageFresh = damageAt and now - damageAt <= damageTTL
+
+                if visualEnabled and now - (GatherVisualPinnedAt[root] or 0) >= refresh then
+                    pcall(function()
+                        local rot = root.CFrame.Rotation
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        root.CFrame = CFrame.new(visualAnchor) * rot
+                    end)
+                    GatherVisualPinnedAt[root] = now
+                end
+                if visualEnabled then visualCount = visualCount + 1 end
+
+                if own == true then
+                    GatherAuthorityClass[root] = "OWNED"
+                    VerifiedGatherRoots[root] = now
+                    DamageProvenGatherRoots[root] = nil
+                    verifiedCount = verifiedCount + 1
+                elseif damageFresh then
+                    GatherAuthorityClass[root] = "DAMAGE"
+                    VerifiedGatherRoots[root] = now
+                    verifiedCount = verifiedCount + 1
+                else
+                    -- Crucial: visually pinned does NOT mean verified/stacked.
+                    if GatherAuthorityClass[root] ~= "OWNED" then
+                        GatherAuthorityClass[root] = nil
+                    end
+                    VerifiedGatherRoots[root] = nil
+                end
+            end
+        end
+
+        state.ClusterAuthorityProbeTarget = nil
+        state.ClusterAuthorityProbeStartedAt = 0
+        state.ClusterAuthorityProbeFirstAttackAt = 0
+        _G.BobonDiagnostics.BringVisual = visualCount
+        if verifiedCount > 0 then state.ClusterLastMoved = now end
+        return verifiedCount
+    end
 
     local playerAtAnchor = false
     if me then
@@ -5031,10 +5515,11 @@ function ClusterFarmController:Tick()
     end
 
     local stacked = self:RestackBatch()
-    local proven, probes = 0, 0
+    local proven, probes, reachable = 0, 0, 0
     for _, entry in ipairs(candidates) do
         if entry.Model and self:IsDamageProven(entry.Model) then proven = proven + 1 end
         if entry.Model and self:IsProbeCandidate(entry.Model) then probes = probes + 1 end
+        if entry.Model and self:IsShadowAttackEligible(entry.Model) then reachable = reachable + 1 end
     end
 
     local primary = self:SelectPrimary()
@@ -5046,9 +5531,12 @@ function ClusterFarmController:Tick()
     _G.BobonDiagnostics.BringUnknown = unknown
     _G.BobonDiagnostics.BringServerOwned = other
     _G.BobonDiagnostics.BringProbe = probes
+    _G.BobonDiagnostics.BringReachable = reachable
     _G.BobonDiagnostics.BringMoved = stacked
 
-    if stacked > 0 then
+    if self:IsShadowCombatActive() and reachable > 0 then
+        _G.BobonDiagnostics.Bring = "SHADOW-RANGE ×" .. tostring(reachable)
+    elseif stacked > 0 then
         _G.BobonDiagnostics.Bring = "AUTHORITY-STACK"
     elseif probes > 0 then
         _G.BobonDiagnostics.Bring = "PROBING-REAL-HP"
@@ -10901,6 +11389,9 @@ task.spawn(function()
 
             local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
+            if ClusterFarmController:IsShadowCombatActive() then
+                hoverCF = ClusterFarmController:GetShadowCoverageHoverCFrame(anchorHeight) or hoverCF
+            end
 
             -- v21.6 VIDEO SWEEP FARM: acquisition and damage run in the same main
             -- tick. Travel keeps approaching the exact active-quest mob while
@@ -11058,6 +11549,7 @@ task.spawn(function()
                 -- farm forever. A live acquisition root uses CombatController's
                 -- own per-target HP proof because its position is still changing.
                 if not hybridAcquireAttack and not authorityProbeTarget
+                    and not ClusterFarmController:IsShadowCombatActive()
                     and ClusterFarmController:GetVerifiedCount() <= 1
                     and ClusterFarmController:GetProbeCount() == 0
                     and TravelManager:IsAtCombatAnchor()
@@ -11086,12 +11578,16 @@ task.spawn(function()
                 local flatDist = (Vector3.new(hrp.Position.X,0,hrp.Position.Z)
                     - Vector3.new(targetRoot.Position.X,0,targetRoot.Position.Z)).Magnitude
                 local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
+                local shadowClusterAttack = ClusterFarmController:IsShadowCombatActive()
+                    and ClusterFarmController:GetShadowReachableCount(
+                        _G.Settings.ClusterShadowAttackRange or _G.Settings.FastAttackRange or 100) > 0
                 if flatDist <= _G.Settings.AttackRange and farmHolds
-                    and (authorityProbeTarget or hybridAcquireAttack or hybridClusterAttack
-                        or TravelManager:IsAtCombatAnchor()) then
-                    _G.State.FState = authorityProbeTarget and "AUTHORITY_PROBE_ATTACK"
-                        or ((hybridAcquireAttack or hybridClusterAttack)
-                            and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER")
+                    and (shadowClusterAttack or authorityProbeTarget or hybridAcquireAttack
+                        or hybridClusterAttack or TravelManager:IsAtCombatAnchor()) then
+                    _G.State.FState = shadowClusterAttack and "SHADOW_CLUSTER_ATTACK"
+                        or (authorityProbeTarget and "AUTHORITY_PROBE_ATTACK"
+                            or ((hybridAcquireAttack or hybridClusterAttack)
+                                and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER"))
                     EquipCombatTool()
                     Attack(target, questMobName)
                     if os.time() - lastAttackLog >= 5 then
@@ -11311,10 +11807,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.18] Full Script Loaded Successfully!")
-print("[BobonHub v21.18] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.18] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.18] Modules: QuestFarm | Authority Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.18] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.18] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.18] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.19] Full Script Loaded Successfully!")
+print("[BobonHub v21.19] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.19] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.19] Modules: QuestFarm | Shadow-Range Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.19] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.19] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.19] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
