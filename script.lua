@@ -1,7 +1,62 @@
 -- =================================================================
---         BOBON HUB v19.0 SMART FRAGMENT RAID + FULLSCREEN + ALL-MOB CLUSTER + FULL MELEE | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v21.0 DEEP RESEARCH KAITUN | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v18.8.1 CORE PROGRESSION | Version: v19.0
+--         Base: v20.1 RESEARCHED COMPLETE | Version: v21.0
+--
+--
+--  v21.0 DEEP RESEARCH / ENDGAME COMPLETION AUDIT:
+--  [V21-1] Added sea-aware material preparation for Godhuman/Sanguine/Skull Guitar:
+--          Magma Ore, Fish Tail, Mystic Droplet, Ectoplasm, Vampire Fang,
+--          Dragon Scale, Bones and Demonic Wisp use the same airborne ITEM cluster.
+--  [V21-2] Full-melee prerequisite controller handles Library Key/Death Step,
+--          Water Key/Sharkman Karate and Fire Essence/Dragon Talon bone rolls.
+--  [V21-3] CDK is state-driven: Docks Legend, Sense of Duty, Soulless/Heaven,
+--          Pain and Suffering, Haze of Misery, Fear the Reaper/Hell and final boss.
+--  [V21-4] Skull Guitar now has bounded Full-Moon init, six-Zombie same-batch Swamp,
+--          fixed gravestones, Ghost, randomized trophy orientation and pipe-color solve.
+--  [V21-5] TOKEN-4 sends one RegisterAttack per cluster batch, then all RegisterHit
+--          entries, reducing per-target attack spam and enabling same-cycle group kills.
+--  [V21-6] Live Darkbeard becomes progression work while Dark Fragments are actually
+--          needed for Skull Guitar/Sanguine; hopping still obeys external Hop config.
+--  [V21-7] Factory, Pole V1, Kabucha, Rengoku, Midnight Blade, Acidum Rifle,
+--          Dragon Trident and Gravity Blade remain retained useful kaitun progression.
+--  [V21-8] Sanguine auto-prefarms everything possible, but Leviathan Heart remains a
+--          genuine multiplayer sea-event dependency; no fake completion is recorded.
+--
+--  v20.0 RESEARCH / COMPLETION AUDIT:
+--  [R-1] Restored kaitun acquisition queue for Pole V1, Kabucha, Rengoku,
+--        Midnight Blade and Acidum Rifle; these are bounded and never random shop sweeps.
+--  [R-2] Factory Core is now a live Sea-2 EVENT priority. If Core exists, normal
+--        quest hover is released, Factory gets one ActionToken, Core is fought, then
+--        the previous level-farm naturally resumes. Factory is fought even if Acidum
+--        Rifle is already owned because the event itself is valuable.
+--  [R-3] BossManager treats live Thunder God / Awakened Ice Admiral as useful
+--        progression bosses while Pole V1 / Rengoku are missing. No blind camping.
+--  [R-4] Re-enabled existing Ectoplasm farmer for Midnight Blade and Fragment demand
+--        fallback for Kabucha through Smart Fragment Raid.
+--  [R-5] External config surface stays compact: Factory and the five useful item
+--        goals above are core kaitun behavior and do not add decorative toggles.
+--  [R-6] Runtime labels updated to v20.0. Live Roblox/executor behavior still depends
+--        on current remotes/network ownership; no client-only success is fabricated.
+--
+--  v19.4 FINAL AUDIT / FIRE UI:
+--  [F-1] Ember/Fire HUD: fixed fullscreen, centered, smoke-grey translucent surfaces,
+--        orange/red/gold accents, no draggable window and no side bars.
+--  [F-2] Corrected stale v19.0/v19.1 runtime version labels/logs to v19.4.
+--  [F-3] v19.4 temporarily removed several useful item detours; v20.0 restores
+--        them as bounded kaitun progression plus live Factory priority.
+--  [F-4] Cursed Dual Katana=false now also disables automatic Yama/Tushita work.
+--  [F-5] Skull Guitar current-name alias added while preserving legacy Soul Guitar
+--        remote/inventory compatibility.
+--  [F-6] Auto Stats is cap-aware when live stat values can be resolved: Melee then
+--        Defense to level cap; legacy 70/30 remains only as a safe fallback.
+--  [F-7] BossManager no longer hunts unrelated sword drops just because core TTK
+--        progression is enabled; explicit Farm Boss Drops still works independently.
+--  [F-8] Remaining complex CDK scroll trials and Skull Guitar Swamp/Trophy/Pipe
+--        stages are intentionally not faked; status remains truthful until dedicated
+--        verified stage logic is implemented.
+--  [F-9] Re-execute cleanup now owns/disconnects fullscreen UI input connections and
+--        destroys the exact UI root instead of referencing an out-of-scope local SG.
 --
 --  v19.0 UI / CLUSTER / PROGRESSION AUDIT:
 --  [N-1] Boot remains non-fatal: wait for live CommF_ instead of returning early.
@@ -273,7 +328,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v19.0 FULLSCREEN + ALL-MOB CLUSTER + FULL MELEE] Loading...")
+print("[BobonHub v21.0 DEEP RESEARCH KAITUN + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -325,7 +380,7 @@ pcall(function()
         local backdrop = Instance.new("Frame")
         backdrop.Size = UDim2.fromScale(1,1)
         backdrop.Position = UDim2.fromScale(0,0)
-        backdrop.BackgroundColor3 = Color3.fromRGB(5,10,20)
+        backdrop.BackgroundColor3 = Color3.fromRGB(24,21,20)
         backdrop.BackgroundTransparency = 1
         backdrop.BorderSizePixel = 0
         backdrop.Parent = BootGui
@@ -334,8 +389,8 @@ pcall(function()
         card.AnchorPoint = Vector2.new(0.5,0.5)
         card.Size = UDim2.new(0, 520, 0, 120)
         card.Position = UDim2.fromScale(0.5,0.5)
-        card.BackgroundColor3 = Color3.fromRGB(10,18,31)
-        card.BackgroundTransparency = 0.62
+        card.BackgroundColor3 = Color3.fromRGB(35,29,27)
+        card.BackgroundTransparency = 0.46
         card.BorderSizePixel = 0
         card.Parent = backdrop
 
@@ -344,7 +399,7 @@ pcall(function()
         corner.Parent = card
 
         local stroke = Instance.new("UIStroke")
-        stroke.Color = Color3.fromRGB(72,223,255)
+        stroke.Color = Color3.fromRGB(255,103,40)
         stroke.Transparency = 0.62
         stroke.Thickness = 1.2
         stroke.Parent = card
@@ -355,7 +410,7 @@ pcall(function()
         BootLabel.Position = UDim2.new(0,15,0,15)
         BootLabel.Font = Enum.Font.GothamBold
         BootLabel.TextSize = 16
-        BootLabel.TextColor3 = Color3.fromRGB(235,248,255)
+        BootLabel.TextColor3 = Color3.fromRGB(255,242,230)
         BootLabel.TextXAlignment = Enum.TextXAlignment.Center
         BootLabel.TextYAlignment = Enum.TextYAlignment.Center
         BootLabel.TextWrapped = true
@@ -554,6 +609,16 @@ _G.Settings = {
     -- v17 progression: all are non-blocking. A missing server event/key never
     -- freezes the level farm; the controller retries only in safe quest windows.
     AutoAdvancedItems   = true,
+    -- Live Sea-2 Factory is core kaitun work: event appearance can preempt a normal
+    -- quest, but never another claimed progression action. Not exposed in Configs.
+    AutoFactoryEvent    = true,
+    FactoryMinLevel     = 700,
+    FactoryFightTimeout = 300,
+    FactoryRetry        = 2.0,
+    -- v20.1: low-risk ability purchases seen in mature kaitun configs.
+    -- Server validates level/money/ownership; probes are throttled and never own movement.
+    AutoCoreAbilities   = true,
+    CoreAbilityRetry    = 45,
     -- Core kaitun progression: always enabled internally; intentionally NOT exposed in Configs.
     AutoFightingStyles  = true,
     AutoBuyMelee        = true,
@@ -567,6 +632,16 @@ _G.Settings = {
     ProgressionRetry    = 45,
     InventoryCacheTTL   = 5,
     OptionalWorkTimeout = 150,
+    -- v21 researched material / puzzle controllers. Core-only; no extra config keys.
+    MaterialFarmTimeout = 240,
+    MaterialRetry       = 12,
+    MaterialInventoryRefresh = 1.5,
+    DeathKingRollRetry  = 2.0,
+    DeathKingReserveRolls = 10,
+    CDKTrialTimeout     = 600,
+    CDKDimensionRadius  = 1200,
+    SkullSwampTimeout   = 240,
+    SkullPuzzleTimeout  = 180,
 
     AutoKatakuri        = true,
     KatakuriOnlyMax     = true,
@@ -752,6 +827,8 @@ _G.State = {
     RaidLastGain = 0,
     RaidLastStart = 0,
     RaidLastFinish = 0,
+    -- Intentional-death CDK trial marker. Unlike an ActionToken it survives respawn.
+    CDKResumeStage = nil,
     -- Canonical workspace enemy name for the quest that is actually active.
     -- Quest UI may be localized, so gathering must not infer a mob name from
     -- the visible translated text on every frame.
@@ -899,10 +976,13 @@ task.spawn(function()
 end)
 
 
+local BobonUIRoot = nil
+local BobonUIConnections = {}
+
 -- ══════════════════════════════════════════════════════════════════
---             UI — BOBON TRANSPARENT FULLSCREEN HUD v4
+--             UI — BOBON EMBER FULLSCREEN HUD v5
 --   Fixed full-screen overlay. Centered dashboard. No drag, no outer side bars.
---   The game remains clearly visible through every dark surface.
+--   Smoke-grey glass + ember accents; game remains visible through the HUD.
 -- ══════════════════════════════════════════════════════════════════
 do
     local okUI, uiErr = pcall(function()
@@ -935,6 +1015,7 @@ do
         end)
 
         local SG = Instance.new("ScreenGui")
+        BobonUIRoot = SG
         SG.Name = "BobonHubUI"
         SG.ResetOnSpawn = false
         SG.IgnoreGuiInset = true
@@ -942,12 +1023,14 @@ do
         SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         SG.Parent = uiParent
 
-        local ACCENT_A = Color3.fromRGB(72,223,255)
-        local ACCENT_B = Color3.fromRGB(139,92,246)
-        local ACCENT_C = Color3.fromRGB(55,255,180)
-        local TEXT_MAIN = Color3.fromRGB(244,249,255)
-        local TEXT_MUTED = Color3.fromRGB(165,181,205)
-        local CARD_BG = Color3.fromRGB(8,15,28)
+        local ACCENT_A = Color3.fromRGB(255,106,38)   -- ember orange
+        local ACCENT_B = Color3.fromRGB(255,58,45)    -- flame red
+        local ACCENT_C = Color3.fromRGB(255,193,82)   -- fire gold
+        local READY_GREEN = Color3.fromRGB(82,245,156)
+        local DANGER_RED = Color3.fromRGB(255,84,92)
+        local TEXT_MAIN = Color3.fromRGB(255,246,238)
+        local TEXT_MUTED = Color3.fromRGB(197,180,173)
+        local CARD_BG = Color3.fromRGB(39,31,29)
 
         local function Corner(obj, px)
             local x = Instance.new("UICorner")
@@ -963,6 +1046,19 @@ do
             x.Thickness = thickness or 1
             x.Parent = obj
             return x
+        end
+
+        local function FireGradient(obj)
+            local g = Instance.new("UIGradient")
+            g.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0.00, ACCENT_C),
+                ColorSequenceKeypoint.new(0.34, ACCENT_A),
+                ColorSequenceKeypoint.new(0.68, ACCENT_B),
+                ColorSequenceKeypoint.new(1.00, ACCENT_C),
+            })
+            g.Rotation = 0
+            g.Parent = obj
+            return g
         end
 
         local function Text(parent, value, size, color, bold, align)
@@ -985,11 +1081,11 @@ do
             x.Position = pos
             x.Size = size
             x.BackgroundColor3 = CARD_BG
-            x.BackgroundTransparency = 0.48
+            x.BackgroundTransparency = 0.34
             x.BorderSizePixel = 0
             x.Parent = parent
             Corner(x, 14)
-            Stroke(x, Color3.fromRGB(125,185,225), 0.72, 1)
+            Stroke(x, Color3.fromRGB(255,126,78), 0.70, 1)
             return x
         end
 
@@ -1001,8 +1097,8 @@ do
         Panel.Size = UDim2.fromScale(1,1)
         -- Grey translucent veil: keep the same HUD layout, only restore readable
         -- contrast like the reference video without turning the screen black.
-        Panel.BackgroundColor3 = Color3.fromRGB(42,44,50)
-        Panel.BackgroundTransparency = 0.58
+        Panel.BackgroundColor3 = Color3.fromRGB(30,27,27)
+        Panel.BackgroundTransparency = 0.52
         Panel.BorderSizePixel = 0
         Panel.Parent = SG
 
@@ -1013,8 +1109,8 @@ do
         Content.AnchorPoint = Vector2.new(0.5,0.5)
         Content.Position = UDim2.fromScale(0.5,0.5)
         Content.Size = UDim2.new(0.78,0,0.78,0)
-        Content.BackgroundColor3 = Color3.fromRGB(34,37,44)
-        Content.BackgroundTransparency = 0.74
+        Content.BackgroundColor3 = Color3.fromRGB(36,30,29)
+        Content.BackgroundTransparency = 0.61
         Content.BorderSizePixel = 0
         Content.Parent = Panel
 
@@ -1036,7 +1132,8 @@ do
         local Brand = Text(Header, "◈  BOBON HUB", 28, TEXT_MAIN, true, Enum.TextXAlignment.Center)
         Brand.Position = UDim2.new(0,0,0,0)
         Brand.Size = UDim2.new(1,0,0,32)
-        local Sub = Text(Header, "BLOX FRUITS  •  KAITUN", 11, ACCENT_A, true, Enum.TextXAlignment.Center)
+        local BrandGradient = FireGradient(Brand)
+        local Sub = Text(Header, "BLOX FRUITS  •  KAITUN", 11, ACCENT_C, true, Enum.TextXAlignment.Center)
         Sub.Position = UDim2.new(0,0,0,34)
         Sub.Size = UDim2.new(1,0,0,18)
 
@@ -1044,15 +1141,15 @@ do
         OnlineDot.AnchorPoint = Vector2.new(1,0.5)
         OnlineDot.Position = UDim2.new(1,-58,0,15)
         OnlineDot.Size = UDim2.new(0,8,0,8)
-        OnlineDot.BackgroundColor3 = ACCENT_C
+        OnlineDot.BackgroundColor3 = READY_GREEN
         OnlineDot.BorderSizePixel = 0
         OnlineDot.Parent = Header
         Corner(OnlineDot, 8)
-        local OnlineL = Text(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
+        local OnlineL = Text(Header, "ONLINE", 10, READY_GREEN, true, Enum.TextXAlignment.Right)
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v19.1", 9, TEXT_MUTED, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.0", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -1067,18 +1164,18 @@ do
         SeaCap.Position = UDim2.new(0,16,0,7); SeaCap.Size = UDim2.new(1,-32,0,16)
         local SeaValue = Text(SeaCard, "SEA 1", 22, ACCENT_A, true)
         SeaValue.Position = UDim2.new(0,16,0,23); SeaValue.Size = UDim2.new(0.55,-16,1,-27)
-        local TeamL = Text(SeaCard, "PIRATES ✓", 11, ACCENT_C, true, Enum.TextXAlignment.Right)
+        local TeamL = Text(SeaCard, "PIRATES ✓", 11, READY_GREEN, true, Enum.TextXAlignment.Right)
         TeamL.Position = UDim2.new(0.55,0,0,23); TeamL.Size = UDim2.new(0.45,-16,1,-27)
 
         local StatusCard = Card(Content, UDim2.new(0.04,0,0.32,0), UDim2.new(0.92,0,0.19,0))
         local StatusDot = Instance.new("Frame")
         StatusDot.Position = UDim2.new(0,16,0,18)
         StatusDot.Size = UDim2.new(0,9,0,9)
-        StatusDot.BackgroundColor3 = ACCENT_C
+        StatusDot.BackgroundColor3 = READY_GREEN
         StatusDot.BorderSizePixel = 0
         StatusDot.Parent = StatusCard
         Corner(StatusDot, 9)
-        local ModeL = Text(StatusCard, "FARMING", 11, ACCENT_C, true)
+        local ModeL = Text(StatusCard, "FARMING", 11, READY_GREEN, true)
         ModeL.Position = UDim2.new(0,34,0,11); ModeL.Size = UDim2.new(0.42,0,0,22)
         local FlagL = Text(StatusCard, "READY", 10, ACCENT_A, true, Enum.TextXAlignment.Right)
         FlagL.Position = UDim2.new(0.52,0,0,11); FlagL.Size = UDim2.new(0.48,-16,0,22)
@@ -1090,19 +1187,19 @@ do
         local BeliCard = Card(Content, UDim2.new(0.04,0,0.54,0), UDim2.new(0.44,0,0.12,0))
         local BeliCap = Text(BeliCard, "BELI", 10, TEXT_MUTED, true)
         BeliCap.Position = UDim2.new(0,16,0,7); BeliCap.Size = UDim2.new(1,-32,0,16)
-        local BeliL = Text(BeliCard, "$ 0", 18, Color3.fromRGB(93,255,151), true)
+        local BeliL = Text(BeliCard, "$ 0", 18, Color3.fromRGB(255,196,91), true)
         BeliL.Position = UDim2.new(0,16,0,24); BeliL.Size = UDim2.new(1,-32,1,-28)
 
         local FragCard = Card(Content, UDim2.new(0.52,0,0.54,0), UDim2.new(0.44,0,0.12,0))
         local FragCap = Text(FragCard, "FRAGMENTS", 10, TEXT_MUTED, true)
         FragCap.Position = UDim2.new(0,16,0,7); FragCap.Size = UDim2.new(1,-32,0,16)
-        local FragL = Text(FragCard, "◈ 0", 18, Color3.fromRGB(194,135,255), true)
+        local FragL = Text(FragCard, "◈ 0", 18, Color3.fromRGB(255,126,66), true)
         FragL.Position = UDim2.new(0,16,0,24); FragL.Size = UDim2.new(1,-32,1,-28)
 
         local KillCard = Card(Content, UDim2.new(0.04,0,0.69,0), UDim2.new(0.44,0,0.11,0))
         local KillCap = Text(KillCard, "KILLS", 10, TEXT_MUTED, true)
         KillCap.Position = UDim2.new(0,16,0,6); KillCap.Size = UDim2.new(0.4,0,0,15)
-        local KillL = Text(KillCard, "0", 17, Color3.fromRGB(255,119,145), true)
+        local KillL = Text(KillCard, "0", 17, Color3.fromRGB(255,84,92), true)
         KillL.Position = UDim2.new(0,16,0,21); KillL.Size = UDim2.new(1,-32,1,-25)
 
         local TimeCard = Card(Content, UDim2.new(0.52,0,0.69,0), UDim2.new(0.44,0,0.11,0))
@@ -1123,8 +1220,8 @@ do
         Toggle.AnchorPoint = Vector2.new(1,0)
         Toggle.Position = UDim2.new(1,-18,0,18)
         Toggle.Size = UDim2.new(0,42,0,42)
-        Toggle.BackgroundColor3 = Color3.fromRGB(8,15,28)
-        Toggle.BackgroundTransparency = 0.38
+        Toggle.BackgroundColor3 = Color3.fromRGB(42,29,25)
+        Toggle.BackgroundTransparency = 0.28
         Toggle.BorderSizePixel = 0
         Toggle.Text = "◈"
         Toggle.TextColor3 = ACCENT_A
@@ -1170,8 +1267,10 @@ do
             end
         end
 
-        Toggle.MouseButton1Click:Connect(function() SetVisible(not visible) end)
-        UIS.InputBegan:Connect(function(input, processed)
+        BobonUIConnections[#BobonUIConnections + 1] =
+            Toggle.MouseButton1Click:Connect(function() SetVisible(not visible) end)
+        BobonUIConnections[#BobonUIConnections + 1] =
+            UIS.InputBegan:Connect(function(input, processed)
             if not processed and input.KeyCode == Enum.KeyCode.RightControl then
                 SetVisible(not visible)
             end
@@ -1204,11 +1303,11 @@ do
                     ModeL.Text = string.upper(mode)
                     StatusL.Text = tostring(_G.BobonStatus or "Idle")
                     if mode == "Farming" or mode == "Raiding" then
-                        StatusDot.BackgroundColor3 = ACCENT_C
+                        StatusDot.BackgroundColor3 = READY_GREEN
                     elseif mode == "Recovering" or mode == "Dead" then
-                        StatusDot.BackgroundColor3 = Color3.fromRGB(255,92,115)
+                        StatusDot.BackgroundColor3 = DANGER_RED
                     else
-                        StatusDot.BackgroundColor3 = ACCENT_A
+                        StatusDot.BackgroundColor3 = ACCENT_C
                     end
                     local clusterMode = tostring(state.ClusterMode or "OFF")
                     local candidates = tonumber(diag.BringCandidates) or 0
@@ -1232,7 +1331,7 @@ do
                     local packet = tostring(diag.Packet or "WAITING")
                     local ready = packet:find("CONFIRMED",1,true) ~= nil
                     CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
-                    CombatL.TextColor3 = ready and ACCENT_C or Color3.fromRGB(255,190,102)
+                    CombatL.TextColor3 = ready and READY_GREEN or ACCENT_C
                     BringL.Text = moved > 0 and ("BRING  ALL ×" .. tostring(moved))
                         or ("BRING  " .. tostring(diag.Bring or "WAITING"))
                     BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
@@ -1245,7 +1344,8 @@ do
             while SessionAlive() and SG.Parent do
                 pcall(function()
                     OnlineDot.BackgroundTransparency = OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
-                    Toggle.TextColor3 = Toggle.TextColor3 == ACCENT_A and ACCENT_B or ACCENT_A
+                    Toggle.TextColor3 = Toggle.TextColor3 == ACCENT_A and ACCENT_C or ACCENT_A
+                    BrandGradient.Rotation = (BrandGradient.Rotation + 18) % 360
                 end)
                 task.wait(0.8)
             end
@@ -2118,6 +2218,16 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
                 add(enemy)
             end
         end
+    elseif _G.State and _G.State.ClusterMode == "ITEM"
+        and _G.State.Mode == "GettingItem" and ClusterFarmController then
+        local cap = _G.Settings.ClusterAttackMaxTargets or _G.Settings.FastAttackMaxTargets or 64
+        for _, enemy in ipairs(folder:GetChildren()) do
+            if #results >= cap then break end
+            if enemy ~= preferred and ClusterFarmController:IsModelAllowed(enemy)
+                and ClusterFarmController:IsVerified(enemy) then
+                add(enemy)
+            end
+        end
     elseif mobName then
         local cap = (questGatherActive or clusterGatherActive)
             and (_G.Settings.ClusterAttackMaxTargets or 32)
@@ -2495,8 +2605,10 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     elseif backend == "TOKEN-4" then
         local token = self:ResolveSessionToken()
         local hitOk = false
+        -- One attack registration describes one swing; every stacked target then
+        -- receives a hit in that same batch. This matters for six-Zombie Swamp.
+        pcall(function() self.RegisterAttack:FireServer(0.5) end)
         for _, entry in ipairs(entries) do
-            pcall(function() self.RegisterAttack:FireServer(0.5) end)
             local ok = pcall(function()
                 self.RegisterHit:FireServer(entry.Part, {}, nil, token)
             end)
@@ -2902,7 +3014,7 @@ local SwordList = {
 }
 local GunList = {
     "Slingshot","Musket","Flintlock","Refined Flintlock","Cannon",
-    "Kabucha","Venom Bow","Acidum Rifle","Bizarre Rifle","Soul Guitar",
+    "Kabucha","Venom Bow","Acidum Rifle","Bizarre Rifle","Skull Guitar","Soul Guitar",
 }
 
 local function ToolNameIn(list, tool)
@@ -3518,6 +3630,9 @@ function ClusterFarmController:PolicyValid()
     elseif state.ClusterMode == "RAID" then
         return state.Mode == "Raiding" and state.ActiveActionToken ~= 0
             and state.ActionOwner == "Raid"
+    elseif state.ClusterMode == "ITEM" then
+        return state.Mode == "GettingItem" and state.ActiveActionToken ~= 0
+            and state.ActionOwner == state.ClusterOwner
     end
     return false
 end
@@ -4459,6 +4574,22 @@ function HakiController:EnableForCharacter()
     pcall(function() CommF_:InvokeServer("Ken", true) end)
     self.Enabled = okBuso
     return okBuso
+end
+
+-- v20.1 core ability purchases. These are baseline movement/haki abilities used
+-- by mature kaitun configs. The probes are throttled, never own movement and the
+-- server validates level/Beli/ownership before changing anything.
+local CoreAbilityPurchaseController = { LastTry = 0 }
+function CoreAbilityPurchaseController:Tick()
+    if not _G.Settings.AutoCoreAbilities or not IsAlive() then return false end
+    local now = tick()
+    if now - (self.LastTry or 0) < (_G.Settings.CoreAbilityRetry or 45) then return false end
+    self.LastTry = now
+    pcall(function() CommF_:InvokeServer("BuyHaki", "Geppo") end)
+    pcall(function() CommF_:InvokeServer("BuyHaki", "Buso") end)
+    pcall(function() CommF_:InvokeServer("BuyHaki", "Soru") end)
+    pcall(function() CommF_:InvokeServer("KenTalk", "Buy") end)
+    return true
 end
 
 
@@ -5598,6 +5729,8 @@ end)
 --   ReleaseAction LUÔN được gọi trong finally block (xpcall)
 --   Death/Recovery invalidate token → subsystem tự dừng
 -- ══════════════════════════════════════════════════════════════════
+local MaterialPrepController
+local FightingStyleUnlockController
 local ItemProgression = {}
 ItemProgression.NextOptional = {
     Saber = 0, PoleV1 = 0, Rengoku = 0, MidnightBlade = 0,
@@ -5617,18 +5750,21 @@ end
 -- được đánh dấu Manual để controller không gọi remote đoán mò làm mất tài nguyên.
 -- BossDrop sẽ tự được BossManager săn khi boss xuất hiện trong Enemies.
 local ItemCatalog = {
+    -- Useful kaitun collection: progression weapons + the small set explicitly kept
+    -- by the project. This is not a buy-every-shop-sword completionist sweep.
     {Name="Saber",Sea=1,MinLevel=200,Method="Puzzle+Boss",Auto="CheckSaber"},
-    {Name="Pole (1st Form)",Sea=1,MinLevel=150,Method="Thunder God drop/purchase",Auto="CheckPoleV1"},
-    {Name="Rengoku",Sea=2,MinLevel=1100,Method="Hidden Key + Awakened Ice Admiral",Auto="CheckRengoku"},
-    {Name="Midnight Blade",Sea=2,MinLevel=1000,Method="100 Ectoplasm",Auto="CheckMidnightBlade"},
-    {Name="Buddy Sword",Sea=3,MinLevel=2000,Method="Cake Queen drop",Auto="BossDrop"},
-    {Name="Yama",Sea=3,MinLevel=1500,Method="30 Elite/Player Hunter quests",Auto="CheckYama"},
-    {Name="Tushita",Sea=3,MinLevel=2000,Method="rip_indra + Holy Torch puzzle + Longma",Auto="CheckTushita"},
-    {Name="Cursed Dual Katana",Sea=3,MinLevel=2200,Method="Yama/Tushita 350 + scroll trials",Auto="CheckCDK"},
+    {Name="Pole (1st Form)",Sea=1,MinLevel=575,Method="Thunder God",Auto="CheckPoleV1"},
     {Name="Kabucha",Sea=2,MinLevel=700,Method="1,500 fragments",Auto="CheckKabucha"},
-    {Name="Acidum Rifle",Sea=2,MinLevel=700,Method="Factory Core drop",Auto="CheckAcidumRifle"},
-    {Name="Soul Guitar",Sea=3,MinLevel=2300,Method="Full Moon puzzle + materials",Auto="CheckSoulGuitar"},
-    {Name="True Triple Katana",Sea=2,MinLevel=850,Method="Saishi/Shizu/Oroshi 300 mastery + 2M",Auto="SwordProgression"},
+    {Name="Rengoku",Sea=2,MinLevel=1100,Method="Hidden Key + Awakened Ice Admiral",Auto="CheckRengoku"},
+    {Name="Dragon Trident",Sea=2,MinLevel=1475,Method="Tide Keeper drop",Auto="BossDrop"},
+    {Name="Gravity Blade",Sea=2,MinLevel=925,Method="Orbitus drop",Auto="BossDrop"},
+    {Name="Midnight Blade",Sea=2,MinLevel=1000,Method="100 Ectoplasm",Auto="CheckMidnightBlade"},
+    {Name="Acidum Rifle",Sea=2,MinLevel=700,Method="Factory Core",Auto="CheckAcidumRifle"},
+    {Name="Yama",Sea=3,MinLevel=1500,Method="CDK prerequisite",Auto="CheckYama"},
+    {Name="Tushita",Sea=3,MinLevel=2000,Method="CDK prerequisite",Auto="CheckTushita"},
+    {Name="Cursed Dual Katana",Sea=3,MinLevel=2200,Method="Yama/Tushita + scroll trials",Auto="CheckCDK"},
+    {Name="Skull Guitar",Sea=3,MinLevel=2300,Method="Full Moon puzzle + materials",Auto="CheckSoulGuitar"},
+    {Name="True Triple Katana",Sea=2,MinLevel=850,Method="3 Legendary swords + mastery",Auto="SwordProgression"},
     {Name="Godhuman",Sea=3,MinLevel=1500,Method="style mastery + materials",Auto="FightingStyles"},
     {Name="Sanguine Art",Sea=3,MinLevel=2400,Method="Leviathan Heart + materials",Auto="FightingStyles"},
 }
@@ -5636,7 +5772,11 @@ local ItemCatalog = {
 function ItemProgression:GetMissingCatalog()
     local missing = {}
     for _, item in ipairs(ItemCatalog) do
-        if Level() >= item.MinLevel and not InventoryHas(item.Name) then
+        local owned = InventoryHas(item.Name)
+        if item.Name == "Skull Guitar" then
+            owned = owned or InventoryHas("Soul Guitar")
+        end
+        if Level() >= item.MinLevel and not owned then
             missing[#missing + 1] = item
         end
     end
@@ -5869,7 +6009,12 @@ end
 
 
 function ItemProgression:CheckSecondSea()
+    -- At max level the completion controller may intentionally return to Sea 1
+    -- for Saber/Pole. Do not immediately eject it back to Sea 2.
+    if Level() >= MAX_LEVEL then return false end
     if GetSea() >= 2 or Level() < 700 then return false end
+    -- Before leaving Sea 1, bank Godhuman materials that cannot be farmed here later.
+    if MaterialPrepController and MaterialPrepController:TryRunForSeaExit(1) then return true end
     if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Sea2") then return false end
     local myToken = _G.State:ClaimAction("Sea2")
@@ -6039,31 +6184,155 @@ function ItemProgression:CheckBartilo()
 end
 
 
+local function TrevorStatus()
+    local ok, state = pcall(function()
+        return CommF_:InvokeServer("TalkTrevor", "1")
+    end)
+    return ok and state or nil
+end
+
+local function FruitCatalogForTrevor()
+    local prices = {}
+    local ok, rows = pcall(function() return CommF_:InvokeServer("GetFruits") end)
+    if ok and type(rows) == "table" then
+        for _, row in pairs(rows) do
+            if type(row) == "table" then
+                local name = row.Name or row.name
+                local price = tonumber(row.Price or row.price)
+                if name and price then prices[tostring(name)] = price end
+            end
+        end
+    end
+    return prices
+end
+
+local function LoadCheapestTrevorFruit()
+    local prices = FruitCatalogForTrevor()
+    local ok, rows = pcall(function() return CommF_:InvokeServer("getInventoryFruits") end)
+    if not ok or type(rows) ~= "table" then return false, nil end
+    local bestName, bestPrice
+    for _, row in pairs(rows) do
+        if type(row) == "table" then
+            local name = row.Name or row.name
+            local price = tonumber(row.Price or row.price or (name and prices[tostring(name)]))
+            -- Trevor requires a physical fruit valued at 1,000,000 or more.
+            -- Always sacrifice the cheapest qualifying stored fruit first.
+            if name and price and price >= 1000000
+                and (not bestPrice or price < bestPrice) then
+                bestName, bestPrice = tostring(name), price
+            end
+        end
+    end
+    if not bestName then return false, nil end
+    local loaded = pcall(function() CommF_:InvokeServer("LoadFruit", bestName) end)
+    if not loaded then return false, nil end
+    task.wait(0.65)
+    return true, bestName
+end
+
+local function EnsureTrevorAccess()
+    local state = TrevorStatus()
+    if state == 0 then
+        _G.State.NeedTrevorFruit = false
+        return true
+    end
+
+    -- Some server builds expose a dialogue-ready boolean before the fruit stage.
+    if state == true then
+        pcall(function() CommF_:InvokeServer("TalkTrevor", "2") end)
+        task.wait(0.25)
+        state = TrevorStatus()
+        if state == 0 then
+            _G.State.NeedTrevorFruit = false
+            return true
+        end
+    end
+
+    if state == 1 or state ~= 0 then
+        local loaded, fruitName = LoadCheapestTrevorFruit()
+        if not loaded then
+            _G.State.NeedTrevorFruit = true
+            _G.BobonStatus = "Sea 3: Need physical fruit >= $1M for Trevor"
+            return false
+        end
+        _G.BobonStatus = "Sea 3: Trevor • giving " .. tostring(fruitName)
+        -- Public kaitun implementations use Trevor's 1/2/3 dialogue sequence.
+        -- Re-read state after the sequence; never fake the unlock locally.
+        pcall(function() CommF_:InvokeServer("TalkTrevor", "1") end)
+        task.wait(0.20)
+        pcall(function() CommF_:InvokeServer("TalkTrevor", "2") end)
+        task.wait(0.35)
+        pcall(function() CommF_:InvokeServer("TalkTrevor", "1") end)
+        task.wait(0.20)
+        pcall(function() CommF_:InvokeServer("TalkTrevor", "3") end)
+        task.wait(0.80)
+        state = TrevorStatus()
+    end
+
+    local unlocked = state == 0
+    _G.State.NeedTrevorFruit = not unlocked
+    if not unlocked then _G.BobonStatus = "Sea 3: Trevor access not verified" end
+    return unlocked
+end
+
+local function ZQuestState()
+    local state
+    pcall(function() state = CommF_:InvokeServer("ZQuestProgress", "Check") end)
+    if state == nil then
+        pcall(function() state = CommF_:InvokeServer("ZQuestProgress", "General") end)
+    end
+    return state
+end
+
 function ItemProgression:CheckThirdSea()
+    -- At max level the completion controller may intentionally return to Sea 2
+    -- for Factory/Rengoku/Dragon Trident/etc. Keep that completion window intact.
+    if Level() >= MAX_LEVEL then return false end
     if GetSea() ~= 2 or Level() < 1500 then return false end
+    -- Bank Sea-2-only Godhuman/Skull/Sanguine materials before TravelZou.
+    if MaterialPrepController and MaterialPrepController:TryRunForSeaExit(2) then return true end
     if not CombatController:IsDamageReady() then return false end
     if not self:OptionalReady("Sea3") then return false end
     local myToken = _G.State:ClaimAction("Sea3")
     if myToken == 0 then return false end
     PrepareClaimedAction("Sea3")
-    self.NextOptional.Sea3 = tick() + 10
+    self.NextOptional.Sea3 = tick() + 8
     _G.State:SetMode("UnlockingSea")
     _G.BobonStatus = "Sea: Unlock 3rd Sea"
-
 
     task.spawn(function()
         local ok, err = xpcall(function()
             if not _G.State:IsActionValid(myToken) then return end
-            local progress
-            pcall(function()
-                progress = CommF_:InvokeServer("ZQuestProgress", "General")
-            end)
-            if progress ~= 0 then
+
+            -- Trevor is a hard gate to Don Swan. Do not try to clip/teleport into
+            -- the room: obtain a qualifying physical fruit and verify the server state.
+            if not EnsureTrevorAccess() then return end
+
+            local zState = ZQuestState()
+            if zState == 1 then
+                _G.State.Sea3NeedDonSwan = false
+                _G.BobonStatus = "Sea 3: Mr. Captain"
+                pcall(function() CommF_:InvokeServer("TravelZou") end)
+                return
+            end
+
+            -- First ask King Red Head to begin. If Don Swan is still required the
+            -- server refuses this harmlessly; then we kill a live Don Swan below.
+            if TravelAndWait("Sea3", myToken, CFrame.new(-1926.32,12.82,1738.31), {
+                timeout=90, arrivalThreshold=10, settle=0.8,
+            }) then
+                pcall(function() CommF_:InvokeServer("ZQuestProgress", "Begin") end)
+                task.wait(1.25)
+            end
+
+            local indra = FindBoss("rip_indra")
+            if not indra then
                 local donSwan = FindBoss("Don Swan")
                 if donSwan then
-                    local deadline = tick() + 180
-                    while _G.State:IsActionValid(myToken) and IsAlive()
-                        and tick() < deadline do
+                    _G.State.Sea3NeedDonSwan = false
+                    _G.BobonStatus = "Sea 3: Defeating Don Swan"
+                    local deadline = tick() + 210
+                    while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
                         local bh = donSwan:FindFirstChildOfClass("Humanoid")
                         local br = donSwan:FindFirstChild("HumanoidRootPart")
                         if not bh or bh.Health <= 0 or not br then break end
@@ -6073,50 +6342,52 @@ function ItemProgression:CheckThirdSea()
                             arrivalThreshold=_G.Settings.FarmArrivalThreshold,
                             combatHover=true,
                         })
-                        if TravelManager:IsAtCombatAnchor(br) then
-                            Attack(donSwan, "Don Swan")
-                        end
-                        task.wait(0.12)
+                        if TravelManager:IsAtCombatAnchor(br) then Attack(donSwan, "Don Swan") end
+                        task.wait(0.10)
                     end
-                    pcall(function()
-                        progress = CommF_:InvokeServer("ZQuestProgress", "General")
-                    end)
+                    task.wait(1.0)
+                    if _G.State:IsActionValid(myToken) then
+                        TravelAndWait("Sea3", myToken, CFrame.new(-1926.32,12.82,1738.31), {
+                            timeout=90, arrivalThreshold=10, settle=0.5,
+                        })
+                        pcall(function() CommF_:InvokeServer("ZQuestProgress", "Begin") end)
+                        task.wait(1.25)
+                        indra = FindBoss("rip_indra")
+                    end
+                else
+                    _G.State.Sea3NeedDonSwan = true
+                    _G.BobonStatus = "Sea 3: Waiting/need hop for Don Swan"
+                    return
                 end
             end
-            if progress == 0 then
-                if not TravelAndWait("Sea3", myToken, CFrame.new(-1926.32,12.82,1738.31), {
-                    timeout=90, arrivalThreshold=10, settle=1.5,
-                }) then
-                    return
-                end
-                pcall(function() CommF_:InvokeServer("ZQuestProgress", "Begin") end)
-                task.wait(1.5)
 
-                local boss = FindBoss("rip_indra")
-                if not boss then
-                    _G.BobonStatus = "Sea: Waiting for rip_indra quest boss"
-                    return
-                end
+            if indra then
+                _G.State.Sea3NeedDonSwan = false
+                _G.BobonStatus = "Sea 3: King Red Head • rip_indra"
                 local deadline = tick() + 240
-                while _G.State:IsActionValid(myToken) and IsAlive()
-                    and tick() < deadline do
-                    local bh = boss:FindFirstChildOfClass("Humanoid")
-                    local br = boss:FindFirstChild("HumanoidRootPart")
+                while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+                    local zNow = ZQuestState()
+                    if zNow == 1 then break end
+                    local bh = indra:FindFirstChildOfClass("Humanoid")
+                    local br = indra:FindFirstChild("HumanoidRootPart")
                     if not bh or bh.Health <= 0 or not br then break end
-                    PrepareCombatTarget(boss)
+                    PrepareCombatTarget(indra)
                     EquipCombatTool()
                     TravelManager:Request(br, "Sea3", {
                         arrivalThreshold = _G.Settings.FarmArrivalThreshold,
                         combatHover = true,
                     })
-                    if TravelManager:IsAtCombatAnchor(br) then
-                        Attack(boss, "rip_indra")
-                    end
-                    task.wait(0.12)
+                    if TravelManager:IsAtCombatAnchor(br) then Attack(indra, "rip_indra") end
+                    -- Quest completion triggers around half health; allow the server
+                    -- cutscene/teleport to resolve instead of requiring a literal kill.
+                    if bh.MaxHealth > 0 and bh.Health <= bh.MaxHealth * 0.52 then task.wait(0.8) end
+                    task.wait(0.10)
                 end
             end
 
-            if _G.State:IsActionValid(myToken) and IsAlive() then
+            task.wait(1.0)
+            if _G.State:IsActionValid(myToken) and IsAlive() and ZQuestState() == 1 then
+                _G.BobonStatus = "Sea 3: Traveling with Mr. Captain"
                 local traveled = false
                 pcall(function()
                     CommF_:InvokeServer("TravelZou")
@@ -6130,9 +6401,7 @@ function ItemProgression:CheckThirdSea()
             TravelManager:Stop("Sea3Complete")
         end
         _G.State:ReleaseAction(myToken)
-        if _G.State.Mode == "UnlockingSea" then
-            _G.State:SetMode("Idle")
-        end
+        if _G.State.Mode == "UnlockingSea" then _G.State:SetMode("Idle") end
     end)
     return true
 end
@@ -6179,6 +6448,189 @@ local function StartOptionalAction(self, key, owner, status, body)
         if _G.State.Mode == "GettingItem" then _G.State:SetMode("Idle") end
     end)
     return true
+end
+
+
+-- ══════════════════════════════════════════════════════════════════
+-- v21 MATERIAL PREP + FIGHTING-STYLE HARD PREREQUISITES
+-- Mature kaitun behavior is goal-based: gather only material that feeds a
+-- permanent progression purchase, keep the player airborne, and return to
+-- leveling after a bounded work window.
+-- ══════════════════════════════════════════════════════════════════
+MaterialPrepController = {
+    Active = false,
+    NextTry = {},
+}
+
+local function HasFireEssence()
+    return FindOwnedTool("Fire Essence") ~= nil or InventoryHas("Fire Essence")
+end
+
+local function SkullBoneReserve()
+    return (_G.Settings.AutoSoulGuitar
+        and not (InventoryHas("Skull Guitar") or InventoryHas("Soul Guitar"))) and 500 or 0
+end
+
+local function DragonTalonMissing()
+    return not InventoryHas("Dragon Talon")
+        and math.max(EffectiveMastery("Dragon Breath"), EffectiveMastery("Dragon Claw")) >= 400
+end
+
+local function NeedSanguineMaterials()
+    return _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee
+        and not InventoryHas("Sanguine Art")
+end
+
+local function NeedGodhumanMaterials()
+    return _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee
+        and not InventoryHas("Godhuman")
+end
+
+function MaterialPrepController:FarmMaterialGroup(key, material, goal, names, anchorCF, entrance)
+    goal = math.max(0, tonumber(goal) or 0)
+    if goal <= 0 then return false end
+    InventoryCache.At = 0
+    if MaterialCount(material) >= goal then return false end
+    if not CombatController:IsDamageReady() or not _G.State:CanAct() then return false end
+    if tick() < (self.NextTry[key] or 0) then return false end
+    self.NextTry[key] = tick() + (_G.Settings.MaterialRetry or 12)
+
+    local label = ("Material: %s %d/%d"):format(material, MaterialCount(material), goal)
+    return StartOptionalAction(ItemProgression, "Material-" .. key, "Material", label, function(token)
+        if entrance and typeof(entrance) == "Vector3" then
+            pcall(function() CommF_:InvokeServer("requestEntrance", entrance) end)
+            task.wait(0.8)
+        end
+        local deadline = tick() + (_G.Settings.MaterialFarmTimeout or 240)
+        local lastInventory = 0
+        while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+            if tick() - lastInventory >= (_G.Settings.MaterialInventoryRefresh or 1.5) then
+                InventoryCache.At = 0
+                lastInventory = tick()
+                local have = MaterialCount(material)
+                _G.BobonStatus = ("Material: %s %d/%d"):format(material, have, goal)
+                if have >= goal then break end
+            end
+
+            ClusterFarmController:Activate("ITEM", names, anchorCF, "Material")
+            ClusterFarmController:Tick()
+            local hover = ClusterFarmController:GetHoverCFrame(_G.Settings.FarmHeight or 22)
+            if hover and _G.State:CanRequestTravel() then
+                TravelManager:Request(hover, "Material", {
+                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                    combatHover = true,
+                    persistent = true,
+                })
+            end
+            local primary = ClusterFarmController:SelectPrimary()
+            if primary and _G.State:IsTargetValid(primary) then
+                _G.State.CurrentTarget = primary
+                PrepareCombatTarget(primary)
+                if TravelManager:IsAtCombatAnchor() then
+                    EquipCombatTool()
+                    Attack(primary, primary.Name)
+                end
+            end
+            task.wait(0.06)
+        end
+        InventoryCache.At = 0
+        FarmPositionController:ReleaseCluster()
+    end)
+end
+
+function MaterialPrepController:TryRunForSeaExit(sea)
+    if sea == 1 and GetSea() == 1 and NeedGodhumanMaterials() then
+        if self:FarmMaterialGroup("MagmaOre", "Magma Ore", 20,
+            {"Military Soldier","Military Spy"}, CFrame.new(-5411.16,11.08,8454.29)) then return true end
+        if self:FarmMaterialGroup("FishTail", "Fish Tail", 20,
+            {"Fishman Warrior","Fishman Commando"}, CFrame.new(61122.65,18.5,1569.4),
+            Vector3.new(61163.85,11.68,1819.78)) then return true end
+    elseif sea == 2 and GetSea() == 2 then
+        if NeedGodhumanMaterials() and self:FarmMaterialGroup("MysticDroplet", "Mystic Droplet", 10,
+            {"Sea Soldier","Water Fighter"}, CFrame.new(-3054.44,235.54,-10142.82)) then return true end
+
+        local ectoGoal = 0
+        if not InventoryHas("Midnight Blade") then ectoGoal = ectoGoal + 100 end
+        if _G.Settings.AutoSoulGuitar and not (InventoryHas("Skull Guitar") or InventoryHas("Soul Guitar")) then
+            ectoGoal = ectoGoal + 250
+        end
+        if ectoGoal > 0 and self:FarmMaterialGroup("Ectoplasm", "Ectoplasm", ectoGoal,
+            {"Ship Deckhand","Ship Engineer","Ship Steward","Ship Officer"},
+            CFrame.new(919.48,129.56,33436.04), Vector3.new(923.21,126.98,32852.83)) then return true end
+
+        if NeedSanguineMaterials() and self:FarmMaterialGroup("VampireFang", "Vampire Fang", 20,
+            {"Vampire"}, CFrame.new(-6037.67,32.18,-1340.66)) then return true end
+    end
+    return false
+end
+
+function MaterialPrepController:TryRunCurrentSea()
+    if GetSea() ~= 3 then return false end
+    if NeedGodhumanMaterials() and self:FarmMaterialGroup("DragonScale", "Dragon Scale", 10,
+        {"Dragon Crew Warrior","Dragon Crew Archer"}, CFrame.new(6709.76,52.34,-1139.03)) then return true end
+
+    local boneGoal = SkullBoneReserve()
+    if DragonTalonMissing() and not HasFireEssence() then
+        boneGoal = boneGoal + 50 * (_G.Settings.DeathKingReserveRolls or 10)
+    end
+    if _G.Settings.AutoCDK and not InventoryHas("Cursed Dual Katana") then
+        boneGoal = boneGoal + 50 * (_G.Settings.DeathKingReserveRolls or 10)
+    end
+    if boneGoal > 0 and self:FarmMaterialGroup("Bones", "Bones", boneGoal,
+        {"Reborn Skeleton","Living Zombie","Demonic Soul","Posessed Mummy"},
+        CFrame.new(-9516,140,6000)) then return true end
+
+    if NeedSanguineMaterials() and self:FarmMaterialGroup("DemonicWisp", "Demonic Wisp", 20,
+        {"Demonic Soul"}, CFrame.new(-9505.87,172.10,6158.99)) then return true end
+    return false
+end
+
+FightingStyleUnlockController = { LastBoneRoll = 0 }
+function FightingStyleUnlockController:TryRun()
+    if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee then return false end
+
+    -- Death Step: Library Key from Awakened Ice Admiral permanently opens the door.
+    local darkM = math.max(EffectiveMastery("Dark Step"), EffectiveMastery("Black Leg"))
+    if GetSea() == 2 and darkM >= 400 and not InventoryHas("Death Step") then
+        if FindOwnedTool("Library Key") then
+            return StartOptionalAction(ItemProgression, "DeathStepDoor", "StyleUnlock",
+                "Melee: Unlocking Death Step", function(token)
+                EquipNamedTool("Library Key")
+                TravelAndWait("StyleUnlock", token, CFrame.new(6377.09,296.63,-6843.89), {
+                    timeout=90, arrivalThreshold=7, settle=1.2,
+                })
+                InvokeStyle("BuyDeathStep", true)
+                InvokeStyle("BuyDeathStep")
+            end)
+        end
+    end
+
+    -- Sharkman Karate: Water Key is consumed/validated by the teacher endpoint.
+    local waterM = math.max(EffectiveMastery("Water Kung Fu"), EffectiveMastery("Fishman Karate"))
+    if GetSea() == 2 and waterM >= 400 and not InventoryHas("Sharkman Karate")
+        and FindOwnedTool("Water Key") then
+        InvokeStyle("BuySharkmanKarate", true)
+        InvokeStyle("BuySharkmanKarate")
+        return false
+    end
+
+    -- Dragon Talon: Fire Essence comes from Death King's 50-Bone surprise roll.
+    local dragonM = math.max(EffectiveMastery("Dragon Breath"), EffectiveMastery("Dragon Claw"))
+    if GetSea() == 3 and dragonM >= 400 and not InventoryHas("Dragon Talon") then
+        if HasFireEssence() then
+            InvokeStyle("BuyDragonTalon", true)
+            InvokeStyle("BuyDragonTalon")
+            return false
+        end
+        local reserve = SkullBoneReserve()
+        if MaterialCount("Bones") >= reserve + 50
+            and tick() - (self.LastBoneRoll or 0) >= (_G.Settings.DeathKingRollRetry or 2) then
+            self.LastBoneRoll = tick()
+            pcall(function() CommF_:InvokeServer("Bones","Buy",1,1) end)
+            InventoryCache.At = 0
+        end
+    end
+    return false
 end
 
 function ItemProgression:CheckKabucha()
@@ -6249,8 +6701,8 @@ function ItemProgression:CheckMidnightBlade()
 end
 
 function ItemProgression:CheckYama()
-    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 3 or Level() < 1500
-        or InventoryHas("Yama") then return false end
+    if not _G.Settings.AutoAdvancedItems or not _G.Settings.AutoCDK
+        or GetSea() ~= 3 or Level() < 1500 or InventoryHas("Yama") then return false end
     local progress
     pcall(function() progress = CommF_:InvokeServer("EliteHunter","Progress") end)
     progress = tonumber(progress) or 0
@@ -6286,8 +6738,8 @@ function ItemProgression:CheckYama()
 end
 
 function ItemProgression:CheckTushita()
-    if not _G.Settings.AutoAdvancedItems or GetSea() ~= 3 or Level() < 2000
-        or InventoryHas("Tushita") then return false end
+    if not _G.Settings.AutoAdvancedItems or not _G.Settings.AutoCDK
+        or GetSea() ~= 3 or Level() < 2000 or InventoryHas("Tushita") then return false end
     if not CombatController:IsDamageReady() then return false end
 
     local torch = FindOwnedTool("Holy Torch")
@@ -6342,6 +6794,327 @@ function ItemProgression:CheckTushita()
     return false
 end
 
+-- v21 CDK trial helpers. Only states documented by the live Progress table and
+-- cross-checked against current public implementations are automated.
+local function GetCDKProgress()
+    local progress
+    pcall(function() progress = CommF_:InvokeServer("CDKQuest","Progress") end)
+    if type(progress) ~= "table" then
+        pcall(function() progress = CommF_:InvokeServer("CDKQuest","Progress","Good") end)
+    end
+    return type(progress) == "table" and progress or nil
+end
+
+local function BaseMobName(name)
+    local n = tostring(name or "")
+    n = n:gsub("%s*%[[^%]]+%]", "")
+    return (n:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+local function FindNearestNamedNPC(pos, needles)
+    local npcs = workspace:FindFirstChild("NPCs")
+    if not npcs then return nil end
+    local best, bestDist
+    for _, obj in ipairs(npcs:GetDescendants()) do
+        if obj:IsA("Model") then
+            local lname = string.lower(tostring(obj.Name or ""))
+            local match = false
+            for _, needle in ipairs(needles) do
+                if lname:find(string.lower(needle), 1, true) then match = true break end
+            end
+            if match then
+                local root = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                if root then
+                    local d = (root.Position - pos).Magnitude
+                    if not bestDist or d < bestDist then best, bestDist = obj, d end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function GetDimension(name)
+    local map = workspace:FindFirstChild("Map")
+    return (map and map:FindFirstChild(name)) or workspace:FindFirstChild(name)
+end
+
+local function DimensionCFrame(dim)
+    if not dim then return nil end
+    if dim:IsA("BasePart") then return dim.CFrame end
+    local ok, cf = pcall(function() return dim:GetPivot() end)
+    return ok and cf or nil
+end
+
+local function ActivateAllPrompts(root)
+    if not root or type(fireproximityprompt) ~= "function" then return 0 end
+    local count = 0
+    for _, obj in ipairs(root:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            if pcall(function() fireproximityprompt(obj) end) then count = count + 1 end
+        end
+    end
+    return count
+end
+
+local function DimensionMobNames(center, radius)
+    local folder = workspace:FindFirstChild("Enemies")
+    local names, seen = {}, {}
+    if not folder or not center then return names end
+    for _, mob in ipairs(folder:GetChildren()) do
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local root = mob:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and root and (root.Position - center).Magnitude <= radius then
+            local n = BaseMobName(mob.Name)
+            if n ~= "" and not seen[n] then seen[n] = true; names[#names+1] = n end
+        end
+    end
+    return names
+end
+
+local function FightDimension(owner, token, dimensionName, timeout)
+    local deadline = tick() + (timeout or 180)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        local dim = GetDimension(dimensionName)
+        local cf = DimensionCFrame(dim)
+        if not dim or not cf then return false end
+        ActivateAllPrompts(dim)
+        local names = DimensionMobNames(cf.Position, _G.Settings.CDKDimensionRadius or 1200)
+        if #names > 0 then
+            ClusterFarmController:Activate("ITEM", names, cf, owner)
+            ClusterFarmController:Tick()
+            local hover = ClusterFarmController:GetHoverCFrame(_G.Settings.FarmHeight or 22)
+            if hover then TravelManager:Request(hover, owner, {arrivalThreshold=3, combatHover=true, persistent=true}) end
+            local primary = ClusterFarmController:SelectPrimary()
+            if primary and _G.State:IsTargetValid(primary) and TravelManager:IsAtCombatAnchor() then
+                PrepareCombatTarget(primary); EquipCombatTool(); Attack(primary, primary.Name)
+            end
+        end
+        task.wait(0.08)
+    end
+    FarmPositionController:ReleaseCluster()
+    return true
+end
+
+local function FindCastleRaidMobs()
+    local folder = workspace:FindFirstChild("Enemies")
+    local names, seen = {}, {}
+    if not folder then return names end
+    local castle = Vector3.new(-5500, 313, -2800)
+    for _, mob in ipairs(folder:GetChildren()) do
+        local hum = mob:FindFirstChildOfClass("Humanoid")
+        local root = mob:FindFirstChild("HumanoidRootPart")
+        local lname = string.lower(BaseMobName(mob.Name))
+        local raidMarker = mob:FindFirstChild("Pirate Spawned Tick", true) ~= nil
+        local known = lname == "pirate millionaire" or lname == "pistol billionaire"
+        if hum and hum.Health > 0 and root and (raidMarker or (known and (root.Position-castle).Magnitude < 2200)) then
+            local n = BaseMobName(mob.Name)
+            if not seen[n] then seen[n]=true; names[#names+1]=n end
+        end
+    end
+    return names
+end
+
+local function FindHazeModel()
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder then
+        for _, mob in ipairs(folder:GetChildren()) do
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and mob:FindFirstChild("HazeESP") and mob:FindFirstChild("HumanoidRootPart") then
+                return mob, true
+            end
+        end
+    end
+    for _, mob in ipairs(RS:GetChildren()) do
+        if mob:IsA("Model") and mob:FindFirstChild("HazeESP") and mob:FindFirstChild("HumanoidRootPart") then
+            return mob, false
+        end
+    end
+    return nil, false
+end
+
+local function CDKProgressChanged(side, expected)
+    local p = GetCDKProgress()
+    local value = p and tonumber(p[side])
+    return value ~= expected
+end
+
+local function RunCDKDocks(token)
+    local spots = {
+        CFrame.new(-4602.5107,16.4465,-2880.9980),
+        CFrame.new(4001.1853,10.0894,-2654.8633),
+        CFrame.new(-9530.7637,7.2452,-8375.5088),
+    }
+    for _, cf in ipairs(spots) do
+        if not _G.State:IsActionValid(token) or CDKProgressChanged("Good", -3) then break end
+        if TravelAndWait("CDK", token, cf, {timeout=90,arrivalThreshold=8,settle=0.5}) then
+            local dealer = FindNearestNamedNPC(cf.Position, {"Luxury Boat Dealer","Boat Dealer"})
+            if dealer then
+                pcall(function() CommF_:InvokeServer("CDKQuest","BoatQuest",dealer,"Check") end)
+                pcall(function() CommF_:InvokeServer("CDKQuest","BoatQuest",dealer) end)
+                task.wait(0.8)
+            end
+        end
+    end
+end
+
+local function RunCDKSenseOfDuty(token)
+    local names = FindCastleRaidMobs()
+    if #names == 0 then return false end
+    local anchor = CFrame.new(-5500,313,-2800)
+    local deadline = tick() + 180
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline
+        and not CDKProgressChanged("Good", -4) do
+        names = FindCastleRaidMobs()
+        if #names == 0 then task.wait(0.5) continue end
+        ClusterFarmController:Activate("ITEM", names, anchor, "CDK")
+        ClusterFarmController:Tick()
+        local hover = ClusterFarmController:GetHoverCFrame(_G.Settings.FarmHeight or 22)
+        if hover then TravelManager:Request(hover, "CDK", {arrivalThreshold=3,combatHover=true,persistent=true}) end
+        local primary = ClusterFarmController:SelectPrimary()
+        if primary and TravelManager:IsAtCombatAnchor() then
+            PrepareCombatTarget(primary); EquipCombatTool(); Attack(primary, primary.Name)
+        end
+        task.wait(0.06)
+    end
+    FarmPositionController:ReleaseCluster()
+    return true
+end
+
+local function RunCDKSoulless(token)
+    if GetDimension("HeavenDimension") then
+        return FightDimension("CDK", token, "HeavenDimension", 180)
+    end
+    local queen = FindBoss("Cake Queen")
+    if not queen then return false end
+    local deadline = tick() + 118
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+        local hum = queen and queen:FindFirstChildOfClass("Humanoid")
+        local root = queen and queen:FindFirstChild("HumanoidRootPart")
+        if not queen or not queen.Parent or not hum or hum.Health <= 0 or not root then break end
+        PrepareCombatTarget(queen); EquipCombatTool()
+        TravelManager:Request(root, "CDK", {arrivalThreshold=3,combatHover=true,hoverHeight=_G.Settings.BossFarmHeight or 24})
+        if TravelManager:IsAtCombatAnchor(root) then Attack(queen, "Cake Queen") end
+        task.wait(0.08)
+    end
+    local waitDim = tick() + 8
+    while _G.State:IsActionValid(token) and tick() < waitDim and not GetDimension("HeavenDimension") do task.wait(0.2) end
+    if GetDimension("HeavenDimension") then return FightDimension("CDK", token, "HeavenDimension", 180) end
+    return true
+end
+
+local function RunCDKPain(token)
+    EquipNamedTool("Yama")
+    local deadline = tick() + (_G.Settings.CDKTrialTimeout or 600)
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline
+        and not CDKProgressChanged("Evil", -3) do
+        local mob = FindMob("Forest Pirate")
+        if not mob then
+            TravelManager:Request(CFrame.new(-13274.48,332.38,-7769.58), "CDK", {persistent=true})
+            task.wait(1); continue
+        end
+        local root = mob:FindFirstChild("HumanoidRootPart")
+        local hum = Hum()
+        if not root or not hum then task.wait(0.2); continue end
+        local pct = hum.MaxHealth > 0 and hum.Health / hum.MaxHealth * 100 or 100
+        EquipNamedTool("Yama")
+        if pct <= 22 then
+            TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,28,0)), "CDK", {persistent=true})
+            repeat task.wait(0.25) until not _G.State:IsActionValid(token) or not IsAlive()
+                or (Hum() and Hum().MaxHealth > 0 and Hum().Health/Hum().MaxHealth*100 >= 72)
+        else
+            -- Trial requires taking damage with Yama; intentionally do not attack.
+            TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,1,4)), "CDK", {persistent=true})
+            _G.BobonStatus = "CDK: Pain and Suffering - taking damage"
+            task.wait(0.25)
+        end
+    end
+    return true
+end
+
+local function RunCDKHaze(token)
+    local deadline = tick() + (_G.Settings.CDKTrialTimeout or 600)
+    local qIndex = 1
+    while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline
+        and not CDKProgressChanged("Evil", -4) do
+        local target, live = FindHazeModel()
+        if target then
+            local root = target:FindFirstChild("HumanoidRootPart")
+            if live and root then
+                local names, seen = {}, {}
+                local folder = workspace:FindFirstChild("Enemies")
+                for _, mob in ipairs(folder and folder:GetChildren() or {}) do
+                    if mob:FindFirstChild("HazeESP") and mob:FindFirstChildOfClass("Humanoid")
+                        and mob:FindFirstChildOfClass("Humanoid").Health > 0 then
+                        local n=BaseMobName(mob.Name); if not seen[n] then seen[n]=true; names[#names+1]=n end
+                    end
+                end
+                ClusterFarmController:Activate("ITEM", names, CFrame.new(root.Position), "CDK")
+                ClusterFarmController:Tick()
+                local hover=ClusterFarmController:GetHoverCFrame(_G.Settings.FarmHeight or 22)
+                if hover then TravelManager:Request(hover,"CDK",{arrivalThreshold=3,combatHover=true,persistent=true}) end
+                local primary=ClusterFarmController:SelectPrimary()
+                if primary and TravelManager:IsAtCombatAnchor() then
+                    PrepareCombatTarget(primary); EquipCombatTool(); Attack(primary, primary.Name)
+                end
+            elseif root and IsValidPos(root.Position) then
+                TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,22,0)), "CDK", {persistent=true})
+            end
+        else
+            -- Stream Sea-3 islands until the server exposes the next purple-marked NPC.
+            local sea3 = {}
+            for _, q in ipairs(QDB) do if q.Min >= 1500 and q.MC then sea3[#sea3+1]=q.MC end end
+            if #sea3 > 0 then
+                qIndex = ((qIndex - 1) % #sea3) + 1
+                TravelAndWait("CDK", token, sea3[qIndex], {timeout=45,arrivalThreshold=25,settle=0.2})
+                qIndex = qIndex + 1
+            else task.wait(0.5) end
+        end
+        task.wait(0.06)
+    end
+    FarmPositionController:ReleaseCluster()
+    return true
+end
+
+local function RunCDKFear(token)
+    if GetDimension("HellDimension") then
+        _G.State.CDKResumeStage = "Fear"
+        local result = FightDimension("CDK", token, "HellDimension", 220)
+        if CDKProgressChanged("Evil", -5) then _G.State.CDKResumeStage = nil end
+        return result
+    end
+    local reaper = FindBoss("Soul Reaper") or FindMob("Soul Reaper")
+    if reaper and reaper:FindFirstChild("HumanoidRootPart") then
+        _G.State.CDKResumeStage = "Fear"
+        EquipNamedTool("Yama")
+        local root = reaper.HumanoidRootPart
+        local deadline = tick() + 120
+        while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline
+            and not GetDimension("HellDimension") and not CDKProgressChanged("Evil", -5) do
+            EquipNamedTool("Yama")
+            -- Intentional trial death: Soul Reaper must kill the player. Never attack it.
+            TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,1,4)), "CDK", {persistent=true})
+            _G.BobonStatus = "CDK: Fear the Reaper - intentional trial death"
+            task.wait(0.2)
+        end
+        return true
+    end
+    if FindOwnedTool("Hallow Essence") then
+        EquipNamedTool("Hallow Essence")
+        TravelAndWait("CDK", token, CFrame.new(-8932.32,146.83,6062.55), {
+            timeout=90,arrivalThreshold=7,settle=1.2,
+        })
+        return true
+    end
+    -- No Reaper/essence: use Death King rolls only from bones above Skull reserve.
+    local reserve = SkullBoneReserve()
+    if MaterialCount("Bones") >= reserve + 50 then
+        pcall(function() CommF_:InvokeServer("Bones","Buy",1,1) end)
+        InventoryCache.At = 0
+    end
+    return false
+end
+
 function ItemProgression:CheckCDK()
     if not _G.Settings.AutoCDK or GetSea() ~= 3 or Level() < 2200
         or InventoryHas("Cursed Dual Katana") then return false end
@@ -6350,27 +7123,62 @@ function ItemProgression:CheckCDK()
         return false
     end
     if not self:OptionalReady("CDK") then return false end
-    self.NextOptional.CDK = tick() + (_G.Settings.ProgressionRetry or 45)
+
+    local progress = GetCDKProgress()
+    local good = progress and tonumber(progress.Good)
+    local evil = progress and tonumber(progress.Evil)
     local fragments = MaterialCount("Alucard Fragment")
-    -- Starting a trial is safe/idempotent. Trial-specific kills/travel are left
-    -- to the normal farm unless a live final boss can be verified.
+
+    if good == -3 then
+        return StartOptionalAction(self,"CDK","CDK","CDK: Docks Legend",RunCDKDocks)
+    elseif good == -4 then
+        if #FindCastleRaidMobs() == 0 then _G.BobonStatus="CDK: Waiting Castle Pirate Raid"; return false end
+        return StartOptionalAction(self,"CDK","CDK","CDK: Sense of Duty",RunCDKSenseOfDuty)
+    elseif good == -5 then
+        if not GetDimension("HeavenDimension") and not FindBoss("Cake Queen") then
+            _G.BobonStatus="CDK: Waiting Cake Queen for Soulless"; return false
+        end
+        return StartOptionalAction(self,"CDK","CDK","CDK: Soulless",RunCDKSoulless)
+    elseif evil == -3 then
+        return StartOptionalAction(self,"CDK","CDK","CDK: Pain and Suffering",RunCDKPain)
+    elseif evil == -4 then
+        return StartOptionalAction(self,"CDK","CDK","CDK: Haze of Misery",RunCDKHaze)
+    elseif evil == -5 or _G.State.CDKResumeStage == "Fear" then
+        return StartOptionalAction(self,"CDK","CDK","CDK: Fear the Reaper",RunCDKFear)
+    end
+
     if fragments < 3 then
         pcall(function() CommF_:InvokeServer("CDKQuest","Progress","Evil") end)
         pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Evil") end)
+        self.NextOptional.CDK = tick() + 3
+        return false
     elseif fragments < 6 then
         pcall(function() CommF_:InvokeServer("CDKQuest","Progress","Good") end)
         pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Good") end)
-    else
-        pcall(function() CommF_:InvokeServer("CDKQuest","OpenDoor") end)
-        local boss = FindBoss("Cursed Skeleton Boss")
-        if boss and CombatController:IsDamageReady() then
-            return StartOptionalAction(self, "CDK", "CDK", "Item: Cursed Dual Katana final", function(token)
-                pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Boss") end)
-                FightNamedForAction("Cursed Skeleton Boss", "CDK", token, 240)
-            end)
-        end
+        self.NextOptional.CDK = tick() + 3
+        return false
     end
-    return false
+
+    pcall(function() CommF_:InvokeServer("CDKQuest","OpenDoor") end)
+    local boss = FindBoss("Cursed Skeleton Boss")
+    if not boss or not CombatController:IsDamageReady() then return false end
+    return StartOptionalAction(self,"CDK","CDK","Item: Cursed Dual Katana final",function(token)
+        pcall(function() CommF_:InvokeServer("CDKQuest","StartTrial","Boss") end)
+        local deadline=tick()+240
+        while _G.State:IsActionValid(token) and IsAlive() and tick()<deadline do
+            boss=FindBoss("Cursed Skeleton Boss")
+            if not boss then break end
+            local hum=boss:FindFirstChildOfClass("Humanoid")
+            local root=boss:FindFirstChild("HumanoidRootPart")
+            if not hum or hum.Health<=0 or not root then break end
+            if not EquipNamedTool("Yama") then EquipNamedTool("Tushita") end
+            PrepareCombatTarget(boss)
+            TravelManager:Request(root,"CDK",{arrivalThreshold=3,combatHover=true,hoverHeight=_G.Settings.BossFarmHeight or 24})
+            if TravelManager:IsAtCombatAnchor(root) then Attack(boss,"Cursed Skeleton Boss") end
+            task.wait(0.08)
+        end
+        _G.State.CDKResumeStage=nil
+    end)
 end
 
 function ItemProgression:CheckAcidumRifle()
@@ -6389,62 +7197,215 @@ function ItemProgression:CheckAcidumRifle()
     end)
 end
 
+local function HasSkullGuitar()
+    -- Current display/tool name is Skull Guitar; legacy inventories/remotes may
+    -- still expose Soul Guitar. Treat either as already owned.
+    return InventoryHas("Skull Guitar") or InventoryHas("Soul Guitar")
+end
+
+local function GuitarProgress()
+    local p
+    pcall(function() p=CommF_:InvokeServer("GuitarPuzzleProgress","Check") end)
+    return type(p)=="table" and p or nil
+end
+
+local function FindTrophyPart(castle, index)
+    if not castle then return nil end
+    local wanted="trophy"..tostring(index)
+    for _, obj in ipairs(castle:GetDescendants()) do
+        if string.lower(tostring(obj.Name or "")) == wanted then
+            if obj:IsA("BasePart") then return obj end
+            if obj:IsA("Model") then return obj:FindFirstChild("Handle") or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart",true) end
+        end
+    end
+    return nil
+end
+
+local function AngleNear(value, target, tolerance)
+    local function norm(a) return ((a + 180) % 360) - 180 end
+    return math.abs(norm(value-target)) <= (tolerance or 8)
+end
+
+local function FindSegmentIndicator(segment)
+    if not segment then return nil end
+    local before={}
+    for _,obj in ipairs(segment:GetDescendants()) do
+        if obj:IsA("BasePart") then before[obj]={Z=obj.Orientation.Z,Y=obj.Position.Y} end
+    end
+    if not TryClickDetector(segment) then return nil end
+    task.wait(0.12)
+    local changed
+    for obj,old in pairs(before) do
+        if obj.Parent then
+            if math.abs(obj.Orientation.Z-old.Z)>1 or math.abs(obj.Position.Y-old.Y)>10 then changed=obj break end
+        end
+    end
+    if changed then return changed end
+    -- Fallback: line/indicator-like descendant.
+    for _,obj in ipairs(segment:GetDescendants()) do
+        if obj:IsA("BasePart") then
+            local n=string.lower(obj.Name)
+            if n:find("line",1,true) or n:find("indicator",1,true) then return obj end
+        end
+    end
+    return segment:FindFirstChildWhichIsA("BasePart",true)
+end
+
+local function SolveSkullTrophies(token)
+    local map=workspace:FindFirstChild("Map")
+    local castle=map and map:FindFirstChild("Haunted Castle")
+    local tablet=castle and castle:FindFirstChild("Tablet")
+    if not castle or not tablet then return false end
+    TravelAndWait("SkullGuitar",token,CFrame.new(-9532.82,6.47,6078.07),{timeout=90,arrivalThreshold=12,settle=0.4})
+    local blanks={2,5,6,8,9}
+    for _,idx in ipairs(blanks) do
+        if not _G.State:IsActionValid(token) then return false end
+        local seg=tablet:FindFirstChild("Segment"..idx)
+        local indicator=FindSegmentIndicator(seg)
+        if indicator then
+            for _=1,8 do
+                if indicator.Position.Y < -500 then break end
+                TryClickDetector(seg); task.wait(0.08)
+            end
+        end
+    end
+    local segmentMap={1,3,4,7,10}
+    for trophyIndex,segmentIndex in ipairs(segmentMap) do
+        if not _G.State:IsActionValid(token) then return false end
+        local trophy=FindTrophyPart(castle,trophyIndex)
+        local seg=tablet:FindFirstChild("Segment"..segmentIndex)
+        if not trophy or not seg then return false end
+        local y=trophy.Orientation.Y
+        local targetZ=(AngleNear(y,90,15) or AngleNear(y,-90,15)) and 180 or 90
+        local indicator=FindSegmentIndicator(seg)
+        if not indicator then return false end
+        for _=1,8 do
+            if AngleNear(math.abs(indicator.Orientation.Z),targetZ,10) then break end
+            TryClickDetector(seg); task.wait(0.08)
+        end
+    end
+    task.wait(0.5)
+    local p=GuitarProgress()
+    return p and p.Trophies==true or false
+end
+
+local function FindPipeTargetColor(pipes, partName)
+    if not pipes then return nil end
+    for _,obj in ipairs(pipes:GetDescendants()) do
+        if obj:IsA("BasePart") and obj.Name==partName then return obj.BrickColor end
+    end
+    return nil
+end
+
+local function SolveSkullPipes(token)
+    local map=workspace:FindFirstChild("Map")
+    local castle=map and map:FindFirstChild("Haunted Castle")
+    local lab=castle and castle:FindFirstChild("Lab Puzzle")
+    if not lab then return false end
+    local floor=lab:FindFirstChild("ColorFloor")
+    local pipes=lab:FindFirstChild("Pipes")
+    if not floor or not pipes then return false end
+    TravelAndWait("SkullGuitar",token,CFrame.new(-9628.027,6.131,6157.478),{timeout=90,arrivalThreshold=12,settle=0.4})
+    for i=1,10 do
+        if not _G.State:IsActionValid(token) then return false end
+        local name="Part"..i
+        local tile=floor:FindFirstChild(name)
+        if tile and tile:IsA("BasePart") and tile:FindFirstChildWhichIsA("ClickDetector",true) then
+            local target=FindPipeTargetColor(pipes,name)
+            if not target and i==10 then target=BrickColor.new("Storm blue") end
+            if target then
+                for _=1,10 do
+                    if tile.BrickColor==target then break end
+                    TryClickDetector(tile); task.wait(0.08)
+                end
+            end
+        end
+    end
+    task.wait(0.5)
+    local p=GuitarProgress()
+    return p and p.Pipes==true or false
+end
+
+local function RunSkullSwamp(token)
+    local anchor=CFrame.new(-10170.73,138.65,5934.27)
+    local deadline=tick()+(_G.Settings.SkullSwampTimeout or 240)
+    while _G.State:IsActionValid(token) and IsAlive() and tick()<deadline do
+        local p=GuitarProgress(); if p and p.Swamp==true then break end
+        ClusterFarmController:Activate("ITEM",{"Living Zombie"},anchor,"SkullGuitar")
+        ClusterFarmController:Tick()
+        local batch=ClusterFarmController.LastBatch or {}
+        _G.BobonStatus=("Skull Guitar: Swamp %d/6 stacked"):format(#batch)
+        local hover=ClusterFarmController:GetHoverCFrame(_G.Settings.FarmHeight or 22)
+        if hover then TravelManager:Request(hover,"SkullGuitar",{arrivalThreshold=3,combatHover=true,persistent=true}) end
+        if #batch>=6 then
+            local primary=ClusterFarmController:SelectPrimary()
+            if primary and TravelManager:IsAtCombatAnchor() then
+                PrepareCombatTarget(primary); EquipCombatTool(); Attack(primary,"Living Zombie")
+            end
+        end
+        task.wait(0.05)
+    end
+    FarmPositionController:ReleaseCluster()
+end
+
 function ItemProgression:CheckSoulGuitar()
     if not _G.Settings.AutoSoulGuitar or GetSea() ~= 3 or Level() < 2300
-        or InventoryHas("Soul Guitar") then return false end
+        or HasSkullGuitar() then return false end
     if not self:OptionalReady("SoulGuitar") then return false end
-    self.NextOptional.SoulGuitar = tick() + (_G.Settings.ProgressionRetry or 45)
 
-    -- Once the Skeleton Machine is available, this server-side call validates
-    -- the material bill and performs the purchase. It is harmless when gated.
-    local npcs = workspace:FindFirstChild("NPCs")
+    -- Material bill first. Dark Fragment is handled opportunistically by BossManager.
+    if MaterialCount("Bones") < 500 or MaterialCount("Ectoplasm") < 250
+        or MaterialCount("Dark Fragment") < 1 then
+        _G.BobonStatus=("Skull Guitar: materials B%d/500 E%d/250 D%d/1"):format(
+            MaterialCount("Bones"),MaterialCount("Ectoplasm"),MaterialCount("Dark Fragment"))
+        return false
+    end
+    if not CanSpendFragments(5000,"Item: Skull Guitar",70) then return false end
+
+    local npcs=workspace:FindFirstChild("NPCs")
     if npcs and npcs:FindFirstChild("Skeleton Machine") then
-        if CanSpendFragments(5000, "Item: Soul Guitar", 70) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+        pcall(function() CommF_:InvokeServer("soulGuitarBuy",true) end)
+        self.NextOptional.SoulGuitar=tick()+3
         return false
     end
 
-    local progress
-    pcall(function() progress = CommF_:InvokeServer("GuitarPuzzleProgress","Check") end)
-    if type(progress) ~= "table" then
-        -- Puzzle has not been initialized (normally requires the correct Full Moon
-        -- gravestone interaction). Do not invent client state or spam clicks.
-        return false
+    local progress=GuitarProgress()
+    if not progress then
+        return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: Full Moon gravestone",function(token)
+            TravelAndWait("SkullGuitar",token,CFrame.new(-8655.02,141.32,6160.02),{timeout=90,arrivalThreshold=10,settle=0.6})
+            pcall(function() CommF_:InvokeServer("gravestoneEvent",2) end)
+            pcall(function() CommF_:InvokeServer("gravestoneEvent",2,true) end)
+        end)
     end
-
-    if progress.Swamp == false then
-        -- This stage requires six Living Zombies to die together. The generic
-        -- single-target farm must not fake completion; wait for a verified group.
-        _G.BobonStatus = "Item: Soul Guitar - Swamp stage"
-        return false
-    elseif progress.Gravestones == false then
-        local map = workspace:FindFirstChild("Map")
-        local castle = map and map:FindFirstChild("Haunted Castle")
-        if not castle then return false end
-        local order = {
-            {"Placard7","Left"},{"Placard6","Left"},{"Placard5","Left"},
-            {"Placard4","Right"},{"Placard3","Left"},{"Placard2","Right"},{"Placard1","Right"},
-        }
-        for _, row in ipairs(order) do
-            local placard = castle:FindFirstChild(row[1])
-            local side = placard and placard:FindFirstChild(row[2])
-            if side then TryClickDetector(side) end
-            task.wait(0.08)
-        end
-        return false
-    elseif progress.Ghost == false then
+    if progress.Swamp==false then
+        return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: six Living Zombies",RunSkullSwamp)
+    elseif progress.Gravestones==false then
+        return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: gravestones",function(token)
+            local map=workspace:FindFirstChild("Map"); local castle=map and map:FindFirstChild("Haunted Castle")
+            if not castle then return end
+            local order={{"Placard7","Left"},{"Placard6","Left"},{"Placard5","Left"},{"Placard4","Right"},{"Placard3","Left"},{"Placard2","Right"},{"Placard1","Right"}}
+            for _,row in ipairs(order) do
+                if not _G.State:IsActionValid(token) then break end
+                local placard=castle:FindFirstChild(row[1]); local side=placard and placard:FindFirstChild(row[2])
+                if side then TryClickDetector(side) end; task.wait(0.1)
+            end
+        end)
+    elseif progress.Ghost==false then
         pcall(function() CommF_:InvokeServer("GuitarPuzzleProgress","Ghost") end)
         pcall(function() CommF_:InvokeServer("GuitarPuzzleProgress","Ghost",true) end)
+        self.NextOptional.SoulGuitar=tick()+2
         return false
-    elseif progress.Trophies == false then
-        _G.BobonStatus = "Item: Soul Guitar - Trophy stage"
-        return false
-    elseif progress.Pipes == false then
-        _G.BobonStatus = "Item: Soul Guitar - Pipe stage"
-        return false
+    elseif progress.Trophies==false then
+        return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: randomized trophies",function(token)
+            if not SolveSkullTrophies(token) then _G.BobonStatus="Skull Guitar: trophy map signature retry" end
+        end)
+    elseif progress.Pipes==false then
+        return StartOptionalAction(self,"SoulGuitar","SkullGuitar","Skull Guitar: pipe colors",function(token)
+            if not SolveSkullPipes(token) then _G.BobonStatus="Skull Guitar: pipe map signature retry" end
+        end)
     end
-
-    -- All puzzle flags completed: ask the Skeleton Machine purchase endpoint.
-    if CanSpendFragments(5000, "Item: Soul Guitar", 70) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+    pcall(function() CommF_:InvokeServer("soulGuitarBuy",true) end)
+    self.NextOptional.SoulGuitar=tick()+3
     return false
 end
 
@@ -6504,17 +7465,22 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if self:CheckThirdSea() then return true end
     if not allowOptional then return false end
 
-    -- Cheap/non-blocking progression before long item hunts.
+    -- Goal-based material and hard style prerequisites run only in this safe window.
+    if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
+    if FightingStyleUnlockController and FightingStyleUnlockController:TryRun() then return true end
+
+    -- Kaitun-only progression. Do not spend time/resources collecting unrelated
+    -- optional weapons merely because the account happens to meet their level gate.
     if self:CheckRaceV2() then return true end
     local meleeBusy = false
     pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
     if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
-    if self:CheckKabucha() then return true end
 
-    -- Weapons and puzzles. Every routine is bounded; missing spawn/event simply
-    -- returns false so BossManager/QuestFarm can continue.
+    -- Useful kaitun item queue. Every routine is bounded; missing spawns/keys return
+    -- control to level farming instead of camping indefinitely.
     if self:CheckSaber() then return true end
     if self:CheckPoleV1() then return true end
+    if self:CheckKabucha() then return true end
     if self:CheckRengoku() then return true end
     if self:CheckMidnightBlade() then return true end
     if self:CheckAcidumRifle() then return true end
@@ -6559,7 +7525,7 @@ local BossDatabase = {
     {N="Tide Keeper",Sea=2,MinLevel=1475}, {N="Darkbeard",Sea=2,MinLevel=1000},
     {N="Order",Sea=2,MinLevel=1250}, {N="Cursed Captain",Sea=2,MinLevel=1325},
     -- Sea 3
-    {N="Stone",Sea=3,MinLevel=1550}, {N="Island Empress",Sea=3,MinLevel=1675},
+    {N="Stone",Sea=3,MinLevel=1550}, {N="Hydra Leader",Sea=3,MinLevel=1675}, {N="Island Empress",Sea=3,MinLevel=1675}, -- legacy alias
     {N="Kilo Admiral",Sea=3,MinLevel=1750}, {N="Captain Elephant",Sea=3,MinLevel=1875},
     {N="Beautiful Pirate",Sea=3,MinLevel=1950},
     {N="Longma",Sea=3,MinLevel=2000},
@@ -6575,11 +7541,25 @@ local BossDatabase = {
 -- completed quest for unrelated bosses. Level-skip bosses are handled by the
 -- dedicated SkipRouteController; this manager targets missing useful drops.
 local BossDropItems = {
-    -- Keep only existing kaitun progression/drop goals; no completionist sword hunting.
-    ["Thunder God"] = {"Pole (1st Form)"},
-    ["Awakened Ice Admiral"] = {"Rengoku"},
-    ["Cake Queen"] = {"Buddy Sword"},
+    -- Only live bosses tied to the explicitly retained kaitun items. The manager
+    -- never camps a spawn here; it acts only when the boss already exists.
+    ["Thunder God"] = "Pole (1st Form)",
+    ["Awakened Ice Admiral"] = "Rengoku",
+    ["Tide Keeper"] = "Dragon Trident",
+    ["Orbitus"] = {"Gravity Blade", "Gravity Cane"},
+    ["Fajita"] = {"Gravity Blade", "Gravity Cane"}, -- legacy pre-Update-26 alias
 }
+
+local function RequiredDarkFragments()
+    local need = 0
+    if _G.Settings.AutoSoulGuitar and not (InventoryHas("Skull Guitar") or InventoryHas("Soul Guitar")) then
+        need = need + 1
+    end
+    if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee and not InventoryHas("Sanguine Art") then
+        need = need + 2
+    end
+    return need
+end
 
 local function BossDropMissing(spec)
     if type(spec) == "string" then return not InventoryHas(spec) end
@@ -6621,10 +7601,12 @@ function BossManager:FindLiveBoss()
         if hum and hum.Health > 0 and mobRoot then
             for _, entry in ipairs(BossDatabase) do
                 local wantedItem = BossDropItems[entry.N]
-                local wantedSwordDrop = _G.Settings.AutoBuySwords == true
+                local wantedSwordDrop = wantedItem ~= nil
                     and BossDropMissing(wantedItem)
                 local progressionBoss = entry.N == "Tyrant of the Skies"
                     and level >= 2600 and not SubmergedAccessController.Confirmed
+                local darkFragmentBoss = entry.N == "Darkbeard"
+                    and MaterialCount("Dark Fragment") < RequiredDarkFragments()
                 local styleKeyBoss = _G.Settings.AutoFightingStyles and (
                     (entry.N == "Awakened Ice Admiral" and not InventoryHas("Death Step")
                         and math.max(EffectiveMastery("Dark Step"), EffectiveMastery("Black Leg")) >= 400)
@@ -6635,14 +7617,35 @@ function BossManager:FindLiveBoss()
                     and (not _G.Settings.BossDropsWhen2xExpired or not HasActive2xExp())
                 local hopTarget = false
                 if _G.Settings.HopEnabled then
-                    hopTarget = (_G.Settings.HopElite and (entry.N == "Diablo" or entry.N == "Deandre" or entry.N == "Urban"))
-                        or (_G.Settings.HopFindDarkbeard and entry.N == "Darkbeard")
-                        or (_G.Settings.HopFindSoulReaper and entry.N == "Soul Reaper")
-                        or (_G.Settings.HopFindMirrorFractal and entry.N == "Dough King" and not InventoryHas("Mirror Fractal"))
-                        or (_G.Settings.HopFindTushita and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Tushita"))
-                        or (_G.Settings.HopFindValkyrieHelm and (entry.N == "rip_indra" or entry.N == "rip_indra True Form") and not InventoryHas("Valkyrie Helm"))
+                    local cdkProgress = nil
+                    if _G.Settings.AutoCDK and not InventoryHas("Cursed Dual Katana") then
+                        cdkProgress = GetCDKProgress()
+                    end
+                    local fearStage = _G.State.CDKResumeStage == "Fear"
+                        or (type(cdkProgress)=="table" and tonumber(cdkProgress.Evil)==-5)
+                    local eliteNeeded = false
+                    if _G.Settings.AutoCDK and not InventoryHas("Yama") then
+                        local ep=0
+                        pcall(function() ep=tonumber(CommF_:InvokeServer("EliteHunter","Progress")) or 0 end)
+                        eliteNeeded = ep < 30
+                    end
+                    hopTarget = (_G.Settings.HopElite and eliteNeeded
+                            and (entry.N == "Diablo" or entry.N == "Deandre" or entry.N == "Urban"))
+                        or (_G.Settings.HopFindDarkbeard and entry.N == "Darkbeard"
+                            and MaterialCount("Dark Fragment") < RequiredDarkFragments())
+                        or (_G.Settings.HopFindSoulReaper and entry.N == "Soul Reaper" and fearStage)
+                        or (_G.Settings.HopFindMirrorFractal and entry.N == "Dough King"
+                            and level >= MAX_LEVEL and _G.Settings.AutoKatakuri
+                            and not InventoryHas("Mirror Fractal"))
+                        or (_G.Settings.HopFindTushita
+                            and (entry.N == "rip_indra" or entry.N == "rip_indra True Form")
+                            and _G.Settings.AutoCDK and level >= 2000 and not InventoryHas("Tushita"))
+                        or (_G.Settings.HopFindValkyrieHelm
+                            and (entry.N == "rip_indra" or entry.N == "rip_indra True Form")
+                            and _G.Settings.AutoSpawnRipIndra and level >= MAX_LEVEL
+                            and not InventoryHas("Valkyrie Helm"))
                 end
-                if (wantedSwordDrop or progressionBoss or styleKeyBoss or farmDrops or hopTarget)
+                if (wantedSwordDrop or progressionBoss or darkFragmentBoss or styleKeyBoss or farmDrops or hopTarget)
                     and entry.Sea == sea and level >= entry.MinLevel
                     and IsEnemyNamed(mob, entry.N) then
                     local p = mobRoot.Position
@@ -6730,6 +7733,86 @@ function BossManager:TryFightBoss()
     return true
 end
 
+
+
+-- ══════════════════════════════════════════════════════════════════
+--      v20.0 FACTORY EVENT CONTROLLER — SEA 2 LIVE-EVENT PRIORITY
+--   Factory is not a permanent farm target. It preempts normal quest work only
+--   while a real Core exists in workspace.Enemies, then releases everything and
+--   lets the main level farm resume on the next tick.
+-- ══════════════════════════════════════════════════════════════════
+local FactoryController = {
+    Active = false,
+    NextTry = 0,
+}
+
+function FactoryController:FindCore()
+    if GetSea() ~= 2 then return nil end
+    local core = FindMob("Core") or FindBoss("Core")
+    if core and _G.State:IsTargetValid(core) then return core end
+    return nil
+end
+
+function FactoryController:_Finish(token, reason)
+    if _G.State.IsTraveling and _G.State.MovementOwner == "Factory" then
+        TravelManager:Stop("Factory:" .. tostring(reason))
+    end
+    CombatController:WatchTarget(nil, nil)
+    _G.State:ClearTargets()
+    _G.State:ReleaseAction(token)
+    self.Active = false
+    self.NextTry = tick() + (_G.Settings.FactoryRetry or 2)
+    if _G.State.Mode == "Factory" then _G.State:SetMode("Idle") end
+end
+
+function FactoryController:_Run(core, token)
+    local ok, err = xpcall(function()
+        _G.State:SetMode("Factory")
+        _G.BobonStatus = "Factory: Core spawned • attacking"
+        local deadline = tick() + (_G.Settings.FactoryFightTimeout or 300)
+        while SessionAlive() and _G.State:IsActionValid(token) and IsAlive()
+            and tick() < deadline do
+            _G.State:TouchAction(token)
+            if not core or not core.Parent then break end
+            local hum = core:FindFirstChildOfClass("Humanoid")
+            local root = core:FindFirstChild("HumanoidRootPart")
+            if not hum or hum.Health <= 0 or not root then break end
+            _G.State.CurrentTarget = core
+            PrepareCombatTarget(core)
+            EquipCombatTool()
+            TravelManager:Request(root, "Factory", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                combatHover = true,
+                hoverHeight = _G.Settings.BossFarmHeight or 28,
+            })
+            if TravelManager:IsAtCombatAnchor(root) then
+                Attack(core, "Core")
+            end
+            task.wait(0.08)
+        end
+        InventoryCache.At = 0
+        WeaponInventoryCache.At = 0
+    end, debug.traceback)
+    if not ok then warn("[BobonHub] Module Error: FactoryController: " .. tostring(err)) end
+    self:_Finish(token, ok and "complete" or "error")
+end
+
+function FactoryController:TryRun()
+    if not _G.Settings.AutoFactoryEvent or self.Active
+        or GetSea() ~= 2 or Level() < (_G.Settings.FactoryMinLevel or 700)
+        or tick() < (self.NextTry or 0) or not IsAlive()
+        or not _G.State:CanAct() then
+        return false
+    end
+    local core = self:FindCore()
+    if not core then return false end
+    local token = _G.State:ClaimAction("Factory")
+    if token == 0 then return false end
+    PrepareClaimedAction("Factory")
+    self.Active = true
+    task.spawn(function() self:_Run(core, token) end)
+    return true
+end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -7524,7 +8607,7 @@ local function FindLiveNamed(names)
 end
 
 local RainbowHakiController = { NextTry = 0 }
-local RAINBOW_BOSSES = {"Stone","Island Empress","Kilo Admiral","Captain Elephant","Beautiful Pirate"}
+local RAINBOW_BOSSES = {"Stone","Hydra Leader","Kilo Admiral","Captain Elephant","Beautiful Pirate"}
 function RainbowHakiController:TryRun()
     if not _G.Settings.RainbowHaki or GetSea() ~= 3 or Level() < MAX_LEVEL
         or not _G.State:CanAct() or tick() < self.NextTry then return false end
@@ -7659,6 +8742,53 @@ local function ApplyFPSBoost()
 end
 task.defer(ApplyFPSBoost)
 
+-- v21 completion shuttle: mature kaituns revisit older seas after leveling so
+-- useful permanent items are not lost merely because their boss/event did not spawn
+-- before the mandatory world transition. This runs only at MAX level.
+local CompletionSeaController = { LastTravel = 0 }
+
+function CompletionSeaController:TargetSea()
+    if Level() < MAX_LEVEL then return nil end
+    if _G.Settings.AutoSaber and not InventoryHas("Saber") then return 1, "Saber" end
+    if not InventoryHas("Pole (1st Form)") then return 1, "Pole V1" end
+
+    if not InventoryHas("Kabucha") then return 2, "Kabucha" end
+    if not InventoryHas("Rengoku") then return 2, "Rengoku" end
+    if not InventoryHas("Midnight Blade") then return 2, "Midnight Blade" end
+    if not InventoryHas("Acidum Rifle") then return 2, "Acidum Rifle / Factory" end
+    if not InventoryHas("Dragon Trident") then return 2, "Dragon Trident" end
+    if not InventoryHas("Gravity Blade") and not InventoryHas("Gravity Cane") then return 2, "Gravity Blade" end
+
+    return 3, "endgame"
+end
+
+function CompletionSeaController:TryTravel()
+    if Level() < MAX_LEVEL or not _G.State:CanAct() then return false end
+    local wanted, reason = self:TargetSea()
+    if not wanted or wanted == GetSea() then return false end
+    if tick() - (self.LastTravel or 0) < 12 then return false end
+    self.LastTravel = tick()
+    local token = _G.State:ClaimAction("CompletionSea")
+    if token == 0 then return false end
+    _G.State:SetMode("UnlockingSea")
+    _G.BobonStatus = ("Completion: Sea %d • %s"):format(wanted, tostring(reason))
+    task.spawn(function()
+        local ok = pcall(function()
+            if wanted == 1 then
+                CommF_:InvokeServer("TravelMain")
+            elseif wanted == 2 then
+                CommF_:InvokeServer("TravelDressrosa")
+            else
+                CommF_:InvokeServer("TravelZou")
+            end
+        end)
+        task.wait(2)
+        if _G.State:IsActionValid(token) then _G.State:ReleaseAction(token) end
+        if not ok and _G.State.Mode == "UnlockingSea" then _G.State:SetMode("Idle") end
+    end)
+    return true
+end
+
 local HopManager = { LastHop = 0, Visited = {} }
 local function FindDroppedFruit()
     for _, obj in ipairs(workspace:GetChildren()) do
@@ -7727,64 +8857,150 @@ function HopManager:ShouldHop()
         and _G.State:IsTargetValid(_G.State.FarmTarget)
         and _G.State.ActiveQuestMob ~= nil
         and IsEnemyNamed(_G.State.FarmTarget, _G.State.ActiveQuestMob)
-    -- "Hop Player Near" must not surrender a mob we are already farming.
-    -- The option still works while idle/travelling outside an active quest fight.
-    if _G.Settings.HopPlayerNear and not activeQuestFight then
+
+    if _G.Settings.HopPlayerNear and not activeQuestFight and _G.State.ActiveActionToken == 0 then
         local me=HRP()
         if me then
             for _, p in ipairs(Players:GetPlayers()) do
                 local pr=p~=LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-                if pr and (pr.Position-me.Position).Magnitude <= (_G.Settings.HopPlayerNearRadius or 250) then return "player-near" end
+                if pr and (pr.Position-me.Position).Magnitude <= (_G.Settings.HopPlayerNearRadius or 250) then
+                    return "player-near"
+                end
             end
         end
     end
     if not _G.Settings.HopEnabled then return nil end
-    local missing = {}
-    local requested = 0
 
-    if _G.Settings.HopFindFruit then
-        requested = requested + 1
+    -- Server hopping is demand-driven. Never throw away a valid level quest or
+    -- interrupt a claimed puzzle/raid/boss action merely because a generic hop
+    -- checkbox is enabled.
+    if _G.State.ActiveActionToken ~= 0
+        or _G.State.Mode == "Farming" or _G.State.Mode == "GettingQuest"
+        or _G.State.Mode == "GettingItem" or _G.State.Mode == "Bossing"
+        or _G.State.Mode == "UnlockingSea" or _G.State.Mode == "Raiding" then
+        return nil
+    end
+
+    local sea, lv = GetSea(), Level()
+
+    -- MAX-level completion pass: if an older-sea useful item was missed, stay in
+    -- that sea and hop only for its actual spawn/event. Direct-purchase items such
+    -- as Kabucha/Midnight Blade are handled by ItemProgression without hopping.
+    if lv >= MAX_LEVEL and sea == 1 then
+        if _G.Settings.AutoSaber and not InventoryHas("Saber") then
+            if FindBoss("Mob Leader") or FindBoss("Saber Expert") then return nil end
+            return "completion-saber"
+        end
+        if not InventoryHas("Pole (1st Form)") then
+            if FindBoss("Thunder God") then return nil end
+            return "completion-pole-v1"
+        end
+    elseif lv >= MAX_LEVEL and sea == 2 then
+        if not InventoryHas("Rengoku") and not FindOwnedTool("Hidden Key") then
+            if FindBoss("Awakened Ice Admiral") then return nil end
+            return "completion-rengoku"
+        end
+        if not InventoryHas("Acidum Rifle") then
+            local core = FindMob("Core") or FindBoss("Core")
+            if core and _G.State:IsTargetValid(core) then return nil end
+            return "completion-factory-core"
+        end
+        if not InventoryHas("Dragon Trident") then
+            if FindBoss("Tide Keeper") then return nil end
+            return "completion-dragon-trident"
+        end
+        if not InventoryHas("Gravity Blade") and not InventoryHas("Gravity Cane") then
+            if FindBoss("Orbitus") or FindBoss("Fajita") then return nil end
+            return "completion-gravity-blade"
+        end
+    end
+
+    -- Mandatory Sea-3 gate: a stored/dropped qualifying fruit or Don Swan spawn
+    -- is more important than optional end-game hunts.
+    if sea == 2 and lv >= 1500 then
+        if _G.State.NeedTrevorFruit and _G.Settings.HopFindFruit then
+            local fruit = FindDroppedFruit()
+            if fruit then CollectDroppedFruit(fruit); return nil end
+            return "sea3-trevor-fruit"
+        end
+        if _G.State.Sea3NeedDonSwan then
+            if FindBoss("Don Swan") then return nil end
+            return "sea3-don-swan"
+        end
+    end
+
+    -- CDK critical path: Soul Reaper only matters during Fear the Reaper.
+    if sea == 3 and _G.Settings.HopFindSoulReaper and _G.Settings.AutoCDK
+        and not InventoryHas("Cursed Dual Katana") then
+        local p = GetCDKProgress()
+        local fear = _G.State.CDKResumeStage == "Fear"
+            or (type(p)=="table" and tonumber(p.Evil) == -5)
+        if fear then
+            if FindBoss("Soul Reaper") or FindOwnedTool("Hallow Essence") then return nil end
+            return "cdk-soul-reaper"
+        end
+    end
+
+    -- Tushita needs rip_indra/Holy Torch; hop only when that prerequisite is the
+    -- actual missing CDK branch, not throughout ordinary leveling.
+    if sea == 3 and lv >= 2000 and _G.Settings.HopFindTushita and _G.Settings.AutoCDK
+        and not InventoryHas("Tushita") then
+        if FindOwnedTool("Holy Torch") or FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
+        return "cdk-tushita-indra"
+    end
+
+    -- Yama requires Elite Hunter progress. Only hunt elites while Yama is missing.
+    if sea == 3 and lv >= 1500 and _G.Settings.HopElite and _G.Settings.AutoCDK
+        and not InventoryHas("Yama") then
+        local progress=0
+        pcall(function() progress=tonumber(CommF_:InvokeServer("EliteHunter","Progress")) or 0 end)
+        if progress < 30 then
+            if FindLiveNamed({"Diablo","Deandre","Urban"}) then return nil end
+            return "cdk-yama-elite"
+        end
+    end
+
+    -- Skull/Sanguine need Dark Fragments. Do not hop Darkbeard after the required
+    -- number has already been banked.
+    if sea == 2 and _G.Settings.HopFindDarkbeard then
+        local need = RequiredDarkFragments()
+        if need > 0 and MaterialCount("Dark Fragment") < need then
+            if FindBoss("Darkbeard") then return nil end
+            return "dark-fragment"
+        end
+    end
+
+    -- Dough King is a max-level progression target in this kaitun.
+    if sea == 3 and lv >= MAX_LEVEL and _G.Settings.HopFindMirrorFractal
+        and _G.Settings.AutoKatakuri and not InventoryHas("Mirror Fractal") then
+        if FindBoss("Dough King") then return nil end
+        return "dough-king-mirror"
+    end
+
+    -- Valkyrie Helm is useful only when the user enabled the rip_indra branch.
+    if sea == 3 and lv >= MAX_LEVEL and _G.Settings.HopFindValkyrieHelm
+        and _G.Settings.AutoSpawnRipIndra and not InventoryHas("Valkyrie Helm") then
+        if FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
+        return "indra-valkyrie"
+    end
+
+    -- Mirage hopping is deferred until Mirror Fractal is actually owned. This
+    -- prevents a cosmetic hop option from sabotaging level/progression farming.
+    if sea == 3 and lv >= MAX_LEVEL and _G.Settings.HopFindMirage
+        and InventoryHas("Mirror Fractal") then
+        if MiragePresent() then return nil end
+        return "mirage"
+    end
+
+    -- Generic dropped-fruit hunting is lowest priority and only runs after max.
+    if lv >= MAX_LEVEL and _G.Settings.HopFindFruit then
         local fruit = FindDroppedFruit()
         if fruit then CollectDroppedFruit(fruit); return nil end
-        missing[#missing+1] = "fruit"
+        return "fruit"
     end
-    if GetSea()==3 and _G.Settings.HopElite then
-        requested = requested + 1
-        if FindLiveNamed({"Diablo","Deandre","Urban"}) then return nil end
-        missing[#missing+1] = "elite"
-    end
-    if GetSea()==2 and _G.Settings.HopFindDarkbeard then
-        requested = requested + 1
-        if FindBoss("Darkbeard") then return nil end
-        missing[#missing+1] = "darkbeard"
-    end
-    if GetSea()==3 and _G.Settings.HopFindMirage then
-        requested = requested + 1
-        if MiragePresent() then return nil end
-        missing[#missing+1] = "mirage"
-    end
-    if GetSea()==3 and _G.Settings.HopFindMirrorFractal and not InventoryHas("Mirror Fractal") then
-        requested = requested + 1
-        if FindBoss("Dough King") then return nil end
-        missing[#missing+1] = "mirror"
-    end
-    if GetSea()==3 and _G.Settings.HopFindSoulReaper then
-        requested = requested + 1
-        if FindBoss("Soul Reaper") then return nil end
-        missing[#missing+1] = "reaper"
-    end
-    if GetSea()==3 and _G.Settings.HopFindTushita and not InventoryHas("Tushita") then
-        requested = requested + 1
-        if FindOwnedTool("Holy Torch") or FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
-        missing[#missing+1] = "tushita"
-    end
-    if GetSea()==3 and _G.Settings.HopFindValkyrieHelm and not InventoryHas("Valkyrie Helm") then
-        requested = requested + 1
-        if FindBoss("rip_indra") or FindBoss("rip_indra True Form") then return nil end
-        missing[#missing+1] = "valkyrie"
-    end
-    if requested > 0 and #missing == requested then return "find:" .. table.concat(missing, ",") end
+    return nil
 end
+
 task.spawn(function()
     while SessionAlive() and task.wait(_G.Settings.HopCheckInterval or 8) do
         if _G.State.Mode~="Dead" and _G.State.Mode~="Respawning" and _G.State.Mode~="ServerHop" then
@@ -7840,6 +9056,16 @@ task.spawn(function()
                 return
             end
 
+            -- Live Factory is a time-limited Sea-2 event. It is the one core event
+            -- allowed to preempt an ordinary level quest; another claimed action
+            -- still wins because TryRun requires State:CanAct().
+            local okFactory, factoryResult = pcall(function() return FactoryController:TryRun() end)
+            if not okFactory then
+                warn("[BobonHub] Module Error: FactoryController: " .. tostring(factoryResult))
+            elseif factoryResult then
+                return
+            end
+
 
             -- FARM-FIRST GATE: inspect the current level/quest before any
             -- optional progression.  A valid quest always wins, so item and
@@ -7883,6 +9109,15 @@ task.spawn(function()
                     TravelManager:Stop("NoQuest")
                 end
                 -- At max level there is no next quest to create an item window.
+                -- First revisit older seas until all retained useful items are complete.
+                local okCompletion, completionResult = pcall(function()
+                    return CompletionSeaController:TryTravel()
+                end)
+                if not okCompletion then
+                    warn("[BobonHub] Module Error: CompletionSeaController: " .. tostring(completionResult))
+                elseif completionResult then
+                    return
+                end
                 -- Continue end-game progression instead of becoming permanently Idle.
                 local okEnd, endResult = pcall(function()
                     return ItemProgression:RunChecks(true, true)
@@ -8273,6 +9508,13 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 
 
+-- Core ability purchase probe (non-blocking, throttled).
+task.spawn(function()
+    while SessionAlive() and task.wait(5) do
+        pcall(function() CoreAbilityPurchaseController:Tick() end)
+    end
+end)
+
 -- Anti-AFK (Fix #16)
 LP.Idled:Connect(function()
     if not SessionAlive() then return end
@@ -8286,20 +9528,61 @@ end)
 -- Enemy-side target preparation already supplies the local acquisition box.
 
 
--- Auto Stats batch limit (Fix #15 / FIX-P7)
--- Giữ batch limit, Points=0 → không làm gì, lỗi remote không ảnh hưởng
--- Farm. KHÔNG tạo ActionToken cho background stat.
+-- Auto Stats — cap-aware. Resolve live values when possible so points are not
+-- repeatedly sent to a capped stat. If the current client exposes an unfamiliar
+-- Data layout, preserve the old bounded 70/30 behavior as a compatibility fallback.
+local function ReadLiveStatLevel(statName)
+    local d = LP:FindFirstChild("Data")
+    if not d then return nil end
+    local stats = d:FindFirstChild("Stats")
+    local candidates = {}
+    if stats then
+        candidates[#candidates + 1] = stats:FindFirstChild(statName)
+        candidates[#candidates + 1] = stats:FindFirstChild(statName .. " Level")
+    end
+    candidates[#candidates + 1] = d:FindFirstChild(statName)
+    candidates[#candidates + 1] = d:FindFirstChild(statName .. " Level")
+    for _, node in ipairs(candidates) do
+        if node then
+            if node:IsA("IntValue") or node:IsA("NumberValue") then
+                return tonumber(node.Value)
+            end
+            local valueNode = node:FindFirstChild("Level") or node:FindFirstChild("Value")
+            if valueNode and (valueNode:IsA("IntValue") or valueNode:IsA("NumberValue")) then
+                return tonumber(valueNode.Value)
+            end
+            for _, attr in ipairs({"Level","Value","StatLevel"}) do
+                local value = node:GetAttribute(attr)
+                if type(value) == "number" then return value end
+            end
+        end
+    end
+    return nil
+end
+
 task.spawn(function()
     while SessionAlive() and task.wait(3) do
         if not _G.Settings.AutoStats then continue end
         pcall(function()
             local d = LP:FindFirstChild("Data")
             if not d then return end
-            local pts = d:FindFirstChild("Points") and d.Points.Value or 0
+            local pts = d:FindFirstChild("Points") and tonumber(d.Points.Value) or 0
             if pts <= 0 then return end
-            local batch = math.min(pts, _G.Settings.StatBatchLimit)
-            local meleeAdd = math.floor(batch * 0.7)
-            local defAdd = batch - meleeAdd
+            local batch = math.min(pts, _G.Settings.StatBatchLimit or 100)
+            local statCap = MAX_LEVEL or 2800
+            local meleeLevel = ReadLiveStatLevel("Melee")
+            local defenseLevel = ReadLiveStatLevel("Defense")
+
+            local meleeAdd, defAdd = 0, 0
+            if meleeLevel ~= nil and defenseLevel ~= nil then
+                meleeAdd = math.min(batch, math.max(0, statCap - meleeLevel))
+                local remaining = batch - meleeAdd
+                defAdd = math.min(remaining, math.max(0, statCap - defenseLevel))
+            else
+                meleeAdd = math.floor(batch * 0.7)
+                defAdd = batch - meleeAdd
+            end
+
             if meleeAdd > 0 then CommF_:InvokeServer("AddPoint","Melee",meleeAdd) end
             if defAdd > 0 then CommF_:InvokeServer("AddPoint","Defense",defAdd) end
         end)
@@ -8363,14 +9646,21 @@ _G.BobonUnload = function()
     pcall(function() FarmPositionController:ReleaseCluster() end)
     pcall(function() if ClusterHeartbeatConnection then ClusterHeartbeatConnection:Disconnect() end end)
     pcall(function() BindPlayerDamage(nil, nil) end)
-    pcall(function() if SG and SG.Parent then SG:Destroy() end end)
+    pcall(function()
+        for _, conn in ipairs(BobonUIConnections or {}) do
+            if conn then conn:Disconnect() end
+        end
+        BobonUIConnections = {}
+    end)
+    pcall(function() if BobonUIRoot and BobonUIRoot.Parent then BobonUIRoot:Destroy() end end)
+    BobonUIRoot = nil
 end
 
 
-print("[BobonHub v19.1] Full Script Loaded Successfully!")
-print("[BobonHub v19.1] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v19.1] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v19.1] Modules: QuestFarm | Health-Verified Combat | TRUE ALL-MOB Cluster | Full Melee | Kaitun Swords | Transparent Fullscreen HUD")
-print("[BobonHub v19.1] Progression: Farm | Sea2/3 | TTK/CDK | Full Melee | Soul Guitar | Dough King | Continuity")
-print("[BobonHub v19.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v19.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.0] Full Script Loaded Successfully!")
+print("[BobonHub v21.0] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.0] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.0] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.0] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.0] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.0] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
