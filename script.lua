@@ -1,7 +1,20 @@
 -- =================================================================
---         BOBON HUB v21.3 GLOBAL MOB CORE FIX | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.4 TRUE ALL-MOB SWEEP | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.2 VIDEO FARM FIX | Version: v21.3
+--         Base: v21.3 GLOBAL MOB CORE FIX | Version: v21.4
+--
+--  v21.4 TRUE ALL-MOB SWEEP FIX:
+--  [AM-1] Added a bounded ownership-acquisition sweep. Before attacking, Farm
+--         briefly visits each unverified same-name mob in the current spawn;
+--         Heartbeat then stacks it as soon as real client ownership is proven.
+--  [AM-2] Quest candidate radius is now spawn-local instead of the old 3000-stud
+--         island-wide scan, preventing travel to a different camp with the same mob.
+--  [AM-3] Acquisition has per-mob timeout/retry cooldown. A server-owned mob can
+--         never trap the farm in an endless retarget loop or create a fake local mob.
+--  [AM-4] Verified targets must still be physically resident at the cluster anchor.
+--         A server-snapped-back root is revoked before multi-hit collection.
+--  [AM-5] No-damage verification observes the whole verified batch, not only the
+--         promoted primary, so real group damage is not mistaken for a failed hit.
 --
 --  v21.3 GLOBAL MOB CORE FIX:
 --  [GM-1] Normal quest farming is now explicitly mob-agnostic. Every QDB mob
@@ -365,7 +378,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.3 GLOBAL MOB CORE FIX + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.4 TRUE ALL-MOB SWEEP + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -608,6 +621,18 @@ _G.Settings = {
     ClusterRefresh      = 0.015,
     ClusterStackRadius  = 0,
     ClusterAcquireGrace = 0.75,
+    -- A quest uses only its current spawn field. GatherMaxDistance remains the
+    -- emergency chase limit for stale QDB coordinates, not the magnet radius.
+    ClusterQuestRadius  = 900,
+    ClusterAcquireSweep = true,
+    ClusterAcquireTimeout = 0.90,
+    ClusterAcquireMaxTimeout = 6.0,
+    ClusterAcquireSettle = 0.70,
+    ClusterAcquireRetry = 1.20,
+    ClusterAcquireMaxAttempts = 1,
+    ClusterAcquireCycleRetry = 20,
+    ClusterAcquireArrivalThreshold = 3.5,
+    ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
     ClusterAttackMaxTargets = 64,
@@ -880,6 +905,10 @@ _G.State = {
     ClusterActivatedAt = 0,
     ClusterLastSeen  = 0,
     ClusterLastMoved = 0,
+    ClusterAcquireTarget = nil,
+    ClusterAcquireStartedAt = 0,
+    ClusterAcquireDeadline = 0,
+    ClusterAcquireCompleted = 0,
     IsTraveling      = false,
     IsRecovering     = false,
     ActionToken      = 0,
@@ -1186,7 +1215,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.3", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.4", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -3605,7 +3634,11 @@ end
 function FarmPositionController:ReleaseCluster()
     GatherGeneration = GatherGeneration + 1
     VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
-    if ClusterFarmController then ClusterFarmController.LastBatch = {} end
+    if ClusterFarmController then
+        ClusterFarmController.LastBatch = {}
+        ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
+        ClusterFarmController.AcquireAttempts = setmetatable({}, { __mode = "k" })
+    end
     if _G.State then
         _G.State.ClusterMode = "OFF"
         _G.State.ClusterAnchor = nil
@@ -3616,6 +3649,10 @@ function FarmPositionController:ReleaseCluster()
         _G.State.ClusterActivatedAt = 0
         _G.State.ClusterLastSeen = 0
         _G.State.ClusterLastMoved = 0
+        _G.State.ClusterAcquireTarget = nil
+        _G.State.ClusterAcquireStartedAt = 0
+        _G.State.ClusterAcquireDeadline = 0
+        _G.State.ClusterAcquireCompleted = 0
     end
     _G.BobonDiagnostics.Bring = "OFF"
     _G.BobonDiagnostics.BringCandidates = 0
@@ -3707,6 +3744,8 @@ ClusterFarmController = {
     LastReason = "OFF",
     LastBatch = {},
     LastBatchAt = 0,
+    AcquireBlockedUntil = setmetatable({}, { __mode = "k" }),
+    AcquireAttempts = setmetatable({}, { __mode = "k" }),
 }
 
 local function NormalizeClusterNames(names)
@@ -3793,9 +3832,15 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
     if changed then
         GatherGeneration = GatherGeneration + 1
         VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
+        self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
+        self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
         state.ClusterActivatedAt = tick()
         state.ClusterPrimary = nil
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        state.ClusterAcquireCompleted = 0
         DLog("CLUSTER", "Activate " .. tostring(mode) .. " / " .. tostring(list[1]))
     end
     state.ClusterMode = mode
@@ -3825,7 +3870,101 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
     local at = VerifiedGatherRoots[root]
-    return at ~= nil and tick() - at <= (_G.Settings.GatherVerifiedTTL or 2.5)
+    if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 2.5) then
+        return false
+    end
+    -- Ownership can change after a successful stack. Do not keep attacking a
+    -- root that the server has already snapped away from the shared anchor.
+    local anchor = _G.State and _G.State.ClusterAnchor
+    local ok, pos = pcall(function() return root.Position end)
+    if not anchor or not ok or not IsValidPos(pos)
+        or (pos - anchor.Position).Magnitude
+            > (_G.Settings.ClusterAnchorVerifyRadius or 9) then
+        VerifiedGatherRoots[root] = nil
+        return false
+    end
+    return true
+end
+
+function ClusterFarmController:GetVerifiedCount()
+    local count = 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        if entry.Model and self:IsVerified(entry.Model) then count = count + 1 end
+    end
+    return count
+end
+
+-- Visit each provably server-owned quest mob once so Roblox can transfer its
+-- physics ownership to this client. RestackBatch performs the actual move only
+-- after ClientOwnsMob becomes true. Unknown ownership is never treated as safe.
+function ClusterFarmController:GetAcquireTarget()
+    local state = _G.State
+    if not state or state.ClusterMode ~= "QUEST"
+        or _G.Settings.ClusterAcquireSweep == false or not self:PolicyValid() then
+        if state then
+            state.ClusterAcquireTarget = nil
+            state.ClusterAcquireStartedAt = 0
+            state.ClusterAcquireDeadline = 0
+        end
+        return nil
+    end
+
+    local now = tick()
+    local current = state.ClusterAcquireTarget
+    if current and current.Parent and self:IsModelAllowed(current)
+        and not self:IsVerified(current) then
+        if now <= (state.ClusterAcquireDeadline or 0) then
+            return current
+        end
+        local attempts = (self.AcquireAttempts[current] or 0) + 1
+        self.AcquireAttempts[current] = attempts
+        local retryAfter = attempts >= (_G.Settings.ClusterAcquireMaxAttempts or 1)
+            and (_G.Settings.ClusterAcquireCycleRetry or 20)
+            or (_G.Settings.ClusterAcquireRetry or 1.2)
+        self.AcquireBlockedUntil[current] = now + retryAfter
+    elseif current and self:IsVerified(current) then
+        self.AcquireAttempts[current] = nil
+        state.ClusterAcquireCompleted = (state.ClusterAcquireCompleted or 0) + 1
+    end
+    state.ClusterAcquireTarget = nil
+    state.ClusterAcquireStartedAt = 0
+    state.ClusterAcquireDeadline = 0
+
+    local me = HRP()
+    local best, bestDist
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, root = entry.Model, entry.Root
+        if model and root and root.Parent and self:IsModelAllowed(model)
+            and not self:IsVerified(model)
+            and (self.AcquireBlockedUntil[model] or 0) <= now then
+            if (self.AcquireAttempts[model] or 0)
+                >= (_G.Settings.ClusterAcquireMaxAttempts or 1) then
+                self.AcquireAttempts[model] = 0
+            end
+            -- false means the executor can query ownership and the server still
+            -- owns this root. nil means no trustworthy API: do not fabricate it.
+            local ownership = ClientOwnsMob(root)
+            if ownership == false then
+                local ok, pos = pcall(function() return root.Position end)
+                if ok and IsValidPos(pos) then
+                    local dist = me and (pos - me.Position).Magnitude or 0
+                    if not bestDist or dist < bestDist then
+                        best, bestDist = model, dist
+                    end
+                end
+            end
+        end
+    end
+    if best then
+        state.ClusterAcquireTarget = best
+        state.ClusterAcquireStartedAt = now
+        local eta = (bestDist or 0) / math.max(1, _G.Settings.FlySpeed or 180)
+        local budget = math.clamp(eta + (_G.Settings.ClusterAcquireSettle or 0.7),
+            _G.Settings.ClusterAcquireTimeout or 0.9,
+            _G.Settings.ClusterAcquireMaxTimeout or 4.0)
+        state.ClusterAcquireDeadline = now + budget
+    end
+    return best
 end
 
 function ClusterFarmController:SelectPrimary()
@@ -3931,7 +4070,9 @@ function ClusterFarmController:Tick()
     local candidates = {}
     local maxDistance = state.ClusterMode == "RAID"
         and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
-        or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000)
+        or (state.ClusterMode == "QUEST"
+            and math.max(100, tonumber(_G.Settings.ClusterQuestRadius) or 900)
+            or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000))
     for _, mob in ipairs(folder:GetChildren()) do
         if self:IsModelAllowed(mob) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -3963,6 +4104,7 @@ function ClusterFarmController:Tick()
     local moved = self:RestackBatch()
     local primary = self:SelectPrimary()
     state.ClusterPrimary = primary
+    state.ClusterAcquireCompleted = self:GetVerifiedCount()
     _G.BobonDiagnostics.BringCandidates = #candidates
     _G.BobonDiagnostics.BringOwned = owned
     _G.BobonDiagnostics.BringMoved = moved
@@ -9192,17 +9334,20 @@ if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function(
 -- ══════════════════════════════════════════════════════════════════
 local lastAttackLog = 0
 
--- v21.3 GLOBAL MOB CORE: these helpers are deliberately name-agnostic.
+-- v21.4 GLOBAL MOB CORE: these helpers are deliberately name-agnostic.
 -- They consume the current QDB/active quest mob instead of hard-coding any NPC.
-local FarmDamageWatch = {Target=nil, Health=nil, StartedAt=0, LastDamageAt=0}
+local FarmDamageWatch = {
+    Target=nil, Health=nil, Count=0, Generation=0,
+    StartedAt=0, LastDamageAt=0,
+}
 
 local function ResetFarmDamageWatch(target)
     FarmDamageWatch.Target = target
     FarmDamageWatch.Health = nil
+    FarmDamageWatch.Count = 0
+    FarmDamageWatch.Generation = _G.State and _G.State.ClusterGeneration or 0
     FarmDamageWatch.StartedAt = tick()
     FarmDamageWatch.LastDamageAt = tick()
-    local hum = target and target:FindFirstChildOfClass("Humanoid")
-    if hum then FarmDamageWatch.Health = hum.Health end
 end
 
 local function ObserveFarmDamage(target)
@@ -9210,18 +9355,41 @@ local function ObserveFarmDamage(target)
         ResetFarmDamageWatch(nil)
         return false
     end
-    if FarmDamageWatch.Target ~= target then
+    if FarmDamageWatch.Target ~= target
+        or FarmDamageWatch.Generation ~= (_G.State.ClusterGeneration or 0) then
         ResetFarmDamageWatch(target)
         return false
     end
-    local hum = target:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
     local now = tick()
-    local hp = hum.Health
-    if FarmDamageWatch.Health == nil or hp < FarmDamageWatch.Health then
+    local totalHealth, liveCount = 0, 0
+    if _G.State.ClusterMode == "QUEST" and ClusterFarmController then
+        for _, entry in ipairs(ClusterFarmController.LastBatch or {}) do
+            local model = entry.Model
+            local hum = model and model:FindFirstChildOfClass("Humanoid")
+            if hum and hum.Health > 0 and ClusterFarmController:IsVerified(model) then
+                totalHealth = totalHealth + hum.Health
+                liveCount = liveCount + 1
+            end
+        end
+    end
+    if liveCount == 0 then
+        local hum = target:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        totalHealth, liveCount = hum.Health, 1
+    end
+
+    -- A changing batch is activity, not proof of a failed attack. This avoids
+    -- revoking a healthy cluster while another stacked mob dies or respawns.
+    if FarmDamageWatch.Health == nil
+        or FarmDamageWatch.Count ~= liveCount
+        or totalHealth > FarmDamageWatch.Health + 0.01 then
+        FarmDamageWatch.StartedAt = now
+        FarmDamageWatch.LastDamageAt = now
+    elseif totalHealth < FarmDamageWatch.Health - 0.01 then
         FarmDamageWatch.LastDamageAt = now
     end
-    FarmDamageWatch.Health = hp
+    FarmDamageWatch.Health = totalHealth
+    FarmDamageWatch.Count = liveCount
     local noDamageFor = now - math.max(FarmDamageWatch.StartedAt or now, FarmDamageWatch.LastDamageAt or now)
     return noDamageFor >= math.max(3.0, (_G.Settings.CombatProbeTimeout or 0.9) * 3)
 end
@@ -9585,6 +9753,38 @@ task.spawn(function()
             local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
 
+            -- v21.4 BUILD-BEFORE-HIT: visit every same-name root whose network
+            -- ownership is queryable but still belongs to the server. The
+            -- Heartbeat magnet moves it to the persistent anchor immediately
+            -- after ownership transfers. No attack is dispatched mid-sweep, so
+            -- the farm no longer kills the first mob before collecting the rest.
+            local acquireTarget = ClusterFarmController:GetAcquireTarget()
+            if acquireTarget then
+                local acquireRoot = acquireTarget:FindFirstChild("HumanoidRootPart")
+                if acquireRoot and _G.State:IsTargetValid(acquireTarget) then
+                    _G.State.FState = "BUILD_CLUSTER"
+                    _G.State.FarmTarget = acquireTarget
+                    _G.State.CurrentTarget = acquireTarget
+                    PrepareCombatTarget(acquireTarget)
+                    local stacked = tonumber(_G.State.ClusterAcquireCompleted) or 0
+                    local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
+                    _G.BobonStatus = ("Farm: Gathering all %s (%d/%d)")
+                        :format(tostring(questMobName), stacked, total)
+                    if _G.State:CanRequestTravel() then
+                        TravelManager:Request(acquireRoot, "Farm", {
+                            arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
+                                or _G.Settings.FarmArrivalThreshold,
+                            fallback = hoverCF or q.MC,
+                            combatHover = true,
+                        })
+                    end
+                    return
+                end
+                _G.State.ClusterAcquireTarget = nil
+                _G.State.ClusterAcquireStartedAt = 0
+                _G.State.ClusterAcquireDeadline = 0
+            end
+
             -- VERIFY/PROMOTE: first prefer a verified mob already stacked at the
             -- persistent anchor. Killing the old primary simply promotes another.
             _G.State.FState = "VERIFY_TARGET"
@@ -9682,14 +9882,20 @@ task.spawn(function()
             if target and targetRoot and hrp and _G.State:IsTargetValid(target) then
                 PrepareCombatTarget(target)
 
-                -- v21.3 GLOBAL no-damage recovery: applies to every active quest
+                -- v21.4 GLOBAL no-damage recovery: applies to every active quest
                 -- mob. A locally stacked-looking root is not allowed to trap the
                 -- farm forever if the server is not actually taking damage.
                 if TravelManager:IsAtCombatAnchor() and ObserveFarmDamage(target) then
                     VerifiedGatherRoots[targetRoot] = nil
                     if _G.State.ClusterPrimary == target then _G.State.ClusterPrimary = nil end
-                    if CombatController.PendingBackend then
-                        CombatController:AbortPending("GLOBAL-MOB-NO-DAMAGE")
+                    -- A full three-second batch stall is stronger evidence than
+                    -- a single missed packet. Rotate the actual backend instead
+                    -- of aborting and immediately retrying the same dead route.
+                    local failingBackend = CombatController.PendingBackend
+                        or CombatController.VerifiedBackend
+                    if failingBackend then
+                        CombatController:FailBackend(failingBackend,
+                            "GLOBAL-MOB-NO-DAMAGE")
                     end
                     if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
                         TravelManager:Stop("GlobalMobNoDamageReacquire")
@@ -9909,10 +10115,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.3] Full Script Loaded Successfully!")
-print("[BobonHub v21.3] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.3] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.3] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.3] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.4] Full Script Loaded Successfully!")
+print("[BobonHub v21.4] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.4] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.4] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.4] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.4] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.4] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
