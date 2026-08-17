@@ -1,20 +1,19 @@
 -- =================================================================
---         BOBON HUB v18.8 BOOT-SAFE + MELEE/SWORD/TTK + GLASS NEON V2.2 | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v19.0 SMART FRAGMENT RAID + FULLSCREEN + ALL-MOB CLUSTER + FULL MELEE | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v18.7 FULL-BATCH CLUSTER + TEDDY SKIP | Version: v18.8
+--         Base: v18.8.1 CORE PROGRESSION | Version: v19.0
 --
---  v18.8 BOOT / MELEE / SWORD AUDIT:
---  [B-1] Remove silent 10s CommF_ return: bootstrap HUD appears first and waits
---        for the live RemoteFunction instead of killing the entire kaitun.
---  [B-2] UI remains isolated by pcall; UI failure cannot terminate farm core.
---  [B-3] Auto Buy Melee drives the real fighting-style progression chain.
---  [B-4] Auto Buy Swords probes all normal BuyItem swords without first-item lock.
---  [B-5] Legendary Sword Dealer supports current Saishi/Shizu/Oroshi plus legacy
---        Saddi/Shisui/Wando aliases; TTK trains each prerequisite to 300 mastery.
---  [B-6] True Triple Katana purchase uses MysteriousMan only after all three
---        legendary swords + mastery + Beli gates are locally verified.
---  [B-7] Missing live boss-drop swords are opportunistically hunted in safe
---        progression windows; current Chef/Orbitus/rip_indra True Form aliases added.
+--  v19.0 UI / CLUSTER / PROGRESSION AUDIT:
+--  [N-1] Boot remains non-fatal: wait for live CommF_ instead of returning early.
+--  [N-2] HUD is full-screen and fixed; information panel is centered and non-draggable.
+--  [N-3] Removed the old style-name subtitle; UI now identifies only Bobon Hub/Kaitun.
+--  [N-4] Cluster magnet scans every matching mob in the active farm field each pass,
+--        has no gather-count cap, and sends every movable mob to the exact same anchor.
+--  [N-5] Simulation-radius request is aggressive and refreshed quickly; executors with
+--        no ownership-query API may still attempt the move instead of skipping every mob.
+--  [N-6] Sword progression is no longer completionist: no ordinary shop sweep and no
+--        unrelated boss-drop collection. Keep only kaitun/progression swords + TTK chain.
+--  [N-7] Full fighting-style progression remains core and runs before sword mastery.
 --
 --  v18.3 FARM MOVEMENT / QUEST GATHER FIXES:
 --  [QG-1] Nearby regular quest mobs use one conservative short CFrame snap to
@@ -84,7 +83,7 @@
 --         Pole săn Thunder God thay cho remote BuyPoleV1 không tồn tại.
 --  [L-7] Sửa gate tiến trình Sea2, Bartilo và Sea3 theo live flow.
 --
---  AUDIT FIXES v16.5-GLASS (G-1..G-9):
+--  AUDIT FIXES v16.5 UI (G-1..G-9):
 --  [G-1]  OVERLAY KÍNH MỜ: nền Dim mờ xuyên cảnh (MenuDim, mặc định
 --         0.45) + BlurEffect kính mờ (MenuBlur) thay cho [D-2] nền đen
 --         100%. Right Ctrl ẩn/hiện toàn bộ overlay + blur.
@@ -92,7 +91,7 @@
 --         CurrentCamera bị thay đổi (respawn/teleport).
 --  [G-3]  RecoveryManager: Velocity/RotVelocity (deprecated) →
 --         AssemblyLinearVelocity/AssemblyAngularVelocity.
---  [G-4]  FULL-GLASS: bỏ hẳn card/khung menu — chữ nổi trực tiếp trên
+--  [G-4]  FULLSCREEN-UI: bỏ hẳn card/khung menu — chữ nổi trực tiếp trên
 --         nền kính mờ TOÀN màn hình, text stroke đậm hơn để đọc rõ.
 --  [G-5]  ATTACK FIX: Net remote resolver đa đường dẫn (Remotes.Modules.Net
 --         / Modules.Net / tìm sâu theo tên "Net"). Bản cũ chỉ nhìn
@@ -274,7 +273,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.8 BOOT-SAFE + FULL PROGRESSION] Loading...")
+print("[BobonHub v19.0 FULLSCREEN + ALL-MOB CLUSTER + FULL MELEE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -298,14 +297,12 @@ while not LP and SessionAlive() do
 end
 if not LP then error("[BobonHub] LocalPlayer unavailable") end
 
--- v18.8 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
--- had not replicated within 10 seconds.  Show a tiny bootstrap HUD immediately
+-- v19.0 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
+-- had not replicated within 10 seconds. Show a full-screen bootstrap HUD immediately
 -- and keep resolving the authoritative RemoteFunction instead of silently dying.
 local BootGui, BootLabel
 pcall(function()
     local parent = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
-    -- PlayerGui is the broadest compatibility target. gethui/CoreGui are fallbacks
-    -- for executors that intentionally isolate injected GUI from PlayerGui.
     if not parent and type(gethui) == "function" then
         local ok, hui = pcall(gethui)
         if ok and hui then parent = hui end
@@ -317,35 +314,52 @@ pcall(function()
     if parent then
         local old = parent:FindFirstChild("BobonBootUI")
         if old then old:Destroy() end
+
         BootGui = Instance.new("ScreenGui")
         BootGui.Name = "BobonBootUI"
         BootGui.ResetOnSpawn = false
+        BootGui.IgnoreGuiInset = true
         BootGui.DisplayOrder = 20000
         BootGui.Parent = parent
+
+        local backdrop = Instance.new("Frame")
+        backdrop.Size = UDim2.fromScale(1,1)
+        backdrop.Position = UDim2.fromScale(0,0)
+        backdrop.BackgroundColor3 = Color3.fromRGB(5,10,20)
+        backdrop.BackgroundTransparency = 0.08
+        backdrop.BorderSizePixel = 0
+        backdrop.Parent = BootGui
+
         local card = Instance.new("Frame")
-        card.Size = UDim2.new(0, 330, 0, 56)
-        card.Position = UDim2.new(0, 18, 0, 18)
-        card.BackgroundColor3 = Color3.fromRGB(10, 18, 31)
+        card.AnchorPoint = Vector2.new(0.5,0.5)
+        card.Size = UDim2.new(0, 520, 0, 120)
+        card.Position = UDim2.fromScale(0.5,0.5)
+        card.BackgroundColor3 = Color3.fromRGB(10,18,31)
         card.BackgroundTransparency = 0.08
         card.BorderSizePixel = 0
-        card.Parent = BootGui
+        card.Parent = backdrop
+
         local corner = Instance.new("UICorner")
-        corner.CornerRadius = UDim.new(0, 12)
+        corner.CornerRadius = UDim.new(0,16)
         corner.Parent = card
+
         local stroke = Instance.new("UIStroke")
-        stroke.Color = Color3.fromRGB(72, 223, 255)
+        stroke.Color = Color3.fromRGB(72,223,255)
         stroke.Transparency = 0.25
         stroke.Thickness = 1.2
         stroke.Parent = card
+
         BootLabel = Instance.new("TextLabel")
         BootLabel.BackgroundTransparency = 1
-        BootLabel.Size = UDim2.new(1, -24, 1, 0)
-        BootLabel.Position = UDim2.new(0, 12, 0, 0)
+        BootLabel.Size = UDim2.new(1,-30,1,-30)
+        BootLabel.Position = UDim2.new(0,15,0,15)
         BootLabel.Font = Enum.Font.GothamBold
-        BootLabel.TextSize = 13
-        BootLabel.TextColor3 = Color3.fromRGB(235, 248, 255)
-        BootLabel.TextXAlignment = Enum.TextXAlignment.Left
-        BootLabel.Text = "BOBON HUB  •  BOOTING..."
+        BootLabel.TextSize = 16
+        BootLabel.TextColor3 = Color3.fromRGB(235,248,255)
+        BootLabel.TextXAlignment = Enum.TextXAlignment.Center
+        BootLabel.TextYAlignment = Enum.TextYAlignment.Center
+        BootLabel.TextWrapped = true
+        BootLabel.Text = "BOBON HUB\nBOOTING KAITUN..."
         BootLabel.Parent = card
     end
 end)
@@ -485,17 +499,27 @@ _G.Settings = {
     SkipLevelRoute      = true,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
-    GatherMaxDistance   = 600,
-    GatherSimulationRefresh = 0.20,
-    GatherVerifiedTTL   = 1.25,
-    -- v18.7 full-batch cluster: gather ALL matching mobs in the current farm
+    GatherMaxDistance   = 2000,
+    GatherSimulationRefresh = 0.08,
+    GatherVerifiedTTL   = 1.50,
+    -- v19.0 all-mob cluster: gather ALL matching mobs in the current farm
     -- area in one magnet pass. Attack target count stays separately bounded.
-    ClusterRefresh      = 0.05,
-    ClusterStackRadius  = 0.75,
-    ClusterAcquireGrace = 1.25,
+    ClusterRefresh      = 0.03,
+    ClusterStackRadius  = 0,
+    ClusterAcquireGrace = 0.75,
     ClusterAnchorMaxDrift = 18,
-    ClusterGatherLimit  = 64,
-    ClusterSimulationRadius = 1000,
+    ClusterSimulationRadius = 5000,
+    -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
+    AutoFragmentRaid     = true,
+    RaidPreferredNames   = {"Flame","Dark","Ice","Sand","Smoke"},
+    RaidGatherRadius     = 700,
+    RaidTravelSpeed      = 300,
+    RaidHoverHeight      = 22,
+    RaidFastAttackMaxTargets = 16,
+    RaidRunTimeout       = 900,
+    RaidNoChipRetry      = 90,
+    RaidFragmentDemandTTL= 120,
+    RaidCheapFruitMaxPrice = 650000,
     -- Core movement optimization: one short snap only for the active quest mob.
     -- This is intentionally not exposed in Configs; it is part of the farm core.
     NearQuestSnap        = true,
@@ -520,11 +544,11 @@ _G.Settings = {
     -- v17 progression: all are non-blocking. A missing server event/key never
     -- freezes the level farm; the controller retries only in safe quest windows.
     AutoAdvancedItems   = true,
+    -- Core kaitun progression: always enabled internally; intentionally NOT exposed in Configs.
     AutoFightingStyles  = true,
     AutoBuyMelee        = true,
-    AutoBuySwords       = true,
+    AutoBuySwords       = true, -- TTK/progression swords only; no completionist shop sweep
     AutoTrueTripleKatana= true,
-    SwordBuyProbe       = 12,
     LegendarySwordProbe = 8,
     TTKMasteryTarget    = 300,
     AutoRaceV2          = true,
@@ -597,10 +621,6 @@ do
         _G.Settings.AutoCDK = bool(cfg["Cursed Dual Katana"], _G.Settings.AutoCDK)
         _G.Settings.AutoSoulGuitar = bool(cfg["Skull Guitar"], _G.Settings.AutoSoulGuitar)
         _G.Settings.AutoRaceV2 = bool(cfg["Auto Race V2"], _G.Settings.AutoRaceV2)
-        _G.Settings.AutoBuyMelee = bool(cfg["Auto Buy Melee"], _G.Settings.AutoBuyMelee)
-        _G.Settings.AutoFightingStyles = _G.Settings.AutoBuyMelee
-        _G.Settings.AutoBuySwords = bool(cfg["Auto Buy Swords"], _G.Settings.AutoBuySwords)
-        _G.Settings.AutoTrueTripleKatana = bool(cfg["True Triple Katana"], _G.Settings.AutoTrueTripleKatana)
         _G.Settings.GetFruits = bool(cfg["Get Fruits"], _G.Settings.GetFruits)
         _G.Settings.FruitEnabled = _G.Settings.GetFruits
         _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
@@ -714,6 +734,14 @@ _G.State = {
     LastQuestRequest = 0,
     LastQuestAccepted= 0,
     QuestRetries     = 0,
+    FragmentDemandGoal = 0,
+    FragmentDemandCost = 0,
+    FragmentDemandReason = nil,
+    FragmentDemandPriority = 0,
+    FragmentDemandAt = 0,
+    RaidLastGain = 0,
+    RaidLastStart = 0,
+    RaidLastFinish = 0,
     -- Canonical workspace enemy name for the quest that is actually active.
     -- Quest UI may be localized, so gathering must not infer a mob name from
     -- the visible translated text on every frame.
@@ -860,8 +888,9 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---             UI — GLASS NEON HUD V2.2 BOOT-SAFE
---   Self-contained + protected: UI failure must NEVER stop kaitun core.
+--             UI — BOBON FULLSCREEN HUD v3
+--   Full-screen fixed overlay. Centered content. No drag / no floating menu.
+--   UI failure is isolated and must never stop kaitun core.
 -- ══════════════════════════════════════════════════════════════════
 do
     local okUI, uiErr = pcall(function()
@@ -901,6 +930,7 @@ do
         SG.ResetOnSpawn = false
         SG.IgnoreGuiInset = true
         SG.DisplayOrder = 10000
+        SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
         SG.Parent = uiParent
 
         local ACCENT_A = Color3.fromRGB(72,223,255)
@@ -908,9 +938,9 @@ do
         local ACCENT_C = Color3.fromRGB(55,255,180)
         local TEXT_MAIN = Color3.fromRGB(244,249,255)
         local TEXT_MUTED = Color3.fromRGB(145,166,194)
-        local PANEL_TOP = Color3.fromRGB(16,24,40)
-        local PANEL_BOTTOM = Color3.fromRGB(7,12,24)
-        local CARD_BG = Color3.fromRGB(17,29,48)
+        local PANEL_TOP = Color3.fromRGB(9,16,30)
+        local PANEL_BOTTOM = Color3.fromRGB(4,8,18)
+        local CARD_BG = Color3.fromRGB(15,27,46)
 
         local function Corner(obj, px)
             local x = Instance.new("UICorner")
@@ -946,6 +976,7 @@ do
             x.Font = bold and Enum.Font.GothamBold or Enum.Font.Gotham
             x.TextXAlignment = align or Enum.TextXAlignment.Left
             x.TextYAlignment = Enum.TextYAlignment.Center
+            x.TextTruncate = Enum.TextTruncate.AtEnd
             x.Parent = parent
             return x
         end
@@ -955,16 +986,16 @@ do
             x.Position = pos
             x.Size = size
             x.BackgroundColor3 = CARD_BG
-            x.BackgroundTransparency = 0.26
+            x.BackgroundTransparency = 0.18
             x.BorderSizePixel = 0
             x.Parent = parent
-            Corner(x, 13)
-            Stroke(x, Color3.fromRGB(110,175,220), 0.78, 1)
-            Gradient(x, Color3.fromRGB(25,45,68), Color3.fromRGB(11,18,34), 90)
+            Corner(x, 14)
+            Stroke(x, Color3.fromRGB(110,175,220), 0.72, 1)
+            Gradient(x, Color3.fromRGB(24,44,68), Color3.fromRGB(9,16,31), 90)
             return x
         end
 
-        _G.Settings.MenuBlur = tonumber(_G.Settings.MenuBlur) or 7
+        _G.Settings.MenuBlur = tonumber(_G.Settings.MenuBlur) or 8
         local Blur
         pcall(function()
             Blur = Instance.new("BlurEffect")
@@ -974,145 +1005,147 @@ do
             Blur.Parent = Lighting
         end)
 
+        -- Full-screen menu background.
         local Panel = Instance.new("Frame")
-        Panel.Name = "GlassNeonV21"
-        Panel.AnchorPoint = Vector2.new(0,0.5)
-        Panel.Position = UDim2.new(0,24,0.5,0)
-        Panel.Size = UDim2.new(0,470,0,368)
+        Panel.Name = "BobonFullscreen"
+        Panel.AnchorPoint = Vector2.new(0.5,0.5)
+        Panel.Position = UDim2.fromScale(0.5,0.5)
+        Panel.Size = UDim2.fromScale(1,1)
         Panel.BackgroundColor3 = PANEL_TOP
-        Panel.BackgroundTransparency = 0.10
+        Panel.BackgroundTransparency = 0.08
         Panel.BorderSizePixel = 0
-        Panel.ClipsDescendants = true
         Panel.Parent = SG
-        Corner(Panel, 20)
         Gradient(Panel, PANEL_TOP, PANEL_BOTTOM, 115)
-        local PanelStroke = Stroke(Panel, ACCENT_A, 0.24, 1.4)
 
-        local PanelScale = Instance.new("UIScale")
-        PanelScale.Scale = 0.96
-        PanelScale.Parent = Panel
+        local ScreenGlow = Instance.new("Frame")
+        ScreenGlow.AnchorPoint = Vector2.new(0.5,0)
+        ScreenGlow.Position = UDim2.new(0.5,0,0,0)
+        ScreenGlow.Size = UDim2.new(0.72,0,0,3)
+        ScreenGlow.BackgroundColor3 = ACCENT_A
+        ScreenGlow.BorderSizePixel = 0
+        ScreenGlow.Parent = Panel
+        local NeonGradient = Gradient(ScreenGlow, ACCENT_A, ACCENT_B, 0)
 
-        local NeonLine = Instance.new("Frame")
-        NeonLine.Position = UDim2.new(0,18,0,0)
-        NeonLine.Size = UDim2.new(1,-36,0,2)
-        NeonLine.BackgroundColor3 = ACCENT_A
-        NeonLine.BorderSizePixel = 0
-        NeonLine.Parent = Panel
-        Corner(NeonLine, 2)
-        local NeonGradient = Gradient(NeonLine, ACCENT_A, ACCENT_B, 0)
+        -- Centered dashboard. It cannot be dragged.
+        local Content = Instance.new("Frame")
+        Content.Name = "Dashboard"
+        Content.AnchorPoint = Vector2.new(0.5,0.5)
+        Content.Position = UDim2.fromScale(0.5,0.5)
+        Content.Size = UDim2.new(0.78,0,0.78,0)
+        Content.BackgroundColor3 = Color3.fromRGB(10,18,33)
+        Content.BackgroundTransparency = 0.12
+        Content.BorderSizePixel = 0
+        Content.Parent = Panel
+        Corner(Content, 22)
+        Gradient(Content, Color3.fromRGB(15,27,47), Color3.fromRGB(6,11,23), 110)
+        local PanelStroke = Stroke(Content, ACCENT_A, 0.20, 1.5)
+
+        local SizeLimit = Instance.new("UISizeConstraint")
+        SizeLimit.MinSize = Vector2.new(620,430)
+        SizeLimit.MaxSize = Vector2.new(920,620)
+        SizeLimit.Parent = Content
+
+        local ContentScale = Instance.new("UIScale")
+        ContentScale.Scale = 0.96
+        ContentScale.Parent = Content
 
         local Header = Instance.new("Frame")
-        Header.Position = UDim2.new(0,18,0,14)
-        Header.Size = UDim2.new(1,-36,0,48)
+        Header.Position = UDim2.new(0,28,0,22)
+        Header.Size = UDim2.new(1,-56,0,62)
         Header.BackgroundTransparency = 1
-        Header.Active = true
-        Header.Parent = Panel
+        Header.Parent = Content
 
-        local Brand = Text(Header, "◈  BOBON HUB", 20, TEXT_MAIN, true)
+        local Brand = Text(Header, "◈  BOBON HUB", 28, TEXT_MAIN, true, Enum.TextXAlignment.Center)
         Brand.Position = UDim2.new(0,0,0,0)
-        Brand.Size = UDim2.new(0.58,0,0,24)
+        Brand.Size = UDim2.new(1,0,0,32)
 
-        local Sub = Text(Header, "GLASS NEON V2.2  •  KAITUN", 10, ACCENT_A, true)
-        Sub.Position = UDim2.new(0,27,0,24)
-        Sub.Size = UDim2.new(0.60,0,0,18)
+        local Sub = Text(Header, "BLOX FRUITS  •  KAITUN", 11, ACCENT_A, true, Enum.TextXAlignment.Center)
+        Sub.Position = UDim2.new(0,0,0,34)
+        Sub.Size = UDim2.new(1,0,0,18)
 
         local OnlineDot = Instance.new("Frame")
         OnlineDot.AnchorPoint = Vector2.new(1,0.5)
-        OnlineDot.Position = UDim2.new(1,-63,0,16)
+        OnlineDot.Position = UDim2.new(1,-58,0,15)
         OnlineDot.Size = UDim2.new(0,8,0,8)
         OnlineDot.BackgroundColor3 = ACCENT_C
         OnlineDot.BorderSizePixel = 0
         OnlineDot.Parent = Header
         Corner(OnlineDot, 8)
+
         local OnlineL = Text(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
         OnlineL.AnchorPoint = Vector2.new(1,0)
-        OnlineL.Position = UDim2.new(1,0,0,6)
-        OnlineL.Size = UDim2.new(0,55,0,20)
-        local Ver = Text(Header, "v18.8", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
-        Ver.AnchorPoint = Vector2.new(1,0)
-        Ver.Position = UDim2.new(1,0,0,27)
-        Ver.Size = UDim2.new(0,55,0,16)
+        OnlineL.Position = UDim2.new(1,0,0,5)
+        OnlineL.Size = UDim2.new(0,50,0,20)
 
-        local LevelCard = Card(Panel, UDim2.new(0,18,0,70), UDim2.new(0.5,-22,0,58))
-        local LevelCap = Text(LevelCard, "LEVEL", 9, TEXT_MUTED, true)
-        LevelCap.Position = UDim2.new(0,14,0,7); LevelCap.Size = UDim2.new(1,-28,0,15)
-        local LevelValue = Text(LevelCard, "1", 23, TEXT_MAIN, true)
-        LevelValue.Position = UDim2.new(0,14,0,21); LevelValue.Size = UDim2.new(1,-28,0,30)
+        local Ver = Text(Header, "v19.0", 9, TEXT_MUTED, false, Enum.TextXAlignment.Left)
+        Ver.Position = UDim2.new(0,0,0,5)
+        Ver.Size = UDim2.new(0,60,0,20)
 
-        local SeaCard = Card(Panel, UDim2.new(0.5,4,0,70), UDim2.new(0.5,-22,0,58))
-        local SeaCap = Text(SeaCard, "WORLD", 9, TEXT_MUTED, true)
-        SeaCap.Position = UDim2.new(0,14,0,7); SeaCap.Size = UDim2.new(1,-28,0,15)
-        local SeaValue = Text(SeaCard, "SEA 1", 20, ACCENT_A, true)
-        SeaValue.Position = UDim2.new(0,14,0,22); SeaValue.Size = UDim2.new(0.55,-14,0,28)
-        local TeamL = Text(SeaCard, "PIRATES ✓", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
-        TeamL.Position = UDim2.new(0.52,0,0,24); TeamL.Size = UDim2.new(0.48,-14,0,24)
+        local LevelCard = Card(Content, UDim2.new(0.04,0,0.17,0), UDim2.new(0.44,0,0.12,0))
+        local LevelCap = Text(LevelCard, "LEVEL", 10, TEXT_MUTED, true)
+        LevelCap.Position = UDim2.new(0,16,0,7); LevelCap.Size = UDim2.new(1,-32,0,16)
+        local LevelValue = Text(LevelCard, "1", 25, TEXT_MAIN, true)
+        LevelValue.Position = UDim2.new(0,16,0,23); LevelValue.Size = UDim2.new(1,-32,1,-27)
 
-        local StatusCard = Card(Panel, UDim2.new(0,18,0,136), UDim2.new(1,-36,0,78))
+        local SeaCard = Card(Content, UDim2.new(0.52,0,0.17,0), UDim2.new(0.44,0,0.12,0))
+        local SeaCap = Text(SeaCard, "WORLD", 10, TEXT_MUTED, true)
+        SeaCap.Position = UDim2.new(0,16,0,7); SeaCap.Size = UDim2.new(1,-32,0,16)
+        local SeaValue = Text(SeaCard, "SEA 1", 22, ACCENT_A, true)
+        SeaValue.Position = UDim2.new(0,16,0,23); SeaValue.Size = UDim2.new(0.55,-16,1,-27)
+        local TeamL = Text(SeaCard, "PIRATES ✓", 11, ACCENT_C, true, Enum.TextXAlignment.Right)
+        TeamL.Position = UDim2.new(0.55,0,0,23); TeamL.Size = UDim2.new(0.45,-16,1,-27)
+
+        local StatusCard = Card(Content, UDim2.new(0.04,0,0.32,0), UDim2.new(0.92,0,0.19,0))
         local StatusDot = Instance.new("Frame")
-        StatusDot.Position = UDim2.new(0,14,0,17)
+        StatusDot.Position = UDim2.new(0,16,0,18)
         StatusDot.Size = UDim2.new(0,9,0,9)
         StatusDot.BackgroundColor3 = ACCENT_C
         StatusDot.BorderSizePixel = 0
         StatusDot.Parent = StatusCard
         Corner(StatusDot, 9)
-        local ModeL = Text(StatusCard, "FARMING", 10, ACCENT_C, true)
-        ModeL.Position = UDim2.new(0,31,0,10); ModeL.Size = UDim2.new(0.45,0,0,20)
-        local FlagL = Text(StatusCard, "READY", 9, ACCENT_A, true, Enum.TextXAlignment.Right)
-        FlagL.Position = UDim2.new(0.52,0,0,10); FlagL.Size = UDim2.new(0.48,-14,0,20)
-        local StatusL = Text(StatusCard, "Initializing...", 16, TEXT_MAIN, true)
-        StatusL.Position = UDim2.new(0,14,0,31); StatusL.Size = UDim2.new(1,-28,0,27)
-        local ClusterL = Text(StatusCard, "Cluster: waiting", 10, TEXT_MUTED, false)
-        ClusterL.Position = UDim2.new(0,14,1,-20); ClusterL.Size = UDim2.new(1,-28,0,15)
+        local ModeL = Text(StatusCard, "FARMING", 11, ACCENT_C, true)
+        ModeL.Position = UDim2.new(0,34,0,11); ModeL.Size = UDim2.new(0.42,0,0,22)
+        local FlagL = Text(StatusCard, "READY", 10, ACCENT_A, true, Enum.TextXAlignment.Right)
+        FlagL.Position = UDim2.new(0.52,0,0,11); FlagL.Size = UDim2.new(0.48,-16,0,22)
+        local StatusL = Text(StatusCard, "Initializing...", 18, TEXT_MAIN, true, Enum.TextXAlignment.Center)
+        StatusL.Position = UDim2.new(0,16,0.34,0); StatusL.Size = UDim2.new(1,-32,0.33,0)
+        local ClusterL = Text(StatusCard, "Cluster: waiting", 11, TEXT_MUTED, false, Enum.TextXAlignment.Center)
+        ClusterL.Position = UDim2.new(0,16,0.70,0); ClusterL.Size = UDim2.new(1,-32,0.22,0)
 
-        local BeliCard = Card(Panel, UDim2.new(0,18,0,222), UDim2.new(0.5,-22,0,54))
-        local BeliCap = Text(BeliCard, "BELI", 9, TEXT_MUTED, true)
-        BeliCap.Position = UDim2.new(0,12,0,7); BeliCap.Size = UDim2.new(1,-24,0,13)
-        local BeliL = Text(BeliCard, "$ 0", 16, Color3.fromRGB(93,255,151), true)
-        BeliL.Position = UDim2.new(0,12,0,21); BeliL.Size = UDim2.new(1,-24,0,25)
+        local BeliCard = Card(Content, UDim2.new(0.04,0,0.54,0), UDim2.new(0.44,0,0.12,0))
+        local BeliCap = Text(BeliCard, "BELI", 10, TEXT_MUTED, true)
+        BeliCap.Position = UDim2.new(0,16,0,7); BeliCap.Size = UDim2.new(1,-32,0,16)
+        local BeliL = Text(BeliCard, "$ 0", 18, Color3.fromRGB(93,255,151), true)
+        BeliL.Position = UDim2.new(0,16,0,24); BeliL.Size = UDim2.new(1,-32,1,-28)
 
-        local FragCard = Card(Panel, UDim2.new(0.5,4,0,222), UDim2.new(0.5,-22,0,54))
-        local FragCap = Text(FragCard, "FRAGMENTS", 9, TEXT_MUTED, true)
-        FragCap.Position = UDim2.new(0,12,0,7); FragCap.Size = UDim2.new(1,-24,0,13)
-        local FragL = Text(FragCard, "◈ 0", 16, Color3.fromRGB(194,135,255), true)
-        FragL.Position = UDim2.new(0,12,0,21); FragL.Size = UDim2.new(1,-24,0,25)
+        local FragCard = Card(Content, UDim2.new(0.52,0,0.54,0), UDim2.new(0.44,0,0.12,0))
+        local FragCap = Text(FragCard, "FRAGMENTS", 10, TEXT_MUTED, true)
+        FragCap.Position = UDim2.new(0,16,0,7); FragCap.Size = UDim2.new(1,-32,0,16)
+        local FragL = Text(FragCard, "◈ 0", 18, Color3.fromRGB(194,135,255), true)
+        FragL.Position = UDim2.new(0,16,0,24); FragL.Size = UDim2.new(1,-32,1,-28)
 
-        local KillCard = Card(Panel, UDim2.new(0,18,0,284), UDim2.new(0.5,-22,0,48))
-        local KillCap = Text(KillCard, "KILLS", 9, TEXT_MUTED, true)
-        KillCap.Position = UDim2.new(0,12,0,5); KillCap.Size = UDim2.new(0.4,0,0,13)
-        local KillL = Text(KillCard, "0", 15, Color3.fromRGB(255,119,145), true)
-        KillL.Position = UDim2.new(0,12,0,18); KillL.Size = UDim2.new(1,-24,0,23)
+        local KillCard = Card(Content, UDim2.new(0.04,0,0.69,0), UDim2.new(0.44,0,0.11,0))
+        local KillCap = Text(KillCard, "KILLS", 10, TEXT_MUTED, true)
+        KillCap.Position = UDim2.new(0,16,0,6); KillCap.Size = UDim2.new(0.4,0,0,15)
+        local KillL = Text(KillCard, "0", 17, Color3.fromRGB(255,119,145), true)
+        KillL.Position = UDim2.new(0,16,0,21); KillL.Size = UDim2.new(1,-32,1,-25)
 
-        local TimeCard = Card(Panel, UDim2.new(0.5,4,0,284), UDim2.new(0.5,-22,0,48))
-        local TimeCap = Text(TimeCard, "RUNTIME", 9, TEXT_MUTED, true)
-        TimeCap.Position = UDim2.new(0,12,0,5); TimeCap.Size = UDim2.new(0.48,0,0,13)
-        local TimeL = Text(TimeCard, "00:00:00", 15, TEXT_MAIN, true)
-        TimeL.Position = UDim2.new(0,12,0,18); TimeL.Size = UDim2.new(1,-24,0,23)
+        local TimeCard = Card(Content, UDim2.new(0.52,0,0.69,0), UDim2.new(0.44,0,0.11,0))
+        local TimeCap = Text(TimeCard, "RUNTIME", 10, TEXT_MUTED, true)
+        TimeCap.Position = UDim2.new(0,16,0,6); TimeCap.Size = UDim2.new(0.48,0,0,15)
+        local TimeL = Text(TimeCard, "00:00:00", 17, TEXT_MAIN, true)
+        TimeL.Position = UDim2.new(0,16,0,21); TimeL.Size = UDim2.new(1,-32,1,-25)
 
-        local Footer = Instance.new("Frame")
-        Footer.Position = UDim2.new(0,18,1,-28)
-        Footer.Size = UDim2.new(1,-36,0,18)
-        Footer.BackgroundTransparency = 1
-        Footer.Parent = Panel
-        local CombatL = Text(Footer, "COMBAT  WAITING", 9, Color3.fromRGB(255,190,102), true)
-        CombatL.Position = UDim2.new(0,0,0,0); CombatL.Size = UDim2.new(0.52,0,1,0)
-        local BringL = Text(Footer, "BRING  WAITING", 9, TEXT_MUTED, true, Enum.TextXAlignment.Right)
-        BringL.Position = UDim2.new(0.48,0,0,0); BringL.Size = UDim2.new(0.52,0,1,0)
+        local Footer = Card(Content, UDim2.new(0.04,0,0.83,0), UDim2.new(0.92,0,0.10,0))
+        local CombatL = Text(Footer, "COMBAT  WAITING", 10, Color3.fromRGB(255,190,102), true)
+        CombatL.Position = UDim2.new(0,16,0,0); CombatL.Size = UDim2.new(0.48,-16,1,0)
+        local BringL = Text(Footer, "BRING  WAITING", 10, TEXT_MUTED, true, Enum.TextXAlignment.Right)
+        BringL.Position = UDim2.new(0.52,0,0,0); BringL.Size = UDim2.new(0.48,-16,1,0)
 
-        local Toggle = Instance.new("TextButton")
-        Toggle.AnchorPoint = Vector2.new(0,0.5)
-        Toggle.Position = UDim2.new(0,10,0.5,0)
-        Toggle.Size = UDim2.new(0,36,0,36)
-        Toggle.BackgroundColor3 = Color3.fromRGB(10,22,39)
-        Toggle.BackgroundTransparency = 0.08
-        Toggle.BorderSizePixel = 0
-        Toggle.Text = "◈"
-        Toggle.TextColor3 = ACCENT_A
-        Toggle.TextSize = 17
-        Toggle.Font = Enum.Font.GothamBold
-        Toggle.AutoButtonColor = false
-        Toggle.Parent = SG
-        Corner(Toggle, 12)
-        Stroke(Toggle, ACCENT_A, 0.20, 1.4)
+        local Hint = Text(Content, "Right Ctrl  •  Hide / Show", 9, TEXT_MUTED, false, Enum.TextXAlignment.Center)
+        Hint.AnchorPoint = Vector2.new(0.5,1)
+        Hint.Position = UDim2.new(0.5,0,1,-8)
+        Hint.Size = UDim2.new(0.6,0,0,16)
 
         local function Fmt(n)
             local s = tostring(math.floor(tonumber(n) or 0))
@@ -1127,66 +1160,38 @@ do
             visible = v
             if v then
                 Panel.Visible = true
-                PanelScale.Scale = 0.95
-                pcall(function() TS:Create(PanelScale, TweenInfo.new(0.25, Enum.EasingStyle.Quad), {Scale=1}):Play() end)
-                pcall(function() if Blur then TS:Create(Blur, TweenInfo.new(0.25), {Size=_G.Settings.MenuBlur}):Play() end end)
-                task.delay(0.28, function() busy = false end)
+                ContentScale.Scale = 0.96
+                pcall(function()
+                    TS:Create(ContentScale, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {Scale=1}):Play()
+                end)
+                pcall(function()
+                    if Blur then TS:Create(Blur, TweenInfo.new(0.22), {Size=_G.Settings.MenuBlur}):Play() end
+                end)
+                task.delay(0.24, function() busy = false end)
             else
-                pcall(function() TS:Create(PanelScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {Scale=0.95}):Play() end)
-                pcall(function() if Blur then TS:Create(Blur, TweenInfo.new(0.18), {Size=0}):Play() end end)
-                task.delay(0.20, function()
+                pcall(function()
+                    TS:Create(ContentScale, TweenInfo.new(0.16, Enum.EasingStyle.Quad), {Scale=0.96}):Play()
+                end)
+                pcall(function()
+                    if Blur then TS:Create(Blur, TweenInfo.new(0.16), {Size=0}):Play() end
+                end)
+                task.delay(0.18, function()
                     if not visible then Panel.Visible = false end
                     busy = false
                 end)
             end
         end
 
-        Toggle.MouseButton1Click:Connect(function() SetVisible(not visible) end)
         UIS.InputBegan:Connect(function(input, processed)
             if not processed and input.KeyCode == Enum.KeyCode.RightControl then
                 SetVisible(not visible)
             end
         end)
 
-        -- Header drag. All handler bodies are protected so executor quirks cannot kill core.
-        do
-            local dragging, dragStart, startPos, dragInput = false, nil, nil, nil
-            Header.InputBegan:Connect(function(input)
-                pcall(function()
-                    if input.UserInputType == Enum.UserInputType.MouseButton1
-                        or input.UserInputType == Enum.UserInputType.Touch then
-                        dragging = true
-                        dragStart = input.Position
-                        startPos = Panel.Position
-                        input.Changed:Connect(function()
-                            if input.UserInputState == Enum.UserInputState.End then dragging = false end
-                        end)
-                    end
-                end)
-            end)
-            Header.InputChanged:Connect(function(input)
-                if input.UserInputType == Enum.UserInputType.MouseMovement
-                    or input.UserInputType == Enum.UserInputType.Touch then
-                    dragInput = input
-                end
-            end)
-            UIS.InputChanged:Connect(function(input)
-                pcall(function()
-                    if dragging and input == dragInput and dragStart and startPos then
-                        local delta = input.Position - dragStart
-                        Panel.Position = UDim2.new(
-                            startPos.X.Scale, startPos.X.Offset + delta.X,
-                            startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-                    end
-                end)
-            end)
-        end
-
-        -- Opening animation is optional; errors here are isolated.
         pcall(function()
-            PanelScale.Scale = 0.94
-            TS:Create(PanelScale, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {Scale=1}):Play()
-            if Blur then TS:Create(Blur, TweenInfo.new(0.35), {Size=_G.Settings.MenuBlur}):Play() end
+            ContentScale.Scale = 0.94
+            TS:Create(ContentScale, TweenInfo.new(0.32, Enum.EasingStyle.Quad), {Scale=1}):Play()
+            if Blur then TS:Create(Blur, TweenInfo.new(0.32), {Size=_G.Settings.MenuBlur}):Play() end
         end)
 
         task.spawn(function()
@@ -1212,19 +1217,23 @@ do
                     local mode = tostring(state.Mode or "Idle")
                     ModeL.Text = string.upper(mode)
                     StatusL.Text = tostring(_G.BobonStatus or "Idle")
-                    if mode == "Farming" then StatusDot.BackgroundColor3 = ACCENT_C
-                    elseif mode == "Recovering" or mode == "Dead" then StatusDot.BackgroundColor3 = Color3.fromRGB(255,92,115)
-                    else StatusDot.BackgroundColor3 = ACCENT_A end
+                    if mode == "Farming" then
+                        StatusDot.BackgroundColor3 = ACCENT_C
+                    elseif mode == "Recovering" or mode == "Dead" then
+                        StatusDot.BackgroundColor3 = Color3.fromRGB(255,92,115)
+                    else
+                        StatusDot.BackgroundColor3 = ACCENT_A
+                    end
 
                     local clusterMode = tostring(state.ClusterMode or "OFF")
                     local candidates = tonumber(diag.BringCandidates) or 0
                     local owned = tonumber(diag.BringOwned) or 0
                     local moved = tonumber(diag.BringMoved) or 0
                     if clusterMode ~= "OFF" then
-                        ClusterL.Text = ("Cluster %s  •  %d mobs  •  owned %d  •  moved %d")
+                        ClusterL.Text = ("ALL-MOB %s  •  found %d  •  owned %d  •  stacked %d")
                             :format(clusterMode, candidates, owned, moved)
                     else
-                        ClusterL.Text = "Cluster OFF  •  waiting"
+                        ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
 
                     if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
@@ -1232,7 +1241,7 @@ do
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
                         FlagL.Text = "CONTESTED"
                     elseif clusterMode ~= "OFF" then
-                        FlagL.Text = "CLUSTER ×" .. tostring(candidates)
+                        FlagL.Text = "STACK ×" .. tostring(candidates)
                     else
                         FlagL.Text = "READY"
                     end
@@ -1241,19 +1250,20 @@ do
                     local ready = packet:find("CONFIRMED",1,true) ~= nil
                     CombatL.Text = ready and "COMBAT  READY" or ("COMBAT  " .. packet)
                     CombatL.TextColor3 = ready and ACCENT_C or Color3.fromRGB(255,190,102)
-                    BringL.Text = moved > 0 and ("BRING  FULL BATCH ×" .. tostring(moved))
+                    BringL.Text = moved > 0 and ("BRING  ALL ×" .. tostring(moved))
                         or ("BRING  " .. tostring(diag.Bring or "WAITING"))
                     BringL.TextColor3 = moved > 0 and ACCENT_A or TEXT_MUTED
                 end)
-                task.wait(0.35)
+                task.wait(0.30)
             end
         end)
 
         task.spawn(function()
             while SessionAlive() and SG.Parent do
                 pcall(function()
-                    NeonGradient.Rotation = (NeonGradient.Rotation + 12) % 360
-                    OnlineDot.BackgroundTransparency = OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
+                    NeonGradient.Rotation = (NeonGradient.Rotation + 10) % 360
+                    OnlineDot.BackgroundTransparency =
+                        OnlineDot.BackgroundTransparency > 0.2 and 0 or 0.45
                     PanelStroke.Color = PanelStroke.Color == ACCENT_A and ACCENT_B or ACCENT_A
                 end)
                 task.wait(0.8)
@@ -1263,7 +1273,6 @@ do
 
     if not okUI then
         warn("[BobonHub] UI Error: " .. tostring(uiErr))
-        -- UI is optional. Core kaitun continues even when this executor rejects a GUI API.
     end
 end
 
@@ -1314,9 +1323,42 @@ local function Fragments()
     return d and d:FindFirstChild("Fragments") and d.Fragments.Value or 0
 end
 
-local function CanSpendFragments(cost)
+local function RegisterFragmentDemand(cost, reason, priority)
+    cost = math.max(0, tonumber(cost) or 0)
+    if cost <= 0 or not _G.State then return end
     local reserve = math.max(0, tonumber(_G.Settings and _G.Settings.LockFragment or 0) or 0)
-    return Fragments() - (tonumber(cost) or 0) >= reserve
+    local goal = cost + reserve
+    if Fragments() >= goal then return end
+    local now = tick()
+    local stale = now - (_G.State.FragmentDemandAt or 0) > (_G.Settings.RaidFragmentDemandTTL or 120)
+    local p = tonumber(priority) or 25
+    local selectedReason = reason or "Progression"
+    local currentReason = _G.State.FragmentDemandReason
+    if stale or p > (_G.State.FragmentDemandPriority or 0)
+        or (p == (_G.State.FragmentDemandPriority or 0) and goal > (_G.State.FragmentDemandGoal or 0))
+        or (p == (_G.State.FragmentDemandPriority or 0) and currentReason == selectedReason) then
+        _G.State.FragmentDemandGoal = goal
+        _G.State.FragmentDemandCost = cost
+        _G.State.FragmentDemandReason = selectedReason
+        _G.State.FragmentDemandPriority = p
+        _G.State.FragmentDemandAt = now
+    end
+end
+
+local function CanSpendFragments(cost, reason, priority)
+    local reserve = math.max(0, tonumber(_G.Settings and _G.Settings.LockFragment or 0) or 0)
+    local required = (tonumber(cost) or 0) + reserve
+    local ok = Fragments() >= required
+    if not ok then
+        RegisterFragmentDemand(cost, reason, priority)
+    elseif _G.State and reason and _G.State.FragmentDemandReason == reason then
+        _G.State.FragmentDemandGoal = 0
+        _G.State.FragmentDemandCost = 0
+        _G.State.FragmentDemandReason = nil
+        _G.State.FragmentDemandPriority = 0
+        _G.State.FragmentDemandAt = 0
+    end
+    return ok
 end
 
 local function FindOwnedTool(name)
@@ -1512,6 +1554,13 @@ local function IsEnemyNamed(enemy, wanted)
         return string.lower(value)
     end
     return normalize(enemy.Name) == normalize(wanted)
+end
+
+local function IsRaidBossModel(enemy)
+    if not enemy then return false end
+    local n = string.lower(tostring(enemy.Name or ""))
+    return n:find("[raid boss]", 1, true) ~= nil
+        or n:find(" raid boss", 1, true) ~= nil
 end
 
 
@@ -2049,7 +2098,18 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         end
     end
     add(preferred)
-    if mobName then
+    local raidClusterActive = _G.State and _G.State.Mode == "Raiding"
+        and _G.State.ClusterMode == "RAID" and ClusterFarmController ~= nil
+    if raidClusterActive then
+        local cap = _G.Settings.RaidFastAttackMaxTargets or _G.Settings.FastAttackMaxTargets or 12
+        for _, enemy in ipairs(folder:GetChildren()) do
+            if #results >= cap then break end
+            if enemy ~= preferred and not IsRaidBossModel(enemy)
+                and ClusterFarmController:IsVerified(enemy) then
+                add(enemy)
+            end
+        end
+    elseif mobName then
         for _, enemy in ipairs(folder:GetChildren()) do
             if #results >= (_G.Settings.FastAttackMaxTargets or 12) then break end
             if IsEnemyNamed(enemy, mobName) then
@@ -2061,7 +2121,7 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
                         and now - verifiedAt
                             <= (_G.Settings.GatherVerifiedTTL or 0.9)
                         and type(ClientOwnsMob) == "function"
-                        and ClientOwnsMob(root) == true
+                        and ClientOwnsMob(root) ~= false
                 end
                 if allowExtra then add(enemy) end
             end
@@ -3247,42 +3307,57 @@ end
 
 local function ExpandSimulationRadius()
     local now = tick()
-    -- Public bring implementations refresh this continuously. Do it from the
-    -- existing farm tick at a bounded rate so the executor/server cannot reset
-    -- the radius and silently turn later moves into client-only ghosts.
     if now - (FarmPositionController.LastSimulationTry or 0)
-        < (_G.Settings.GatherSimulationRefresh or 0.75) then
+        < (_G.Settings.GatherSimulationRefresh or 0.08) then
         return FarmPositionController.SimulationReady == true
     end
     FarmPositionController.LastSimulationTry = now
-    local requested = false
-    -- Keep the request inside the local farm envelope. Success here is never
-    -- treated as ownership proof; every NPC is checked independently below.
-    local radius = math.clamp(
-        _G.Settings.ClusterSimulationRadius
-            or ((_G.Settings.GatherMaxDistance or 600) + 150),
-        250, 2000)
 
+    local requested = false
+    local finiteRadius = math.max(
+        tonumber(_G.Settings.ClusterSimulationRadius)
+            or ((_G.Settings.GatherMaxDistance or 2000) + 1000),
+        2500
+    )
+
+    -- Aggressive request: ask for the whole current farm field in one refresh.
+    -- Every write remains protected because executor support differs.
     if type(setscriptable) == "function" then
         local ok = pcall(function()
             setscriptable(LP, "SimulationRadius", true)
-            LP.SimulationRadius = radius
+            LP.SimulationRadius = finiteRadius
         end)
         requested = requested or ok
     end
+
     if type(sethiddenproperty) == "function" then
         local ok = pcall(function()
-            sethiddenproperty(LP, "SimulationRadius", radius)
+            sethiddenproperty(LP, "SimulationRadius", math.huge)
             pcall(function()
-                sethiddenproperty(LP, "MaximumSimulationRadius", radius)
+                sethiddenproperty(LP, "MaximumSimulationRadius", math.huge)
             end)
         end)
+        if not ok then
+            ok = pcall(function()
+                sethiddenproperty(LP, "SimulationRadius", finiteRadius)
+                pcall(function()
+                    sethiddenproperty(LP, "MaximumSimulationRadius", finiteRadius)
+                end)
+            end)
+        end
         requested = requested or ok
     end
+
     if type(setsimulationradius) == "function" then
-        local ok = pcall(function() setsimulationradius(radius, radius) end)
+        local ok = pcall(function()
+            setsimulationradius(math.huge, math.huge)
+        end)
+        if not ok then
+            ok = pcall(function() setsimulationradius(finiteRadius, finiteRadius) end)
+        end
         requested = requested or ok
     end
+
     FarmPositionController.SimulationReady = requested
     return requested
 end
@@ -3336,8 +3411,20 @@ function ClusterFarmController:IsName(name)
 end
 
 function ClusterFarmController:IsModelAllowed(model)
-    local names = _G.State and _G.State.ClusterMobNames
-    if type(names) ~= "table" or not model then return false end
+    local state = _G.State
+    if not state or not model then return false end
+    if state.ClusterMode == "RAID" then
+        if IsRaidBossModel(model) then return false end
+        local hum = model:FindFirstChildOfClass("Humanoid")
+        local root = model:FindFirstChild("HumanoidRootPart")
+        local anchor = state.ClusterAnchor
+        if not hum or hum.Health <= 0 or not root or not anchor then return false end
+        local ok, pos = pcall(function() return root.Position end)
+        return ok and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+            and (pos - anchor.Position).Magnitude <= (_G.Settings.RaidGatherRadius or 700)
+    end
+    local names = state.ClusterMobNames
+    if type(names) ~= "table" then return false end
     for _, wanted in ipairs(names) do
         if IsEnemyNamed(model, wanted) then return true end
     end
@@ -3346,6 +3433,7 @@ end
 
 function ClusterFarmController:IsAttackCluster(mobName)
     if not _G.State or _G.State.ClusterMode == "OFF" then return false end
+    if _G.State.ClusterMode == "RAID" then return _G.State.Mode == "Raiding" end
     return self:IsName(tostring(mobName or ""))
 end
 
@@ -3362,6 +3450,9 @@ function ClusterFarmController:PolicyValid()
     elseif state.ClusterMode == "SKIP" then
         return state.Mode == "Farming" and state.FState == "SKIP_FARM"
             and GetSea() == 1 and Level() >= 10 and Level() <= 70
+    elseif state.ClusterMode == "RAID" then
+        return state.Mode == "Raiding" and state.ActiveActionToken ~= 0
+            and state.ActionOwner == "Raid"
     end
     return false
 end
@@ -3408,8 +3499,13 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
     local at = VerifiedGatherRoots[root]
-    return at ~= nil and tick() - at <= (_G.Settings.GatherVerifiedTTL or 0.9)
-        and ClientOwnsMob(root) == true
+    if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 1.5) then
+        return false
+    end
+    -- Explicit false means another owner/server still controls the assembly.
+    -- nil only means the executor has no ownership-query API; the recent successful
+    -- same-anchor move is kept eligible instead of forcing one-by-one fallback.
+    return ClientOwnsMob(root) ~= false
 end
 
 function ClusterFarmController:SelectPrimary()
@@ -3446,8 +3542,11 @@ function ClusterFarmController:Tick()
         end
         return 0
     end
+
     local now = tick()
-    if now - (self.LastTick or 0) < (_G.Settings.ClusterRefresh or 0.08) then return 0 end
+    if now - (self.LastTick or 0) < (_G.Settings.ClusterRefresh or 0.03) then
+        return 0
+    end
     self.LastTick = now
 
     local state = _G.State
@@ -3455,30 +3554,37 @@ function ClusterFarmController:Tick()
     local anchor = anchorCF.Position
     local folder = workspace:FindFirstChild("Enemies")
     if not folder then return 0 end
+
     ExpandSimulationRadius()
 
-    -- Expire stale attack entries, but keep the anchor itself alive.
-    local ttl = _G.Settings.GatherVerifiedTTL or 0.9
+    local ttl = _G.Settings.GatherVerifiedTTL or 1.5
     for root, at in pairs(VerifiedGatherRoots) do
-        if not root.Parent or now - at > ttl then VerifiedGatherRoots[root] = nil end
+        if not root.Parent or now - at > ttl then
+            VerifiedGatherRoots[root] = nil
+        end
     end
 
+    -- Collect ALL matching mobs in the current farm field before moving any of
+    -- them. This avoids "pick one -> move -> rescan -> next one" behaviour.
     local candidates = {}
-    -- v18.7: "bãi đang farm" is the stable cluster-anchor envelope, not merely
-    -- the few mobs closest to the current primary. This keeps every matching
-    -- quest/skip mob in the same spawn field eligible for the same batch pull.
-    local maxDistance = math.clamp(_G.Settings.GatherMaxDistance or 600, 100, 1200)
+    local maxDistance = state.ClusterMode == "RAID"
+        and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
+        or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 2000)
     for _, mob in ipairs(folder:GetChildren()) do
         if self:IsModelAllowed(mob) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
             if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local ok, pos = pcall(function() return root.Position end)
-                if ok and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                     and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
                     and (pos - anchor).Magnitude <= maxDistance then
                     candidates[#candidates + 1] = {
-                        Model=mob, Humanoid=hum, Root=root, Position=pos
+                        Model = mob,
+                        Humanoid = hum,
+                        Root = root,
+                        Position = pos,
+                        Ownership = nil,
                     }
                 end
             end
@@ -3486,38 +3592,41 @@ function ClusterFarmController:Tick()
     end
 
     state.ClusterLastSeen = #candidates > 0 and now or (state.ClusterLastSeen or 0)
-    table.sort(candidates, function(a,b)
-        return (a.Position - anchor).Magnitude < (b.Position - anchor).Magnitude
-    end)
 
-    local moved, owned, unknown = 0, 0, false
-    -- IMPORTANT: gathering is no longer capped by FastAttackMaxTargets.
-    -- Magnet every matching mob we can really own; attack remains separately
-    -- capped so a large spawn field does not become one oversized remote packet.
-    local limit = math.min(#candidates, math.max(1, _G.Settings.ClusterGatherLimit or 64))
-    local stackRadius = math.max(0, _G.Settings.ClusterStackRadius or 0.75)
-    local generation = GatherGeneration
-    for i = 1, limit do
-        if generation ~= GatherGeneration then return 0 end
-        local entry = candidates[i]
-        local owns = ClientOwnsMob(entry.Root)
-        if owns == true then
+    -- Phase 1: query every candidate first. No distance sorting and no gather cap.
+    local owned, unknown, explicitOther = 0, 0, 0
+    for _, entry in ipairs(candidates) do
+        entry.Ownership = ClientOwnsMob(entry.Root)
+        if entry.Ownership == true then
             owned = owned + 1
-            -- Tight deterministic stack: all owned mobs land in one attack pocket.
-            -- A tiny spiral keeps Roblox physics from ejecting perfectly-overlapped
-            -- root assemblies while remaining visually one pile.
-            local angle = (i - 1) * 2.3999632297
-            local radius = stackRadius == 0 and 0
-                or math.min(stackRadius, 0.08 + (i - 1) * 0.035)
-            local destination = anchor
-                + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+        elseif entry.Ownership == nil then
+            unknown = unknown + 1
+        else
+            explicitOther = explicitOther + 1
+        end
+    end
+
+    -- Phase 2: one tight pass to the exact same anchor.
+    -- true: proven local ownership.
+    -- nil: executor cannot query ownership, so still attempt the real CFrame write.
+    -- false: do not mark verified; keep retrying after the next simulation refresh.
+    local moved = 0
+    local generation = GatherGeneration
+    for _, entry in ipairs(candidates) do
+        if generation ~= GatherGeneration then return 0 end
+        if entry.Ownership ~= false and entry.Root and entry.Root.Parent then
             local okMove = pcall(function()
-                local rot = entry.Root.CFrame.Rotation
                 entry.Root.AssemblyLinearVelocity = Vector3.zero
                 entry.Root.AssemblyAngularVelocity = Vector3.zero
-                entry.Root.CFrame = CFrame.new(destination) * rot
+                entry.Root.CFrame = CFrame.new(anchor) * entry.Root.CFrame.Rotation
             end)
             if okMove then
+                -- A second zero prevents NPC AI/physics from immediately peeling
+                -- individual mobs away between cluster refreshes.
+                pcall(function()
+                    entry.Root.AssemblyLinearVelocity = Vector3.zero
+                    entry.Root.AssemblyAngularVelocity = Vector3.zero
+                end)
                 VerifiedGatherRoots[entry.Root] = now
                 moved = moved + 1
                 if not state.ClusterPrimary or not self:IsVerified(state.ClusterPrimary) then
@@ -3526,24 +3635,38 @@ function ClusterFarmController:Tick()
             else
                 VerifiedGatherRoots[entry.Root] = nil
             end
-        elseif owns == nil then
-            unknown = true
-            VerifiedGatherRoots[entry.Root] = nil
         else
             VerifiedGatherRoots[entry.Root] = nil
+        end
+    end
+
+    -- One immediate re-stack pass for every moved root. All writes happen within
+    -- the same magnet tick so a whole spawn looks like one batch rather than a queue.
+    if moved > 1 then
+        for _, entry in ipairs(candidates) do
+            if VerifiedGatherRoots[entry.Root] == now and entry.Root.Parent then
+                pcall(function()
+                    entry.Root.CFrame = CFrame.new(anchor) * entry.Root.CFrame.Rotation
+                    entry.Root.AssemblyLinearVelocity = Vector3.zero
+                    entry.Root.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
         end
     end
 
     if moved > 0 then state.ClusterLastMoved = now end
     local primary = self:SelectPrimary()
     state.ClusterPrimary = primary
+
     _G.BobonDiagnostics.BringCandidates = #candidates
     _G.BobonDiagnostics.BringOwned = owned
     _G.BobonDiagnostics.BringMoved = moved
-    _G.BobonDiagnostics.Bring = moved > 0 and ("CLUSTER-" .. state.ClusterMode)
-        or (#candidates == 0 and "CLUSTER-WAIT-SPAWN")
-        or (unknown and "NO-OWNERSHIP-API")
+    _G.BobonDiagnostics.Bring = moved > 0 and ("ALL-MOB-" .. state.ClusterMode)
+        or (#candidates == 0 and "WAIT-SPAWN")
+        or (unknown > 0 and "TRY-NO-OWNERSHIP-API")
+        or (explicitOther > 0 and "WAIT-NETWORK-OWNER")
         or "WAIT-OWNERSHIP"
+
     return moved
 end
 
@@ -3560,7 +3683,7 @@ end
 
 -- NPC magnet loop only. It never writes MovementOwner and never moves player.
 task.spawn(function()
-    while SessionAlive() and task.wait(_G.Settings.ClusterRefresh or 0.08) do
+    while SessionAlive() and task.wait(_G.Settings.ClusterRefresh or 0.03) do
         local ok, err = pcall(function() ClusterFarmController:Tick() end)
         if not ok and _G.Settings.Debug then warn("[BobonHub] Cluster Error: " .. tostring(err)) end
     end
@@ -5173,7 +5296,7 @@ function FightingStyleController:Tick()
         if not owned and tick() - self.LastProbe >= 15 then
             self.LastProbe = tick()
             if row.remote == "DragonClaw" then
-                if CanSpendFragments(1500) then
+                if CanSpendFragments(1500, "Full Melee: Dragon Breath", 100) then
                     pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
                     pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
                 end
@@ -5209,7 +5332,7 @@ function FightingStyleController:Tick()
                 if tick() - self.LastProbe >= 15 then
                     self.LastProbe = tick()
                     if row.baseRemote == "DragonClaw" then
-                        if CanSpendFragments(1500) then
+                        if CanSpendFragments(1500, "Full Melee: Dragon Breath", 100) then
                             pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
                             pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
                         end
@@ -5219,7 +5342,7 @@ function FightingStyleController:Tick()
                 end
                 return false
             end
-            if tick() - self.LastProbe >= 15 and CanSpendFragments(5000) then
+            if tick() - self.LastProbe >= 15 and CanSpendFragments(5000, "Full Melee: V2 Fighting Style", 100) then
                 self.LastProbe = tick()
                 if row.name == "Sharkman Karate" then
                     InvokeStyle(row.remote, true)
@@ -5237,7 +5360,7 @@ function FightingStyleController:Tick()
     end
 
     if not FindOwnedTool("Godhuman") then
-        if tick() - self.LastProbe >= 20 and CanSpendFragments(5000) then
+        if tick() - self.LastProbe >= 20 and CanSpendFragments(5000, "Full Melee: Godhuman", 110) then
             self.LastProbe = tick()
             InvokeStyle("BuyGodhuman", true)
             InvokeStyle("BuyGodhuman")
@@ -5251,7 +5374,7 @@ function FightingStyleController:Tick()
     -- Sanguine is an optional end-game purchase. The server validates Heart,
     -- materials, money and fragments; a failed probe changes no movement/state.
     if GetSea() == 3 and not self.SanguineKnownOwned and not FindOwnedTool("Sanguine Art")
-        and Level() >= 2400 and tick() - self.LastProbe >= 30 and CanSpendFragments(5000) then
+        and Level() >= 2400 and tick() - self.LastProbe >= 30 and CanSpendFragments(5000, "Full Melee: Sanguine Art", 105) then
         self.LastProbe = tick()
         InvokeStyle("BuySanguineArt", true)
         InvokeStyle("BuySanguineArt")
@@ -5262,20 +5385,14 @@ function FightingStyleController:Tick()
 end
 
 -- ══════════════════════════════════════════════════════════════════
---   v18.8 SWORD PROGRESSION — BUY ALL + TRUE TRIPLE KATANA
---   Direct shop purchases are server-validated. Legendary dealer and TTK
---   remotes follow current public implementations; no fake inventory state.
+--   v19.0 KAITUN-ONLY SWORD PROGRESSION — TRUE TRIPLE KATANA
+--   No random Beli-shop sword sweep. Only TTK prerequisites and the
+--   existing kaitun item/progression swords remain; no fake inventory state.
 -- ══════════════════════════════════════════════════════════════════
 local SwordProgressionController = {
-    LastShopProbe = 0,
     LastLegendaryProbe = 0,
     LastTTKProbe = 0,
     LastStatus = "idle",
-}
-
-local DirectBuySwords = {
-    "Cutlass", "Katana", "Dual Katana", "Iron Mace", "Triple Katana",
-    "Pipe", "Dual-Headed Blade", "Soul Cane", "Bisento",
 }
 
 local LegendarySwordAliases = {
@@ -5311,28 +5428,6 @@ end
 function SwordProgressionController:InvalidateInventory()
     InventoryCache.At = 0
     WeaponInventoryCache.At = 0
-end
-
-function SwordProgressionController:TryDirectShop()
-    if not _G.Settings.AutoBuySwords then return false end
-    if tick() - self.LastShopProbe < (_G.Settings.SwordBuyProbe or 12) then return false end
-    self.LastShopProbe = tick()
-    -- Probe every still-missing ordinary shop sword in one bounded pass.
-    -- This avoids getting stuck forever on the first unavailable item. The
-    -- server remains authoritative for price, sea/NPC entitlement and ownership.
-    local attempted = false
-    for _, name in ipairs(DirectBuySwords) do
-        if not InventoryHas(name) then
-            attempted = true
-            pcall(function() CommF_:InvokeServer("BuyItem", name) end)
-        end
-    end
-    if attempted then
-        self:InvalidateInventory()
-        self.LastStatus = "Ordinary sword shop pass"
-        DLog("SWORD", self.LastStatus)
-    end
-    return attempted
 end
 
 function SwordProgressionController:TryLegendaryDealer()
@@ -5403,9 +5498,9 @@ function SwordProgressionController:Tick()
     if not _G.Settings.AutoBuySwords or not IsAlive() then return false end
     if _G.State.ActiveActionToken ~= 0 then return false end
 
-    -- Cheap ordinary purchases first, then dealer acquisition, then mastery.
+    -- Kaitun-only sword work: do NOT buy random shop swords.
+    -- Keep the TTK prerequisite chain because it is an explicit kaitun goal.
     -- Training never owns movement: normal quest/cluster farm supplies the kills.
-    self:TryDirectShop()
     self:TryLegendaryDealer()
     if self:TrainTTKPrerequisite() then return true end
     self:TryTrueTripleKatana()
@@ -6019,7 +6114,7 @@ end
 
 function ItemProgression:CheckKabucha()
     if not _G.Settings.AutoAdvancedItems or GetSea() < 2 or Level() < 700
-        or InventoryHas("Kabucha") or not CanSpendFragments(1500) then return false end
+        or InventoryHas("Kabucha") or not CanSpendFragments(1500, "Item: Kabucha", 20) then return false end
     if not self:OptionalReady("Kabucha") then return false end
     self.NextOptional.Kabucha = tick() + (_G.Settings.ProgressionRetry or 45)
     pcall(function() CommF_:InvokeServer("BlackbeardReward","Slingshot","1") end)
@@ -6235,7 +6330,7 @@ function ItemProgression:CheckSoulGuitar()
     -- the material bill and performs the purchase. It is harmless when gated.
     local npcs = workspace:FindFirstChild("NPCs")
     if npcs and npcs:FindFirstChild("Skeleton Machine") then
-        if CanSpendFragments(5000) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+        if CanSpendFragments(5000, "Item: Soul Guitar", 70) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
         return false
     end
 
@@ -6280,7 +6375,7 @@ function ItemProgression:CheckSoulGuitar()
     end
 
     -- All puzzle flags completed: ask the Skeleton Machine purchase endpoint.
-    if CanSpendFragments(5000) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
+    if CanSpendFragments(5000, "Item: Soul Guitar", 70) then pcall(function() CommF_:InvokeServer("soulGuitarBuy", true) end) end
     return false
 end
 
@@ -6411,30 +6506,10 @@ local BossDatabase = {
 -- completed quest for unrelated bosses. Level-skip bosses are handled by the
 -- dedicated SkipRouteController; this manager targets missing useful drops.
 local BossDropItems = {
-    -- Sea 1 sword drops
-    ["The Saw"] = {"Shark Saw"},
-    ["Chief Warden"] = {"Wardens Sword"},
-    ["Fishman Lord"] = {"Trident"},
+    -- Keep only existing kaitun progression/drop goals; no completionist sword hunting.
     ["Thunder God"] = {"Pole (1st Form)"},
-
-    -- Sea 2 sword drops. Keep legacy aliases where Update renames changed names.
-    ["Diamond"] = {"Longsword"},
-    ["Orbitus"] = {"Gravity Blade", "Gravity Cane"},
-    ["Fajita"] = {"Gravity Blade", "Gravity Cane"},
-    ["Smoke Admiral"] = {"Flail", "Jitte"},
     ["Awakened Ice Admiral"] = {"Rengoku"},
-    ["Tide Keeper"] = {"Dragon Trident"},
-    ["Order"] = {"Koko"},
-
-    -- Sea 3 sword drops
-    ["Captain Elephant"] = {"Twin Hooks"},
-    ["Beautiful Pirate"] = {"Canvander"},
     ["Cake Queen"] = {"Buddy Sword"},
-    ["Soul Reaper"] = {"Hallow Scythe"},
-    ["Cake Prince"] = {"Spikey Trident"},
-    ["Dough King"] = {"Spikey Trident"},
-    ["rip_indra True Form"] = {"Dark Dagger"},
-    ["rip_indra"] = {"Dark Dagger"},
 }
 
 local function BossDropMissing(spec)
@@ -6933,6 +7008,7 @@ end
 
 function FruitManager:StoreBackpackFruits()
     if not _G.Settings.FruitEnabled then return false end
+    if _G.State and _G.State.ActionOwner == "Raid" then return false end
     local now = tick()
     if now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
     self.LastStore = now
@@ -6995,6 +7071,368 @@ task.spawn(function()
         end
     end
 end)
+
+
+-- ══════════════════════════════════════════════════════════════════
+--   v19.0 SMART FRAGMENT MANAGER + BASIC RAID CONTROLLER
+--   Only activates when live progression has registered a Fragment shortage.
+--   Never auto-awakens fruit and never uses Advanced/Order raids for farming.
+-- ══════════════════════════════════════════════════════════════════
+local FragmentManager = {}
+local RaidController = {
+    Active = false,
+    NextTry = 0,
+    LastChipResult = nil,
+    CurrentRaidName = nil,
+    StartFragments = 0,
+}
+
+function FragmentManager:GetDemand()
+    local state = _G.State
+    if not state then return nil end
+    local at = tonumber(state.FragmentDemandAt) or 0
+    if at <= 0 or tick() - at > (_G.Settings.RaidFragmentDemandTTL or 120) then
+        state.FragmentDemandGoal = 0
+        state.FragmentDemandCost = 0
+        state.FragmentDemandReason = nil
+        state.FragmentDemandPriority = 0
+        return nil
+    end
+    local goal = math.max(0, tonumber(state.FragmentDemandGoal) or 0)
+    if goal <= 0 or Fragments() >= goal then
+        state.FragmentDemandGoal = 0
+        state.FragmentDemandCost = 0
+        state.FragmentDemandReason = nil
+        state.FragmentDemandPriority = 0
+        state.FragmentDemandAt = 0
+        return nil
+    end
+    return {Goal=goal, Cost=tonumber(state.FragmentDemandCost) or 0,
+        Reason=state.FragmentDemandReason or "Progression",
+        Priority=tonumber(state.FragmentDemandPriority) or 0}
+end
+
+local function RaidTimerVisible()
+    local pg = LP:FindFirstChild("PlayerGui")
+    local main = pg and pg:FindFirstChild("Main")
+    local timer = main and main:FindFirstChild("Timer")
+    return timer and timer:IsA("GuiObject") and timer.Visible == true or false
+end
+
+local function RaidLocationPosition(obj)
+    if not obj then return nil end
+    if obj:IsA("BasePart") then return obj.Position, obj.CFrame end
+    if obj:IsA("Model") then
+        local ok, cf = pcall(function() return obj:GetPivot() end)
+        if ok then return cf.Position, cf end
+    end
+    local ok, p = pcall(function() return obj.Position end)
+    if ok and typeof(p) == "Vector3" then return p, CFrame.new(p) end
+    return nil
+end
+
+function RaidController:GetRaidLocations()
+    local origin = workspace:FindFirstChild("_WorldOrigin")
+    local locations = origin and origin:FindFirstChild("Locations")
+    if not locations then return {} end
+    local out = {}
+    for i = 1, 5 do
+        local obj = locations:FindFirstChild("Island " .. i)
+        local pos, cf = RaidLocationPosition(obj)
+        if obj and pos and IsValidPos(pos) then
+            out[#out + 1] = {Index=i, Object=obj, Position=pos, CFrame=cf}
+        end
+    end
+    return out
+end
+
+function RaidController:IsRaidActive()
+    return RaidTimerVisible() or #self:GetRaidLocations() > 0
+end
+
+function RaidController:GetBasicRaidNames()
+    local names, seen = {}, {}
+    local mod = RS:FindFirstChild("Raids")
+    if mod and mod:IsA("ModuleScript") then
+        local ok, data = pcall(require, mod)
+        if ok and type(data) == "table" and type(data.raids) == "table" then
+            for _, name in pairs(data.raids) do
+                if type(name) == "string" and name ~= "" and not seen[name] then
+                    seen[name] = true
+                    names[#names + 1] = name
+                end
+            end
+        end
+    end
+    if #names == 0 then
+        for _, name in ipairs({"Flame","Dark","Ice","Sand","Smoke"}) do
+            names[#names + 1] = name
+        end
+    end
+    return names
+end
+
+function RaidController:ChooseRaidName()
+    local available, availableSet = self:GetBasicRaidNames(), {}
+    for _, name in ipairs(available) do availableSet[string.lower(name)] = name end
+    local data = LP:FindFirstChild("Data")
+    local fruit = data and data:FindFirstChild("DevilFruit")
+    local current = fruit and string.lower(tostring(fruit.Value or "")) or ""
+    current = current:match("^([^%-]+)") or current
+    local prefs = _G.Settings.RaidPreferredNames or {"Flame","Dark","Ice","Sand","Smoke"}
+    for _, wanted in ipairs(prefs) do
+        local live = availableSet[string.lower(wanted)]
+        if live and string.lower(wanted) ~= current then return live end
+    end
+    for _, wanted in ipairs(prefs) do
+        local live = availableSet[string.lower(wanted)]
+        if live then return live end
+    end
+    return available[1]
+end
+
+local function FindSpecialMicrochip()
+    return FindOwnedTool("Special Microchip") or HasItem("Special Microchip")
+end
+
+function RaidController:GetFruitCatalogPrices()
+    local prices = {}
+    local ok, rows = pcall(function() return CommF_:InvokeServer("GetFruits") end)
+    if ok and type(rows) == "table" then
+        for _, row in pairs(rows) do
+            if type(row) == "table" then
+                local name = row.Name or row.name
+                local price = tonumber(row.Price or row.price)
+                if name and price then prices[tostring(name)] = price end
+            end
+        end
+    end
+    return prices
+end
+
+function RaidController:LoadCheapestStoredFruit()
+    local prices = self:GetFruitCatalogPrices()
+    local ok, rows = pcall(function() return CommF_:InvokeServer("getInventoryFruits") end)
+    if not ok or type(rows) ~= "table" then return false end
+    local bestName, bestPrice
+    local cap = tonumber(_G.Settings.RaidCheapFruitMaxPrice) or 650000
+    for _, row in pairs(rows) do
+        if type(row) == "table" then
+            local name = row.Name or row.name
+            if name then
+                local price = tonumber(row.Price or row.price or prices[tostring(name)])
+                if price and price <= cap and (not bestPrice or price < bestPrice) then
+                    bestName, bestPrice = tostring(name), price
+                end
+            end
+        end
+    end
+    if not bestName then return false end
+    local okLoad = pcall(function() CommF_:InvokeServer("LoadFruit", bestName) end)
+    if not okLoad then return false end
+    task.wait(0.45)
+    return true
+end
+
+function RaidController:ProtectBackpackFruits()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    if not backpack then return end
+    for _, tool in ipairs(backpack:GetChildren()) do
+        if LooksLikeFruitTool(tool) then
+            local fruitName = FruitOriginalName(tool)
+            if fruitName then
+                pcall(function() CommF_:InvokeServer("StoreFruit", fruitName, tool) end)
+                task.wait(0.08)
+            end
+        end
+    end
+end
+
+function RaidController:AcquireChip(raidName)
+    if FindSpecialMicrochip() then return true end
+    -- Never let a random/high-value physical fruit sitting in Backpack become
+    -- an accidental chip payment. Store first, then explicitly load only a
+    -- low-value fruit if the normal $100k chip route is on cooldown.
+    self:ProtectBackpackFruits()
+    task.wait(0.2)
+    local function selectChip()
+        local ok, result = pcall(function() return CommF_:InvokeServer("RaidsNpc", "Select", raidName) end)
+        self.LastChipResult = ok and result or tostring(result)
+        task.wait(0.8)
+        return FindSpecialMicrochip() ~= nil
+    end
+    if selectChip() then return true end
+    if self:LoadCheapestStoredFruit() and selectChip() then return true end
+    return false
+end
+
+function RaidController:FindStartDetector()
+    local map = workspace:FindFirstChild("Map")
+    if not map then return nil end
+    local sea = GetSea()
+    local preferred = sea == 2 and map:FindFirstChild("CircleIsland") or (sea == 3 and map:FindFirstChild("Boat Castle"))
+    local summon = preferred and preferred:FindFirstChild("RaidSummon2", true)
+    local detector = summon and summon:FindFirstChildWhichIsA("ClickDetector", true)
+    if detector then return detector end
+    for _, node in ipairs(map:GetDescendants()) do
+        if node.Name == "RaidSummon2" then
+            local cd = node:FindFirstChildWhichIsA("ClickDetector", true)
+            if cd then return cd end
+        end
+    end
+    return nil
+end
+
+function RaidController:StartRaid()
+    if self:IsRaidActive() then return true end
+    if not FindSpecialMicrochip() then return false end
+    local detector = self:FindStartDetector()
+    if not detector or type(fireclickdetector) ~= "function" then
+        self.LastChipResult = "NO-CLICKDETECTOR"
+        return false
+    end
+    if not pcall(function() fireclickdetector(detector) end) then return false end
+    local deadline = tick() + 12
+    while SessionAlive() and IsAlive() and tick() < deadline do
+        if self:IsRaidActive() then return true end
+        task.wait(0.2)
+    end
+    return self:IsRaidActive()
+end
+
+function RaidController:GetIslandWithEnemies()
+    local islands = self:GetRaidLocations()
+    if #islands == 0 then return nil, nil, nil end
+    local folder = workspace:FindFirstChild("Enemies")
+    local radius = _G.Settings.RaidGatherRadius or 700
+    local fallback = islands[#islands]
+    for i = #islands, 1, -1 do
+        local island = islands[i]
+        local nearest, nearestDist, boss = nil, math.huge, nil
+        if folder then
+            for _, mob in ipairs(folder:GetChildren()) do
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                local root = mob:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health > 0 and root then
+                    local d = (root.Position - island.Position).Magnitude
+                    if d <= radius then
+                        if IsRaidBossModel(mob) then boss = boss or mob
+                        elseif d < nearestDist then nearest, nearestDist = mob, d end
+                    end
+                end
+            end
+        end
+        if boss or nearest then return island, nearest, boss end
+    end
+    return fallback, nil, nil
+end
+
+function RaidController:FightTick(token)
+    local island, regular, boss = self:GetIslandWithEnemies()
+    if not island then _G.BobonStatus = "Raid: Waiting for island" return end
+    if boss and _G.State:IsTargetValid(boss) then
+        FarmPositionController:ReleaseCluster()
+        local root = boss:FindFirstChild("HumanoidRootPart")
+        if root then
+            _G.State.CurrentTarget = boss
+            PrepareCombatTarget(boss)
+            TravelManager:Request(root, "Raid", {arrivalThreshold=_G.Settings.FarmArrivalThreshold,
+                combatHover=true, hoverHeight=_G.Settings.RaidHoverHeight or 22,
+                speed=_G.Settings.RaidTravelSpeed or 300, persistent=true})
+            if TravelManager:IsAtCombatAnchor(root) then EquipCombatTool(); Attack(boss, boss.Name) end
+            _G.BobonStatus = "Raid: Final boss"
+        end
+        return
+    end
+    ClusterFarmController:Activate("RAID", {"*"}, island.CFrame, "Raid")
+    ClusterFarmController:Tick()
+    local primary = ClusterFarmController:SelectPrimary() or regular
+    local hover = ClusterFarmController:GetHoverCFrame(_G.Settings.RaidHoverHeight or 22)
+    if hover then
+        TravelManager:Request(hover, "Raid", {arrivalThreshold=_G.Settings.FarmArrivalThreshold,
+            combatHover=true, speed=_G.Settings.RaidTravelSpeed or 300, persistent=true})
+    end
+    if primary and _G.State:IsTargetValid(primary) then
+        _G.State.CurrentTarget = primary
+        PrepareCombatTarget(primary)
+        if TravelManager:IsAtCombatAnchor() then EquipCombatTool(); Attack(primary, primary.Name) end
+    end
+    _G.BobonStatus = ("Raid: Island %d • %d/%d Frag"):format(island.Index, Fragments(),
+        math.max(Fragments(), tonumber(_G.State.FragmentDemandGoal) or 0))
+end
+
+function RaidController:_Finish(token, reason)
+    FarmPositionController:ReleaseCluster()
+    CombatController:WatchTarget(nil, nil)
+    if _G.State.IsTraveling and _G.State.MovementOwner == "Raid" then TravelManager:Stop("Raid:" .. tostring(reason)) end
+    _G.State:ClearTargets()
+    _G.State:ReleaseAction(token)
+    self.Active = false
+    self.CurrentRaidName = nil
+    _G.State.RaidLastFinish = tick()
+    if _G.State.Mode == "Raiding" then _G.State:SetMode("Idle") end
+end
+
+function RaidController:_Run(token, demand)
+    local ok, err = xpcall(function()
+        self.StartFragments = Fragments()
+        _G.State.RaidLastStart = tick()
+        local deadline = tick() + (_G.Settings.RaidRunTimeout or 900)
+        while SessionAlive() and _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+            _G.State:TouchAction(token)
+            local liveDemand = FragmentManager:GetDemand()
+            if not liveDemand or Fragments() >= liveDemand.Goal then break end
+            local raidName = self:ChooseRaidName()
+            if not raidName then self.NextTry = tick() + (_G.Settings.RaidNoChipRetry or 90); break end
+            self.CurrentRaidName = raidName
+            _G.State:SetMode("Raiding")
+            _G.BobonStatus = ("Fragments: %d/%d • %s"):format(Fragments(), liveDemand.Goal, raidName)
+            if not self:IsRaidActive() then
+                if not self:AcquireChip(raidName) then
+                    self.NextTry = tick() + (_G.Settings.RaidNoChipRetry or 90)
+                    _G.BobonStatus = "Fragments: No raid chip • resume farm"
+                    break
+                end
+                if not self:StartRaid() then
+                    self.NextTry = tick() + (_G.Settings.RaidNoChipRetry or 90)
+                    _G.BobonStatus = "Fragments: Raid start unavailable • resume farm"
+                    break
+                end
+            end
+            local raidStartFrag = Fragments()
+            local activeDeadline = tick() + 780
+            while SessionAlive() and _G.State:IsActionValid(token) and IsAlive()
+                and tick() < activeDeadline and self:IsRaidActive() do
+                _G.State:TouchAction(token)
+                self:FightTick(token)
+                task.wait(0.06)
+            end
+            FarmPositionController:ReleaseCluster()
+            if _G.State.IsTraveling and _G.State.MovementOwner == "Raid" then TravelManager:Stop("RaidRoundEnd") end
+            task.wait(1.0)
+            local gain = math.max(0, Fragments() - raidStartFrag)
+            _G.State.RaidLastGain = gain
+            if gain <= 0 and not self:IsRaidActive() then self.NextTry = tick() + 30; break end
+            -- Never call Awakener here. Fragment farming must not spend its reward.
+        end
+    end, debug.traceback)
+    if not ok then warn("[BobonHub] Module Error: RaidController: " .. tostring(err)) end
+    self:_Finish(token, ok and "complete" or "error")
+end
+
+function RaidController:TryStart()
+    if not _G.Settings.AutoFragmentRaid or self.Active or tick() < (self.NextTry or 0) then return false end
+    if GetSea() < 2 or Level() < 1100 or not IsAlive() or not _G.State:CanAct() then return false end
+    local demand = FragmentManager:GetDemand()
+    if not demand then return false end
+    local token = _G.State:ClaimAction("Raid")
+    if token == 0 then return false end
+    PrepareClaimedAction("Raid")
+    self.Active = true
+    task.spawn(function() self:_Run(token, demand) end)
+    return true
+end
+
 
 
 
@@ -7381,6 +7819,12 @@ task.spawn(function()
                     return ItemProgression:RunChecks(true, true)
                 end)
                 if okEnd and endResult then return end
+                local okRaidEnd, raidEnd = pcall(function() return RaidController:TryStart() end)
+                if not okRaidEnd then
+                    warn("[BobonHub] Module Error: RaidController: " .. tostring(raidEnd))
+                elseif raidEnd then
+                    return
+                end
                 local okKata, kataResult = pcall(function()
                     return KatakuriController:TryRun()
                 end)
@@ -7503,6 +7947,13 @@ task.spawn(function()
                     if not okItems then
                         warn("[BobonHub] Module Error: ItemProgression: " .. tostring(itemResult))
                     elseif itemResult then
+                        return
+                    end
+
+                    local okRaid, raidResult = pcall(function() return RaidController:TryStart() end)
+                    if not okRaid then
+                        warn("[BobonHub] Module Error: RaidController: " .. tostring(raidResult))
+                    elseif raidResult then
                         return
                     end
 
@@ -7849,10 +8300,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Full Script Loaded Successfully!")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
-print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v19.0] Full Script Loaded Successfully!")
+print("[BobonHub v19.0] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v19.0] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v19.0] Modules: QuestFarm | Health-Verified Combat | ALL-MOB Cluster | Full Melee | Kaitun Swords | Fullscreen HUD")
+print("[BobonHub v19.0] Progression: Farm | Sea2/3 | TTK/CDK | Full Melee | Soul Guitar | Dough King | Continuity")
+print("[BobonHub v19.0] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v19.0] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
