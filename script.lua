@@ -1,7 +1,20 @@
 -- =================================================================
---         BOBON HUB v21.15 TRUE CLUSTER MULTI-HIT | REMOTE MAGNET | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.16 CLUSTER ROUND-ROBIN FIX | REMOTE MAGNET | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.14 REMOTE MAGNET + COMBAT STALL FIX | Version: v21.15
+--         Base: v21.15 TRUE CLUSTER MULTI-HIT | Version: v21.16
+--
+--  v21.16 CLUSTER ROUND-ROBIN DAMAGE FIX (v21.15 still damaged only one mob):
+--  [RR-1] Keep v21.13/v21.14 remote magnet and v21.15 target collection unchanged.
+--  [RR-2] The current server/executor session is evidently consuming only one victim
+--         from a registered melee swing even when a multi-entry RegisterHit list is sent.
+--         Stop relying on fake-looking batch success as the only cluster path.
+--  [RR-3] When 2+ verified stacked mobs are eligible, dispatch ONE real target per normal
+--         attack tick and rotate the victim 1->2->3->... at the existing AttackDelay.
+--         This keeps remote traffic bounded while every stacked mob receives damage.
+--  [RR-4] Rotation is tied to ClusterGeneration and skips dead/despawned entries automatically.
+--  [RR-5] Aggregate HP verification still validates the active backend from whichever rotated
+--         mob actually loses HP; kill accounting records every rotated victim.
+--  [RR-6] No gather/magnet/anchor/movement/Haki/UI/progression code is changed.
 --
 --  v21.15 TRUE CLUSTER MULTI-HIT FIX (video Roblox(7).mp4):
 --  [MH-1] Preserve v21.13/v21.14 remote magnet byte-for-byte: STACK xN positioning
@@ -480,7 +493,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.15 TRUE CLUSTER MULTI-HIT + REMOTE MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.16 CLUSTER ROUND-ROBIN FIX + REMOTE MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -673,10 +686,12 @@ _G.Settings = {
     CombatClusterAggregateProof = true,
     CombatClusterAggregateProofDelay = 0.12,
     CombatClusterAggregateLateDelay = 0.30,
-    -- v21.15: true multi-target cluster attack prefers one canonical batched
-    -- RegisterHit payload instead of several single-target hits on one swing.
+    -- v21.15 batch payload remains available for compatibility, but v21.16 uses
+    -- reliable one-target-per-swing rotation when a verified 2+ stack is present.
     ClusterPreferBatchHit = true,
     ClusterBatchMinTargets = 2,
+    ClusterReliableRoundRobin = true,
+    ClusterRoundRobinMinTargets = 2,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -1357,7 +1372,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.15", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.16", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2294,6 +2309,10 @@ local CombatController = {
     WatchedHealth = nil,
     WatchedStableSince = 0,
     HealthConnection = nil,
+    -- v21.16: deterministic victim rotation for server builds that consume only
+    -- one NPC from each registered melee swing even when a batch list is supplied.
+    ClusterRoundRobinCursor = 0,
+    ClusterRoundRobinGeneration = -1,
 }
 
 function CombatController:ResolveRemotes()
@@ -3246,13 +3265,28 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingSettleUntil = 0
         self.PendingAttempts = 0
     end
-    -- v19.3: the whole stacked batch is dispatched even while the remote backend
-    -- is being health-verified. Verification still watches the primary HP delta,
-    -- but the other stacked mobs no longer wait for that primary to die first.
+    -- v21.16 RELIABLE CLUSTER DAMAGE:
+    -- The server session shown by the user accepts the stacked positioning but consumes
+    -- only one victim from a nominal multi-entry melee swing. Instead of repeatedly
+    -- feeding the same preferred mob, rotate one real registered swing across every
+    -- verified stacked entry at the existing attack cadence. This is deliberately
+    -- bounded to one victim per AttackDelay tick; no extra attack loop/thread is created.
     local dispatchEntries = entries
     local clusterFanout = _G.State and _G.State.ClusterMode ~= "OFF"
         and not IsClientInputBackend(backend)
-    if not (clusterFanout and (_G.Settings.RemoteProbeAllCluster ~= false))
+    local roundRobinActive = clusterFanout
+        and _G.Settings.ClusterReliableRoundRobin ~= false
+        and #entries >= (_G.Settings.ClusterRoundRobinMinTargets or 2)
+
+    if roundRobinActive then
+        local generation = tonumber(_G.State and _G.State.ClusterGeneration) or 0
+        if self.ClusterRoundRobinGeneration ~= generation then
+            self.ClusterRoundRobinGeneration = generation
+            self.ClusterRoundRobinCursor = 0
+        end
+        self.ClusterRoundRobinCursor = (self.ClusterRoundRobinCursor % #entries) + 1
+        dispatchEntries = { entries[self.ClusterRoundRobinCursor] }
+    elseif not (clusterFanout and (_G.Settings.RemoteProbeAllCluster ~= false))
         and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
         dispatchEntries = { entries[1] }
     end
@@ -3299,11 +3333,16 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
                 checkAggregateProof)
         end
 
-        local batchSuffix = (#dispatchEntries > 1)
-            and (" x" .. tostring(#dispatchEntries)) or ""
-        diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
-            and ("AIR-ATTACK:" .. backend .. batchSuffix)
-            or ("ATTEMPT:" .. backend .. batchSuffix)
+        if roundRobinActive then
+            diag.Packet = ("AIR-RR:%s %d/%d"):format(
+                tostring(backend), self.ClusterRoundRobinCursor, #entries)
+        else
+            local batchSuffix = (#dispatchEntries > 1)
+                and (" x" .. tostring(#dispatchEntries)) or ""
+            diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
+                and ("AIR-ATTACK:" .. backend .. batchSuffix)
+                or ("ATTEMPT:" .. backend .. batchSuffix)
+        end
     else
         self:FailBackend(backend, "DISPATCH-ERROR")
         diag.Packet = "ERROR:" .. backend
@@ -3344,6 +3383,8 @@ function CombatController:Cleanup()
     self.NextFastUpgrade = 0
     self.DesiredClientRange = false
     self.WatchedStableSince = 0
+    self.ClusterRoundRobinCursor = 0
+    self.ClusterRoundRobinGeneration = -1
 end
 
 local function Attack(preferredTarget, mobName)
@@ -10742,10 +10783,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.15] Full Script Loaded Successfully!")
-print("[BobonHub v21.15] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.15] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.15] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.15] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.15] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.15] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.16] Full Script Loaded Successfully!")
+print("[BobonHub v21.16] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.16] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.16] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.16] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.16] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.16] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
