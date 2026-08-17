@@ -1,7 +1,22 @@
 -- =================================================================
---         BOBON HUB v21.21 REAL OWNERSHIP SWEEP | NO-GHOST MAGNET | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.22 ONE-PILE UNDERFOOT | REAL OWNERSHIP SWEEP | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.21 REAL OWNERSHIP NO-GHOST | Version: v21.21
+--         Base: v21.21 VIDEO SWEEP GATHER ATTACK | Version: v21.22
+--
+--  v21.22 ONE-PILE UNDERFOOT GATHER:
+--  [P1] Every NETWORK-OWNED same-name quest mob is pinned to ONE exact pile point.
+--       ClusterStackRadius stays 0; there is no ring/spread around the player.
+--  [P2] During the ownership sweep the pile anchor follows the player's X/Z, so all
+--       already-acquired mobs travel directly UNDERFOOT while Farm visits the next group.
+--  [P3] The acquire target uses a low 8-stud hover and tight arrival threshold. As soon
+--       as ownership transfers, Heartbeat merges that mob into the same moving pile.
+--  [P4] After the last unowned mob is acquired, the moving pile follows the player back
+--       to the persistent farm hover, then settles exactly below the player's stable X/Z.
+--  [P5] Combat remains active during the sweep: the live acquire target plus already-owned
+--       pile members stay eligible for attacks while movement continues.
+--  [P6] NO-GHOST rule is preserved: a root with ClientOwnsMob(root) ~= true is NEVER
+--       CFramed/frozen/pinned, so v21.18/v21.19 statue mobs are not reintroduced.
+--
 --
 --
 --  v21.21 ROOT FIX: REAL OWNERSHIP ONLY / NO CLIENT-ONLY STATUES:
@@ -587,7 +602,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.21 REAL OWNERSHIP SWEEP + NO-GHOST MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.22 ONE-PILE UNDERFOOT + REAL OWNERSHIP SWEEP + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -799,7 +814,7 @@ _G.Settings = {
     ClusterAuthorityProbeMissCooldown = 1.60,
     ClusterAuthorityMaxProbeAttempts = 3,
     ClusterAuthorityHardMissCooldown = 5.0,
-    ClusterAuthorityFieldRadius = 180,
+    ClusterAuthorityFieldRadius = 220,
     ClusterQuestPhysicalFallback = true,
     ClusterSkipPhysicalFallback = true,
     ClusterStrictOwnership = true,
@@ -895,7 +910,7 @@ _G.Settings = {
     ClusterAcquireGrace = 0.35,
     -- A quest uses only its current spawn field. GatherMaxDistance remains the
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
-    ClusterQuestRadius  = 180,
+    ClusterQuestRadius  = 220,
     ClusterAcquireSweep = true,
     ClusterAcquireTimeout = 1.20,
     ClusterAcquireMaxTimeout = 4.00,
@@ -903,12 +918,17 @@ _G.Settings = {
     ClusterAcquireRetry = 0.18,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 1.20,
-    ClusterAcquireArrivalThreshold = 4.5,
-    ClusterAcquireTravelSpeed = 340,
-    ClusterAcquireHoverHeight = 12,
-    ClusterAcquireGroupRadius = 75,
-    ClusterOwnershipSettle = 0.30,
+    ClusterAcquireArrivalThreshold = 3.25,
+    ClusterAcquireTravelSpeed = 360,
+    ClusterAcquireHoverHeight = 8,
+    ClusterAcquireGroupRadius = 105,
+    ClusterOwnershipSettle = 0.18,
     ClusterAcquirePreferCoverage = true,
+    -- v21.22: a single exact pile stays horizontally under the player during sweep.
+    ClusterOnePileUnderfoot = true,
+    ClusterPileFollowDuringSweep = true,
+    ClusterPileSettleRadius = 20,
+    ClusterPileUseAcquireGroundY = true,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -1198,6 +1218,7 @@ _G.State = {
     -- v18.6 persistent cluster state. Anchor is independent from FarmTarget.
     ClusterMode      = "OFF",
     ClusterAnchor    = nil,
+    ClusterPileAnchor= nil,
     ClusterMobName   = nil,
     ClusterMobNames  = nil,
     ClusterPrimary   = nil,
@@ -1515,7 +1536,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.21", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.22", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4492,6 +4513,7 @@ function FarmPositionController:ReleaseCluster()
     if _G.State then
         _G.State.ClusterMode = "OFF"
         _G.State.ClusterAnchor = nil
+        _G.State.ClusterPileAnchor = nil
         _G.State.ClusterMobName = nil
         _G.State.ClusterMobNames = nil
         _G.State.ClusterPrimary = nil
@@ -4740,6 +4762,7 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         state.ClusterAcquireStartedAt = 0
         state.ClusterAcquireDeadline = 0
         state.ClusterAcquireCompleted = 0
+        state.ClusterPileAnchor = nil
         state.ClusterAuthorityProbeTarget = nil
         state.ClusterAuthorityProbeStartedAt = 0
         state.ClusterAuthorityProbeFirstAttackAt = 0
@@ -4757,6 +4780,57 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
     state.ClusterMobName = list[1]
     state.ClusterOwner = owner or "Farm"
     return true
+end
+
+function ClusterFarmController:GetPileAnchorPosition()
+    local state = _G.State
+    local baseCF = state and state.ClusterAnchor
+    if not baseCF then return nil end
+
+    local base = baseCF.Position
+    if _G.Settings.ClusterOnePileUnderfoot == false then
+        state.ClusterPileAnchor = CFrame.new(base)
+        return base
+    end
+
+    -- Stable hover already uses FarmOffsetX. Put the final pile at that same X/Z
+    -- so it is literally below the player's feet instead of 3 studs to the side.
+    local stable = Vector3.new(base.X + (_G.Settings.FarmOffsetX or 0), base.Y, base.Z)
+    local me = HRP()
+    if not me then
+        state.ClusterPileAnchor = CFrame.new(stable)
+        return stable
+    end
+
+    local flatToStable = (Vector3.new(me.Position.X, 0, me.Position.Z)
+        - Vector3.new(stable.X, 0, stable.Z)).Magnitude
+    local acquire = state.ClusterAcquireTarget
+    local acquireHum = acquire and acquire:FindFirstChildOfClass("Humanoid")
+    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
+    -- Do not call IsVerified() here: IsVerified itself asks for the pile anchor.
+    -- The acquire handle may remain set for one main-loop tick after ownership
+    -- transfers; following it for that tiny window keeps the pile underfoot.
+    local acquireLive = acquire and acquire.Parent and self:IsModelAllowed(acquire)
+        and acquireHum and acquireHum.Health > 0 and acquireRoot and acquireRoot.Parent
+    local follow = _G.Settings.ClusterPileFollowDuringSweep ~= false
+        and (acquireLive or flatToStable > (_G.Settings.ClusterPileSettleRadius or 20))
+
+    if follow then
+        local groundY = base.Y
+        if _G.Settings.ClusterPileUseAcquireGroundY ~= false and acquireLive then
+            local r = acquireRoot
+            if r and r.Parent then
+                local ok, y = pcall(function() return r.Position.Y end)
+                if ok and type(y) == "number" and y == y then groundY = y end
+            end
+        end
+        local moving = Vector3.new(me.Position.X, groundY, me.Position.Z)
+        state.ClusterPileAnchor = CFrame.new(moving)
+        return moving
+    end
+
+    state.ClusterPileAnchor = CFrame.new(stable)
+    return stable
 end
 
 function ClusterFarmController:GetHoverCFrame(height)
@@ -4796,7 +4870,7 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
 
-    -- v21.21: movement authority is STRICTLY network ownership.
+    -- v21.22: movement authority is STRICTLY network ownership.
     -- Real HP damage can prove combat, but it cannot prove that a local NPC CFrame
     -- is server-authoritative. Never call a DAMAGE-only root "stacked".
     if GatherAuthorityClass[root] ~= "OWNED" or ClientOwnsMob(root) ~= true then
@@ -4809,10 +4883,10 @@ function ClusterFarmController:IsVerified(model)
     if at == nil or tick() - at > (_G.Settings.GatherVerifiedTTL or 2.5) then
         return false
     end
-    local anchor = _G.State and _G.State.ClusterAnchor
+    local pilePos = self:GetPileAnchorPosition()
     local ok, pos = pcall(function() return root.Position end)
-    if not anchor or not ok or not IsValidPos(pos)
-        or (pos - anchor.Position).Magnitude > (_G.Settings.ClusterAnchorVerifyRadius or 9) then
+    if not pilePos or not ok or not IsValidPos(pos)
+        or (pos - pilePos).Magnitude > (_G.Settings.ClusterAnchorVerifyRadius or 9) then
         VerifiedGatherRoots[root] = nil
         GatherAuthorityClass[root] = nil
         return false
@@ -5213,8 +5287,8 @@ end
 function ClusterFarmController:SelectPrimary()
     local state = _G.State
     local folder = workspace:FindFirstChild("Enemies")
-    local anchor = state and state.ClusterAnchor
-    if not folder or not anchor then return nil end
+    local pilePos = self:GetPileAnchorPosition()
+    if not folder or not pilePos then return nil end
     if state.ClusterPrimary and state.ClusterPrimary.Parent
         and state.ClusterPrimary:FindFirstChildOfClass("Humanoid")
         and state.ClusterPrimary:FindFirstChildOfClass("Humanoid").Health > 0
@@ -5228,7 +5302,7 @@ function ClusterFarmController:SelectPrimary()
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
             if hum and hum.Health > 0 and root and self:IsVerified(mob) then
-                local d = (root.Position - anchor.Position).Magnitude
+                local d = (root.Position - pilePos).Magnitude
                 if not bestDist or d < bestDist then best, bestDist = mob, d end
             end
         end
@@ -5280,19 +5354,21 @@ function ClusterFarmController:RestackBatch()
     local anchorCF = state and state.ClusterAnchor
     if not anchorCF then return 0 end
 
-    local anchor = anchorCF.Position
+    -- v21.22: ONE shared point. During sweep it follows the player's X/Z; after
+    -- sweep it settles exactly under the stable farm hover. Every owned root is
+    -- written to this same Vector3, so the stack radius is literally zero.
+    local anchor = self:GetPileAnchorPosition() or anchorCF.Position
     local now = tick()
     local kept, verifiedCount = {}, 0
 
     local function moveOwnedRoot(root)
-        -- The decisive v21.21 rule: never write an NPC CFrame until ownership is
+        -- The decisive v21.22 rule: never write an NPC CFrame until ownership is
         -- positively proven for THIS root on THIS frame.
         if ClientOwnsMob(root) ~= true then return false end
         return pcall(function()
-            local rot = root.CFrame.Rotation
             root.AssemblyLinearVelocity = Vector3.zero
             root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(anchor) * rot
+            root.CFrame = CFrame.new(anchor)
         end)
     end
 
@@ -11305,7 +11381,7 @@ task.spawn(function()
                 _G.State.FState = "GATHER_AND_ATTACK"
                 local stacked = tonumber(_G.State.ClusterAcquireCompleted) or 0
                 local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
-                _G.BobonStatus = ("Farm: Gathering + attacking %s (%d/%d)")
+                _G.BobonStatus = ("Farm: ONE-PILE gather + attack %s (%d/%d)")
                     :format(tostring(questMobName), stacked, total)
                 if _G.State:CanRequestTravel() then
                     TravelManager:Request(acquireRoot, "Farm", {
@@ -11708,10 +11784,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.21] Full Script Loaded Successfully!")
-print("[BobonHub v21.21] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.21] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.21] Modules: QuestFarm | Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.21] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.21] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.21] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.22] Full Script Loaded Successfully!")
+print("[BobonHub v21.22] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.22] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.22] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.22] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.22] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.22] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
