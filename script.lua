@@ -1,30 +1,15 @@
 -- =================================================================
---         BOBON HUB v21.10 FAST DESCEND + HAKI HOLD | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.11 OLD GATHER/ATTACK + FAST DESCEND + HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.9 FAST DESCEND STABLE | Version: v21.10
+--         Base: v21.8 FAST MOVEMENT | Version: v21.11
 --
---
---  v21.10 ALWAYS-ON ARMAMENT HAKI (STATE-CHECKED, NO STATUS):
---  [HK-1] Armament is watched independently from farm/status. If the live HasBuso
---         marker is observed and later disappears/turns false, Buso is requested again.
---  [HK-2] Buso is NEVER spammed while already active. Requests use a short cooldown
---         plus confirmation grace, preventing toggle loops while replication settles.
---  [HK-3] If an executor/server build exposes no readable HasBuso marker, behavior
---         safely falls back to one enable request per character instead of blind polling.
---  [HK-4] Haki re-enable never writes _G.BobonStatus, never owns movement/action,
---         and therefore cannot overwrite farm/skip/boss status text.
---
---  v21.9 FAST DESCEND + ANTI-BACKSTEP STABILITY:
---  [FD-1] Acquisition mobs are no longer restacked while Farm is still flying
---         toward their hover point. This removes the rare backward jerk caused by
---         the target root being teleported to the cluster anchor mid-approach.
---  [FD-2] Combat-hover descent now has a dedicated fast vertical component when
---         horizontally near the target. Horizontal steering stays bounded while
---         downward speed is much higher, so the final drop no longer crawls.
---  [FD-3] Final easing is shorter/faster and the combat arrival radius is slightly
---         wider to settle without overshoot. Single Movement Owner, fallback,
---         target validation and recovery remain unchanged.
---  [FD-4] No anti-kick/anti-cheat bypass is added or claimed.
+--  v21.11 RESTORE OLD GATHER + ATTACK:
+--  [RGA-1] Cluster/Gather/Restack logic is restored byte-for-byte from v21.8.
+--  [RGA-2] CombatController + farm Attack path is restored byte-for-byte from v21.8.
+--  [RGA-3] Fast descend is isolated inside TravelManager only; it does not gate,
+--          delay, verify or alter mob stacking/attack selection.
+--  [RGA-4] Armament Haki keeper is silent and state-checked; it never owns movement,
+--          never changes farm/cluster state, and never writes Haki text to Status.
 --
 --  v21.8 FAST MOVEMENT TUNING:
 --  [FM-1] Global travel speed raised moderately; skip Floor 1/2 uses a faster
@@ -450,7 +435,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.10 FAST DESCEND + HAKI HOLD + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.11 OLD GATHER/ATTACK + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -598,8 +583,6 @@ _G.Settings = {
     HitboxSize          = 0,
     FlySpeed            = 240,
     SkipTravelSpeed      = 320,
-    -- v21.9: keep horizontal travel controlled, but make the final downward
-    -- approach substantially faster once Farm is already over the target area.
     NearMoveDecelDistance= 12,
     NearMoveMinSpeed     = 150,
     FastDescendEnabled   = true,
@@ -621,7 +604,7 @@ _G.Settings = {
     EquipCooldown       = 0.5,
     -- [A-1] Cooldown giữa các lần chọn team (giây)
     TeamCooldown        = 5,
-    -- v21.10 armament watchdog: state-checked; remote is sent only when OFF.
+    -- Silent always-on Armament watcher. Remote is sent only when state is OFF.
     ArmamentWatchInterval = 0.15,
     ArmamentRetryCooldown = 0.45,
     ArmamentConfirmGrace  = 0.80,
@@ -727,10 +710,6 @@ _G.Settings = {
     -- at the anchor for several Heartbeats before it becomes a verified attack target.
     ClusterUnknownOwnerFallback = true,
     ClusterOwnershipTouchRadius = 85,
-    -- Current acquire target may become network-owned before the player reaches
-    -- it. Do not teleport that root back to the anchor until Farm is physically
-    -- at its hover point; otherwise TravelManager instantly reverses direction.
-    ClusterAcquireCommitRadius = 9,
     ClusterUnknownProofTime = 0.28,
     ClusterUnknownProofChecks = 3,
     -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
@@ -1312,7 +1291,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.10", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.11", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4131,43 +4110,18 @@ function ClusterFarmController:RestackBatch()
             local atAnchor = okPos and IsValidPos(rootPos)
                 and (rootPos - anchor).Magnitude <= verifyRadius
 
-            -- v21.9 ANTI-BACKSTEP: the active acquisition root is the moving goal
-            -- for TravelManager. If Heartbeat teleports that root to the persistent
-            -- cluster anchor before the player reaches its hover point, the travel
-            -- vector instantly flips backward. Commit that specific root only after
-            -- Farm is actually at/very near its combat-hover destination.
-            local isAcquireTarget = state.ClusterAcquireTarget == model
-            local acquireCommitReady = not isAcquireTarget
-            if isAcquireTarget then
-                local hoverPos = FarmPositionController:GetFarmPos(
-                    model, _G.Settings.FarmHeight or 22)
-                if me and hoverPos then
-                    acquireCommitReady = (me.Position - hoverPos).Magnitude
-                        <= (_G.Settings.ClusterAcquireCommitRadius or 9)
-                end
-                if not acquireCommitReady and TravelManager
-                    and type(TravelManager.IsAtCombatAnchor) == "function" then
-                    acquireCommitReady = TravelManager:IsAtCombatAnchor(root)
-                end
-            end
-
             if own == true then
-                -- Authoritative fast path: confirmed client ownership. For the
-                -- current acquire target, wait until arrival before moving it.
-                if acquireCommitReady then
-                    local ok = pcall(function()
-                        local rot = root.CFrame.Rotation
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        root.CFrame = CFrame.new(anchor) * rot
-                    end)
-                    if ok then
-                        VerifiedGatherRoots[root] = now
-                        self.PositionProof[root] = nil
-                        moved = moved + 1
-                    end
-                else
-                    VerifiedGatherRoots[root] = nil
+                -- Authoritative fast path: confirmed client ownership.
+                local ok = pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = CFrame.new(anchor) * rot
+                end)
+                if ok then
+                    VerifiedGatherRoots[root] = now
+                    self.PositionProof[root] = nil
+                    moved = moved + 1
                 end
 
             elseif own == nil and _G.Settings.ClusterUnknownOwnerFallback ~= false then
@@ -4211,10 +4165,7 @@ function ClusterFarmController:RestackBatch()
                     else
                         local nearPlayer = me and okPos and IsValidPos(rootPos)
                             and (rootPos - me.Position).Magnitude <= touchRadius
-                        -- The unknown-owner proof must obey the same acquire commit
-                        -- guard; otherwise its one-time test move can cause the same
-                        -- visible backward snap before arrival.
-                        if nearPlayer and acquireCommitReady then
+                        if nearPlayer then
                             local ok = pcall(function()
                                 local rot = root.CFrame.Rotation
                                 root.AssemblyLinearVelocity = Vector3.zero
@@ -4982,10 +4933,7 @@ function TravelManager:Request(targetCF, owner, options)
             end
 
 
-            -- v21.9 FAST DESCEND: keep normal vector flight for transit, but once
-            -- Farm is horizontally near a combat-hover target, give the downward
-            -- component its own higher cap. This removes the long diagonal easing
-            -- phase without changing the target, ownership or recovery model.
+            -- v21.11 FAST DESCEND, movement-only. Gather/Restack/Attack remain v21.8.
             self.AtCombatAnchor = false
             self.AtCombatTarget = nil
             local delta = targetPos - currentPos
@@ -5013,8 +4961,6 @@ function TravelManager:Request(targetCF, owner, options)
                 end
                 local descendCap = math.max(speed,
                     tonumber(_G.Settings.FastDescendSpeed) or 380)
-                -- Cap by the remaining Y gap per physics step so a fast descent
-                -- does not overshoot far below the hover anchor on a laggy frame.
                 local safeDt = math.max(stepDt, 1 / 60)
                 local ySpeed = math.min(descendCap, math.abs(delta.Y) / safeDt)
                 bv.Velocity = Vector3.new(
@@ -5087,11 +5033,7 @@ function TravelManager:Request(targetCF, owner, options)
 end
 
 
--- v21.10 ALWAYS-ON ARMAMENT HAKI. The important rule is: never call Buso
--- blindly. On builds that expose HasBuso, the live marker is authoritative.
--- If that marker disappears/turns false after being observed, request Buso once
--- and wait for replication before trying again. If the marker is unavailable,
--- fall back to the old one-request-per-character behavior rather than toggle spam.
+-- v21.11 SILENT ALWAYS-ON ARMAMENT HAKI. Never call Buso blindly.
 local HakiController = {
     Character = nil,
     Enabled = false,
@@ -5112,9 +5054,6 @@ end
 
 function HakiController:ReadArmamentState(character)
     if not character then return nil, false end
-
-    -- Current/legacy clients commonly replicate an exact HasBuso marker while
-    -- Armament is active. Support both value objects and marker-style instances.
     local marker = character:FindFirstChild("HasBuso")
     if marker then
         if marker:IsA("BoolValue") then
@@ -5124,12 +5063,8 @@ function HakiController:ReadArmamentState(character)
         end
         return true, true
     end
-
     local okAttr, attr = pcall(function() return character:GetAttribute("HasBuso") end)
-    if okAttr and type(attr) == "boolean" then
-        return attr, true
-    end
-
+    if okAttr and type(attr) == "boolean" then return attr, true end
     return nil, false
 end
 
@@ -5148,7 +5083,6 @@ function HakiController:EnableForCharacter()
 
     local active, observableNow = self:ReadArmamentState(character)
     if observableNow then self.ArmamentObservable = true end
-
     if active == true then
         self.Enabled = true
         self.PendingBusoAt = 0
@@ -5159,8 +5093,6 @@ function HakiController:EnableForCharacter()
         return true
     end
 
-    -- Once HasBuso has ever been observed for this character, its absence/false
-    -- means Armament is genuinely off. Before that, preserve one-shot fallback.
     if self.ArmamentObservable then
         self.Enabled = false
     elseif self.Enabled then
@@ -5170,23 +5102,13 @@ function HakiController:EnableForCharacter()
     local now = tick()
     local grace = math.max(0.20, tonumber(_G.Settings.ArmamentConfirmGrace) or 0.80)
     local cooldown = math.max(0.20, tonumber(_G.Settings.ArmamentRetryCooldown) or 0.45)
-
-    if self.PendingBusoAt > 0 and now - self.PendingBusoAt < grace then
-        return false
-    end
-    if now - (self.LastBusoRequest or 0) < cooldown then
-        return false
-    end
+    if self.PendingBusoAt > 0 and now - self.PendingBusoAt < grace then return false end
+    if now - (self.LastBusoRequest or 0) < cooldown then return false end
 
     self.LastBusoRequest = now
     self.PendingBusoAt = now
     local okBuso = pcall(function() CommF_:InvokeServer("Buso", true) end)
-
-    -- On unreadable builds, do not keep polling the toggle remote. A successful
-    -- one-shot request is considered enabled until CharacterAdded resets state.
-    if not self.ArmamentObservable and okBuso then
-        self.Enabled = true
-    end
+    if not self.ArmamentObservable and okBuso then self.Enabled = true end
 
     if not self.KenSent then
         self.KenSent = true
@@ -10413,7 +10335,6 @@ task.spawn(function()
         DLog("TEAM", "Verified team: " .. LP.Team.Name)
     end
     task.wait(0.5)
-    -- v21.10: enable Armament silently; never replace the real kaitun status text.
     pcall(function() HakiController:EnableForCharacter() end)
     task.wait(0.5)
     _G.State:SetMode("Idle")
@@ -10427,8 +10348,7 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 
 
--- v21.10 silent Armament keeper. It only READS state every short interval;
--- the Buso remote itself remains cooldown/grace gated and is never sent while ON.
+-- Silent Armament keeper. State check runs often, Buso remote does not.
 task.spawn(function()
     while SessionAlive() and task.wait(_G.Settings.ArmamentWatchInterval or 0.15) do
         pcall(function() HakiController:WatchTick() end)
@@ -10584,10 +10504,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.10] Full Script Loaded Successfully!")
-print("[BobonHub v21.10] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.10] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.10] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.10] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.10] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.10] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.11] Full Script Loaded Successfully!")
+print("[BobonHub v21.11] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.11] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.11] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.11] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.11] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.11] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
