@@ -1,7 +1,12 @@
 -- =================================================================
---         BOBON HUB v21.0 DEEP RESEARCH KAITUN | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.1 STARTUP FIX | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v20.1 RESEARCHED COMPLETE | Version: v21.0
+--         Base: v21.0 DEEP RESEARCH | Version: v21.1
+--
+--  v21.1 STARTUP HOTFIX:
+--  [S-1] Fixed Luau compile failure: v21.0 exceeded the main-chunk local-variable limit.
+--  [S-2] CDK and Skull Guitar helper locals now live in narrow scopes; behavior is preserved.
+--  [S-3] No farm/progression/config feature was removed by this startup fix.
 --
 --
 --  v21.0 DEEP RESEARCH / ENDGAME COMPLETION AUDIT:
@@ -328,7 +333,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.0 DEEP RESEARCH KAITUN + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.1 STARTUP FIX + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1149,7 +1154,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.0", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.1", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -6796,6 +6801,10 @@ end
 
 -- v21 CDK trial helpers. Only states documented by the live Progress table and
 -- cross-checked against current public implementations are automated.
+-- v21.1 STARTUP FIX: keep CDK-only helpers in a narrow lexical scope.
+-- Luau caps simultaneously-active locals in one function/chunk; v21.0 exceeded
+-- that cap before later managers were even compiled, so execute produced no UI.
+do
 local function GetCDKProgress()
     local progress
     pcall(function() progress = CommF_:InvokeServer("CDKQuest","Progress") end)
@@ -7181,6 +7190,8 @@ function ItemProgression:CheckCDK()
     end)
 end
 
+end -- v21.1 CDK helper scope
+
 function ItemProgression:CheckAcidumRifle()
     if GetSea() ~= 2 or Level() < 700 or InventoryHas("Acidum Rifle") then return false end
     if not self:OptionalReady("AcidumRifle") then return false end
@@ -7197,6 +7208,8 @@ function ItemProgression:CheckAcidumRifle()
     end)
 end
 
+-- v21.1 STARTUP FIX: same isolation for Skull Guitar puzzle helpers.
+do
 local function HasSkullGuitar()
     -- Current display/tool name is Skull Guitar; legacy inventories/remotes may
     -- still expose Soul Guitar. Treat either as already owned.
@@ -7408,6 +7421,8 @@ function ItemProgression:CheckSoulGuitar()
     self.NextOptional.SoulGuitar=tick()+3
     return false
 end
+
+end -- v21.1 Skull Guitar helper scope
 
 function ItemProgression:CheckRaceV2()
     if not _G.Settings.AutoRaceV2 or GetSea() ~= 2 or Level() < 850 then return false end
@@ -9657,10 +9672,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.0] Full Script Loaded Successfully!")
-print("[BobonHub v21.0] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.0] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.0] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.0] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.0] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.0] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.1] Full Script Loaded Successfully!")
+print("[BobonHub v21.1] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.1] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.1] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Cluster | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.1] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
