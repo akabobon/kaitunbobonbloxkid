@@ -1,7 +1,21 @@
 -- =================================================================
---         BOBON HUB v21.4 TRUE ALL-MOB SWEEP | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.5 HYBRID FARM FIX | TEDDY AIR FARM | FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.3 GLOBAL MOB CORE FIX | Version: v21.4
+--         Base: v21.4 TRUE ALL-MOB SWEEP | Version: v21.5
+--
+--  v21.5 HYBRID GATHER + ATTACK FIX:
+--  [HF-1] Quest farm no longer waits for the whole ownership sweep to finish.
+--         A real same-name acquire target is attacked as soon as it enters the
+--         verified 100-stud remote range while TravelManager keeps approaching.
+--  [HF-2] Acquisition travel owns the current tick and cannot be overwritten by
+--         an immediate return-to-anchor request. The cluster is still restacked
+--         continuously by the existing Heartbeat controller.
+--  [HF-3] NearQuestSnap accepts the canonical ClusterAcquireTarget, shortening
+--         the final approach without broadening it to bosses or unrelated mobs.
+--  [HF-4] Preferred acquire targets remain exact active-quest names. Nearby Yeti,
+--         bosses and other enemies can never replace the Snowman/quest target.
+--  [HF-5] Stable-anchor attacks and aggregate HP watchdog remain unchanged; the
+--         hybrid approach path relies on CombatController's real HP verification.
 --
 --  v21.4 TRUE ALL-MOB SWEEP FIX:
 --  [AM-1] Added a bounded ownership-acquisition sweep. Before attacking, Farm
@@ -378,7 +392,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.4 TRUE ALL-MOB SWEEP + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.5 HYBRID FARM FIX + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1215,7 +1229,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.4", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.5", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4707,7 +4721,8 @@ function TravelManager:Request(targetCF, owner, options)
                         or self.TargetRef:FindFirstAncestorOfClass("Model")) or nil
                 local activeQuestMob = _G.State.ActiveQuestMob
                 if HasQuest() == true and activeQuestMob and snapModel
-                    and _G.State.FarmTarget == snapModel
+                    and (_G.State.FarmTarget == snapModel
+                        or _G.State.ClusterAcquireTarget == snapModel)
                     and IsEnemyNamed(snapModel, activeQuestMob) then
                     local look = combatLookPos or targetPos
                     local flatLook = Vector3.new(look.X, targetPos.Y, look.Z)
@@ -9334,7 +9349,7 @@ if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function(
 -- ══════════════════════════════════════════════════════════════════
 local lastAttackLog = 0
 
--- v21.4 GLOBAL MOB CORE: these helpers are deliberately name-agnostic.
+-- v21.5 GLOBAL MOB CORE: these helpers are deliberately name-agnostic.
 -- They consume the current QDB/active quest mob instead of hard-coding any NPC.
 local FarmDamageWatch = {
     Target=nil, Health=nil, Count=0, Generation=0,
@@ -9753,33 +9768,31 @@ task.spawn(function()
             local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
 
-            -- v21.4 BUILD-BEFORE-HIT: visit every same-name root whose network
-            -- ownership is queryable but still belongs to the server. The
-            -- Heartbeat magnet moves it to the persistent anchor immediately
-            -- after ownership transfers. No attack is dispatched mid-sweep, so
-            -- the farm no longer kills the first mob before collecting the rest.
+            -- v21.5 HYBRID FARM: acquisition and damage run in the same main
+            -- tick. Travel keeps approaching the exact active-quest mob while
+            -- the attack phase below starts as soon as that real root is inside
+            -- FastAttackRange. Heartbeat still stacks it after ownership moves.
             local acquireTarget = ClusterFarmController:GetAcquireTarget()
-            if acquireTarget then
-                local acquireRoot = acquireTarget:FindFirstChild("HumanoidRootPart")
-                if acquireRoot and _G.State:IsTargetValid(acquireTarget) then
-                    _G.State.FState = "BUILD_CLUSTER"
-                    _G.State.FarmTarget = acquireTarget
-                    _G.State.CurrentTarget = acquireTarget
-                    PrepareCombatTarget(acquireTarget)
-                    local stacked = tonumber(_G.State.ClusterAcquireCompleted) or 0
-                    local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
-                    _G.BobonStatus = ("Farm: Gathering all %s (%d/%d)")
-                        :format(tostring(questMobName), stacked, total)
-                    if _G.State:CanRequestTravel() then
-                        TravelManager:Request(acquireRoot, "Farm", {
-                            arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
-                                or _G.Settings.FarmArrivalThreshold,
-                            fallback = hoverCF or q.MC,
-                            combatHover = true,
-                        })
-                    end
-                    return
+            local acquireRoot = acquireTarget
+                and acquireTarget:FindFirstChild("HumanoidRootPart")
+            local acquiring = acquireRoot ~= nil
+                and _G.State:IsTargetValid(acquireTarget)
+                and IsEnemyNamed(acquireTarget, questMobName)
+            if acquiring then
+                _G.State.FState = "GATHER_AND_ATTACK"
+                local stacked = tonumber(_G.State.ClusterAcquireCompleted) or 0
+                local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
+                _G.BobonStatus = ("Farm: Gathering + attacking %s (%d/%d)")
+                    :format(tostring(questMobName), stacked, total)
+                if _G.State:CanRequestTravel() then
+                    TravelManager:Request(acquireRoot, "Farm", {
+                        arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
+                            or _G.Settings.FarmArrivalThreshold,
+                        fallback = hoverCF or q.MC,
+                        combatHover = true,
+                    })
                 end
+            elseif acquireTarget then
                 _G.State.ClusterAcquireTarget = nil
                 _G.State.ClusterAcquireStartedAt = 0
                 _G.State.ClusterAcquireDeadline = 0
@@ -9811,7 +9824,12 @@ task.spawn(function()
             -- Keep player parked above the stable anchor whenever a clustered
             -- target exists. This is the fast path observed in the showcase.
             local verifiedClusterTarget = target and ClusterFarmController:IsVerified(target)
-            if hoverCF and verifiedClusterTarget and not contested then
+            -- An acquisition request above must survive this tick. Without this
+            -- branch, MOVE_TO_CLUSTER immediately retargeted the same owner back
+            -- to hoverCF and the sweep never reached the remaining spawn roots.
+            if acquiring then
+                _G.State.FState = "GATHER_AND_ATTACK"
+            elseif hoverCF and verifiedClusterTarget and not contested then
                 _G.State.FState = "MOVE_TO_CLUSTER"
                 if _G.State:CanRequestTravel() then
                     TravelManager:Request(hoverCF, "Farm", {
@@ -9875,17 +9893,40 @@ task.spawn(function()
             end
 
             -- ATTACK: verified cluster roots are stacked inside one XZ pocket.
-            -- Primary death does not reset backend verification or cluster anchor.
-            target = _G.State.FarmTarget
-            targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+            -- During acquisition the real quest root becomes preferred as soon
+            -- as it is inside remote range; verified stacked roots in the same
+            -- range are still fanned out by CombatController:CollectTargets().
             hrp = HRP()
+            local hybridAcquireAttack = false
+            if acquiring and acquireRoot and acquireRoot.Parent and hrp then
+                local okAcquirePos, acquirePos = pcall(function()
+                    return acquireRoot.Position
+                end)
+                hybridAcquireAttack = okAcquirePos and IsValidPos(acquirePos)
+                    and (hrp.Position - acquirePos).Magnitude
+                        <= (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
+            end
+            target = hybridAcquireAttack and acquireTarget or _G.State.FarmTarget
+            targetRoot = target and target:FindFirstChild("HumanoidRootPart")
+            local hybridClusterAttack = false
+            if acquiring and not hybridAcquireAttack and targetRoot and targetRoot.Parent
+                and hrp and ClusterFarmController:IsVerified(target) then
+                local okClusterPos, clusterPos = pcall(function()
+                    return targetRoot.Position
+                end)
+                hybridClusterAttack = okClusterPos and IsValidPos(clusterPos)
+                    and (hrp.Position - clusterPos).Magnitude
+                        <= (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
+            end
             if target and targetRoot and hrp and _G.State:IsTargetValid(target) then
                 PrepareCombatTarget(target)
 
-                -- v21.4 GLOBAL no-damage recovery: applies to every active quest
+                -- v21.5 GLOBAL no-damage recovery: applies to every stable quest
                 -- mob. A locally stacked-looking root is not allowed to trap the
-                -- farm forever if the server is not actually taking damage.
-                if TravelManager:IsAtCombatAnchor() and ObserveFarmDamage(target) then
+                -- farm forever. A live acquisition root uses CombatController's
+                -- own per-target HP proof because its position is still changing.
+                if not hybridAcquireAttack and TravelManager:IsAtCombatAnchor()
+                    and ObserveFarmDamage(target) then
                     VerifiedGatherRoots[targetRoot] = nil
                     if _G.State.ClusterPrimary == target then _G.State.ClusterPrimary = nil end
                     -- A full three-second batch stall is stronger evidence than
@@ -9909,18 +9950,23 @@ task.spawn(function()
                     - Vector3.new(targetRoot.Position.X,0,targetRoot.Position.Z)).Magnitude
                 local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
                 if flatDist <= _G.Settings.AttackRange and farmHolds
-                    and TravelManager:IsAtCombatAnchor() then
-                    _G.State.FState = "ATTACK_CLUSTER"
+                    and (hybridAcquireAttack or hybridClusterAttack
+                        or TravelManager:IsAtCombatAnchor()) then
+                    _G.State.FState = (hybridAcquireAttack or hybridClusterAttack)
+                        and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER"
                     EquipCombatTool()
                     Attack(target, questMobName)
                     if os.time() - lastAttackLog >= 5 then
                         lastAttackLog = os.time()
-                        DLog("ATTACK", "Cluster target: " .. target.Name)
+                        DLog("ATTACK", ((hybridAcquireAttack or hybridClusterAttack)
+                            and "Gather target: " or "Cluster target: ") .. target.Name)
                     end
                 end
             else
                 ResetFarmDamageWatch(nil)
-                _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
+                if not acquiring then
+                    _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
+                end
             end
         end)
         if not okMain then
@@ -10115,10 +10161,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.4] Full Script Loaded Successfully!")
-print("[BobonHub v21.4] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.4] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.4] Modules: QuestFarm | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.4] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.4] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.4] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.5] Full Script Loaded Successfully!")
+print("[BobonHub v21.5] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.5] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.5] Modules: QuestFarm | Hybrid Gather+Attack | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.5] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.5] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.5] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
