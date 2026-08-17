@@ -1,10 +1,10 @@
 -- =================================================================
---         BOBON HUB v21.20 REAL OWNERSHIP SWEEP | NO-GHOST MAGNET | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.21 REAL OWNERSHIP SWEEP | NO-GHOST MAGNET | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.19 SHADOW-RANGE TRUE MULTI-DAMAGE | Version: v21.20
+--         Base: v21.21 REAL OWNERSHIP NO-GHOST | Version: v21.21
 --
 --
---  v21.20 ROOT FIX: REAL OWNERSHIP ONLY / NO CLIENT-ONLY STATUES:
+--  v21.21 ROOT FIX: REAL OWNERSHIP ONLY / NO CLIENT-ONLY STATUES:
 --  [RO-1] Normal QUEST and SKIP never CFrame an NPC whose network ownership is not
 --         positively proven. Unknown/false ownership stays at the real server position.
 --  [RO-2] Removed the v21.18/v21.19 visual-probe/visual-magnet path that could leave a
@@ -587,7 +587,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.20 REAL OWNERSHIP SWEEP + NO-GHOST MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.21 REAL OWNERSHIP SWEEP + NO-GHOST MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -897,17 +897,18 @@ _G.Settings = {
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
     ClusterQuestRadius  = 180,
     ClusterAcquireSweep = true,
-    ClusterAcquireTimeout = 1.00,
-    ClusterAcquireMaxTimeout = 3.50,
-    ClusterAcquireSettle = 0.55,
+    ClusterAcquireTimeout = 1.20,
+    ClusterAcquireMaxTimeout = 4.00,
+    ClusterAcquireSettle = 0.35,
     ClusterAcquireRetry = 0.18,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 1.20,
-    ClusterAcquireArrivalThreshold = 24.0,
-    ClusterAcquireTravelSpeed = 320,
+    ClusterAcquireArrivalThreshold = 4.5,
+    ClusterAcquireTravelSpeed = 340,
+    ClusterAcquireHoverHeight = 12,
+    ClusterAcquireGroupRadius = 75,
     ClusterOwnershipSettle = 0.30,
     ClusterAcquirePreferCoverage = true,
-    ClusterAcquireGroupRadius = 90,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -1514,7 +1515,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.20", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.21", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -4582,7 +4583,7 @@ local function ExpandSimulationRadius()
 end
 
 ClientOwnsMob = function(root)
-    -- true is the ONLY state allowed to move an NPC in v21.20.
+    -- true is the ONLY state allowed to move an NPC in v21.21.
     -- Try common executor aliases, but never invent/fallback to true.
     local env = (type(getgenv) == "function" and getgenv()) or _G
     local ownerFn = nil
@@ -4795,7 +4796,7 @@ function ClusterFarmController:IsVerified(model)
     local hum = model:FindFirstChildOfClass("Humanoid")
     if not root or not hum or hum.Health <= 0 then return false end
 
-    -- v21.20: movement authority is STRICTLY network ownership.
+    -- v21.21: movement authority is STRICTLY network ownership.
     -- Real HP damage can prove combat, but it cannot prove that a local NPC CFrame
     -- is server-authoritative. Never call a DAMAGE-only root "stacked".
     if GatherAuthorityClass[root] ~= "OWNED" or ClientOwnsMob(root) ~= true then
@@ -5030,7 +5031,7 @@ function ClusterFarmController:ConfirmDamageProof(model)
 
     local now = tick()
     -- Damage proof is retained only for combat diagnostics/backend verification.
-    -- It never grants movement/stack authority in v21.20.
+    -- It never grants movement/stack authority in v21.21.
     DamageProvenGatherRoots[root] = now
     GatherProbeCandidates[root] = nil
     GatherProbeFailedUntil[root] = nil
@@ -5077,7 +5078,7 @@ function ClusterFarmController:RejectDamageProbe(model)
     GatherProbeFailedUntil[root] = tick()
         + (tonumber(_G.Settings.ClusterAuthorityProbeMissCooldown) or 1.60)
 
-    -- v21.20 never staged an unowned NPC, so there is nothing to "restore".
+    -- v21.21 never staged an unowned NPC, so there is nothing to "restore".
     -- Writing an old cached CFrame here would itself recreate the ghost/statue bug.
     local state = _G.State
     if state and state.ClusterAuthorityProbeTarget == model then
@@ -5172,7 +5173,7 @@ function ClusterFarmController:GetAcquireTarget()
         end
     end
 
-    -- v21.20 group sweep: choose the real mob whose neighborhood covers the most
+    -- v21.21 group sweep: choose the real mob whose neighborhood covers the most
     -- still-unowned mobs. One proximity pass can therefore transfer several nearby
     -- assemblies instead of forcing a strict mob-by-mob tour.
     local best, bestDist, bestCoverage = nil, nil, -1
@@ -5284,7 +5285,7 @@ function ClusterFarmController:RestackBatch()
     local kept, verifiedCount = {}, 0
 
     local function moveOwnedRoot(root)
-        -- The decisive v21.20 rule: never write an NPC CFrame until ownership is
+        -- The decisive v21.21 rule: never write an NPC CFrame until ownership is
         -- positively proven for THIS root on THIS frame.
         if ClientOwnsMob(root) ~= true then return false end
         return pcall(function()
@@ -5614,6 +5615,7 @@ local function SameTravelOptions(a, b)
         and a.speed == b.speed
         and a.fallback == b.fallback
         and a.combatHover == b.combatHover
+        and a.acquireSweep == b.acquireSweep
         and a.persistent == b.persistent
         and a.hoverHeight == b.hoverHeight
 end
@@ -5914,9 +5916,13 @@ function TravelManager:Request(targetCF, owner, options)
                         or self.TargetRef:FindFirstAncestorOfClass("Model")
                     local hoverHeight = travelOptions.hoverHeight
                     if owner == "Farm" or owner == "Raid" or IsAirFarmCombat() then
-                        hoverHeight = owner == "Raid"
-                            and (_G.Settings.RaidHoverHeight or _G.Settings.FarmHeight or 22)
-                            or (_G.Settings.FarmHeight or 22)
+                        if owner == "Farm" and travelOptions.acquireSweep == true then
+                            hoverHeight = _G.Settings.ClusterAcquireHoverHeight or 12
+                        else
+                            hoverHeight = owner == "Raid"
+                                and (_G.Settings.RaidHoverHeight or _G.Settings.FarmHeight or 22)
+                                or (_G.Settings.FarmHeight or 22)
+                        end
                     elseif FarmSafetyActive() then
                         hoverHeight = math.max(tonumber(hoverHeight) or 0,
                             _G.Settings.EmergencyHoverHeight or 22)
@@ -11307,8 +11313,9 @@ task.spawn(function()
                             or _G.Settings.FarmArrivalThreshold,
                         fallback = hoverCF or q.MC,
                         combatHover = true,
+                        acquireSweep = true,
                         speed = _G.Settings.ClusterAcquireTravelSpeed
-                            or _G.Settings.SkipTravelSpeed or 320,
+                            or _G.Settings.SkipTravelSpeed or 340,
                     })
                 end
             elseif acquireTarget then
@@ -11701,10 +11708,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.20] Full Script Loaded Successfully!")
-print("[BobonHub v21.20] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.20] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.20] Modules: QuestFarm | Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.20] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.20] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.20] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.21] Full Script Loaded Successfully!")
+print("[BobonHub v21.21] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.21] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.21] Modules: QuestFarm | Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.21] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.21] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.21] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
