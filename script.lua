@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v18.6 PERSISTENT CLUSTER + TEDDY SKIP | STABLE KAITUN BLOX FRUIT
+--         BOBON HUB v18.7 FULL-BATCH CLUSTER + GLASS NEON HUD V2 | STABLE KAITUN BLOX FRUIT
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v18.4 DOUGH GATHER FIXED | Version: v18.6 PERSISTENT CLUSTER + TEDDY SKIP
+--         Base: v18.4 DOUGH GATHER FIXED | Version: v18.7 FULL-BATCH CLUSTER + TEDDY SKIP
 --
 --  v18.3 FARM MOVEMENT / QUEST GATHER FIXES:
 --  [QG-1] Nearby regular quest mobs use one conservative short CFrame snap to
@@ -261,7 +261,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Loading...")
+print("[BobonHub v18.7 GLASS NEON HUD V2] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -281,7 +281,7 @@ local CoreGui      = game:GetService("CoreGui")
 local LP      = Players.LocalPlayer
 local Remotes = RS:WaitForChild("Remotes", 10)
 local CommF_  = Remotes and Remotes:WaitForChild("CommF_", 10)
-if not CommF_ then warn("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] CommF_ not found!") return end
+if not CommF_ then warn("[BobonHub v18.7 GLASS NEON HUD V2] CommF_ not found!") return end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -390,14 +390,17 @@ _G.Settings = {
     SkipLevelRoute      = true,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
-    GatherMaxDistance   = 250,
-    GatherSimulationRefresh = 0.75,
-    GatherVerifiedTTL   = 0.9,
-    -- v18.6 persistent cluster: NPC magnet owns no player movement.
-    ClusterRefresh      = 0.08,
-    ClusterStackRadius  = 1.10,
-    ClusterAcquireGrace = 1.75,
+    GatherMaxDistance   = 600,
+    GatherSimulationRefresh = 0.20,
+    GatherVerifiedTTL   = 1.25,
+    -- v18.7 full-batch cluster: gather ALL matching mobs in the current farm
+    -- area in one magnet pass. Attack target count stays separately bounded.
+    ClusterRefresh      = 0.05,
+    ClusterStackRadius  = 0.75,
+    ClusterAcquireGrace = 1.25,
     ClusterAnchorMaxDrift = 18,
+    ClusterGatherLimit  = 64,
+    ClusterSimulationRadius = 1000,
     -- Core movement optimization: one short snap only for the active quest mob.
     -- This is intentionally not exposed in Configs; it is part of the farm core.
     NearQuestSnap        = true,
@@ -752,14 +755,17 @@ end)
 
 
 -- ══════════════════════════════════════════════════════════════════
---             UI — BOBONHUB MODERN OVERLAY
+--             UI — GLASS NEON HUD V2
+--   Compact frosted card • neon shimmer • animated status/level/kills
+--   UI-only upgrade: no farm/combat/cluster controller behavior changed.
 -- ══════════════════════════════════════════════════════════════════
 if CoreGui:FindFirstChild("BobonHubUI") then CoreGui.BobonHubUI:Destroy() end
 
 local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
 
--- [G-2] Dọn blur còn sót từ lần execute trước (CoreGui / Camera / Lighting)
-for _, scope in ipairs({ CoreGui, workspace.CurrentCamera, game:GetService("Lighting") }) do
+-- Clean visual effects left by a previous execute.
+for _, scope in ipairs({ CoreGui, workspace.CurrentCamera, Lighting }) do
     pcall(function()
         local old = scope and scope:FindFirstChild("BobonHubBlur")
         if old then old:Destroy() end
@@ -767,225 +773,418 @@ for _, scope in ipairs({ CoreGui, workspace.CurrentCamera, game:GetService("Ligh
 end
 
 local SG = Instance.new("ScreenGui")
-SG.Name = "BobonHubUI"; SG.Parent = CoreGui
-SG.ResetOnSpawn = false; SG.DisplayOrder = 10000; SG.IgnoreGuiInset = true
+SG.Name = "BobonHubUI"
+SG.Parent = CoreGui
+SG.ResetOnSpawn = false
+SG.DisplayOrder = 10000
+SG.IgnoreGuiInset = true
+SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
--- [G-1] Cấu hình hiệu ứng kính mờ (định nghĩa lại được trong _G.Settings)
-_G.Settings.MenuDim  = _G.Settings.MenuDim or 0.28    -- kính tối toàn màn hình
-_G.Settings.MenuBlur = _G.Settings.MenuBlur or 16
+_G.Settings.MenuBlur = _G.Settings.MenuBlur or 8
 
--- [G-1] BLUR: kính mờ thật phủ lên cảnh phía sau overlay
 local Blur = Instance.new("BlurEffect")
-Blur.Name = "BobonHubBlur"; Blur.Size = 0; Blur.Enabled = true
-Blur.Parent = workspace.CurrentCamera
--- [G-2] Camera có thể bị thay sau respawn/teleport → tự gắn lại blur
+Blur.Name = "BobonHubBlur"
+Blur.Size = 0
+Blur.Enabled = true
+Blur.Parent = workspace.CurrentCamera or Lighting
+
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
     if not SessionAlive() then return end
     pcall(function()
-        if Blur and Blur.Parent then Blur.Parent = workspace.CurrentCamera end
+        local cam = workspace.CurrentCamera
+        if Blur and cam then Blur.Parent = cam end
     end)
 end)
 
--- [G-1] NỀN KÍNH MỜ: phủ mờ xuyên cảnh thay cho [D-2] nền đen 100%.
--- Dim fade-in từ trong suốt rồi tween về MenuDim ở block phía dưới.
-local Dim = Instance.new("Frame", SG)
-Dim.Size = UDim2.new(1,0,1,0); Dim.BackgroundColor3 = Color3.fromRGB(8,14,26)
-Dim.BackgroundTransparency = 1
-Dim.BorderSizePixel = 0; Dim.ZIndex = 1
-local DimGrad = Instance.new("UIGradient", Dim)
-DimGrad.Rotation = 90
-DimGrad.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(12,22,42)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(3,7,16)),
+local ACCENT_A = Color3.fromRGB(72, 223, 255)
+local ACCENT_B = Color3.fromRGB(139, 92, 246)
+local ACCENT_C = Color3.fromRGB(55, 255, 180)
+local PANEL_TOP = Color3.fromRGB(16, 24, 40)
+local PANEL_BOTTOM = Color3.fromRGB(7, 12, 24)
+local TEXT_MAIN = Color3.fromRGB(244, 249, 255)
+local TEXT_MUTED = Color3.fromRGB(145, 166, 194)
+local CARD_BG = Color3.fromRGB(17, 29, 48)
+
+local function AddCorner(obj, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 12)
+    c.Parent = obj
+    return c
+end
+
+local function AddStroke(obj, color, transparency, thickness)
+    local s = Instance.new("UIStroke")
+    s.Color = color or ACCENT_A
+    s.Transparency = transparency == nil and 0.55 or transparency
+    s.Thickness = thickness or 1
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = obj
+    return s
+end
+
+local function AddGradient(obj, c1, c2, rotation)
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, c1),
+        ColorSequenceKeypoint.new(1, c2),
+    })
+    g.Rotation = rotation or 0
+    g.Parent = obj
+    return g
+end
+
+local FadeTextObjects = {}
+local function MkText(parent, text, size, color, bold, align)
+    local lb = Instance.new("TextLabel")
+    lb.Parent = parent
+    lb.BackgroundTransparency = 1
+    lb.Text = text or ""
+    lb.TextColor3 = color or TEXT_MAIN
+    lb.TextSize = size or 13
+    lb.Font = bold and Enum.Font.GothamBold or Enum.Font.GothamMedium
+    lb.TextXAlignment = align or Enum.TextXAlignment.Left
+    lb.TextYAlignment = Enum.TextYAlignment.Center
+    lb.TextTruncate = Enum.TextTruncate.AtEnd
+    lb.TextTransparency = 0
+    lb.ZIndex = 8
+    table.insert(FadeTextObjects, lb)
+    return lb
+end
+
+local function MkCard(parent, position, size)
+    local f = Instance.new("Frame")
+    f.Parent = parent
+    f.Position = position
+    f.Size = size
+    f.BackgroundColor3 = CARD_BG
+    f.BackgroundTransparency = 0.34
+    f.BorderSizePixel = 0
+    f.ZIndex = 5
+    AddCorner(f, 13)
+    AddStroke(f, Color3.fromRGB(110, 175, 220), 0.78, 1)
+    local shade = AddGradient(f, Color3.fromRGB(25, 45, 68), Color3.fromRGB(11, 18, 34), 90)
+    shade.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.08),
+        NumberSequenceKeypoint.new(1, 0.34),
+    })
+    return f
+end
+
+-- Main floating glass panel.
+local Panel = Instance.new("Frame")
+Panel.Name = "GlassNeonV2"
+Panel.Parent = SG
+Panel.AnchorPoint = Vector2.new(0, 0.5)
+Panel.Position = UDim2.new(0, 24, 0.5, 0)
+Panel.Size = UDim2.new(0, 478, 0, 370)
+Panel.BackgroundColor3 = PANEL_TOP
+Panel.BackgroundTransparency = 0.12
+Panel.BorderSizePixel = 0
+Panel.ClipsDescendants = true
+Panel.ZIndex = 3
+AddCorner(Panel, 20)
+
+local PanelGradient = AddGradient(Panel, PANEL_TOP, PANEL_BOTTOM, 115)
+PanelGradient.Transparency = NumberSequence.new({
+    NumberSequenceKeypoint.new(0, 0.04),
+    NumberSequenceKeypoint.new(0.55, 0.18),
+    NumberSequenceKeypoint.new(1, 0.02),
 })
 
+local PanelStroke = AddStroke(Panel, ACCENT_A, 0.24, 1.4)
+local PanelScale = Instance.new("UIScale")
+PanelScale.Scale = 0.94
+PanelScale.Parent = Panel
 
--- Full-screen HUD: no menu card. Information floats directly over the
--- full-screen frosted layer and scales on desktop/mobile resolutions.
-local Con = Instance.new("Frame", SG)
-Con.AnchorPoint = Vector2.new(0.5,0.5); Con.Position = UDim2.fromScale(0.5,0.5)
-Con.Size = UDim2.fromScale(1,1)
-Con.BackgroundTransparency = 1; Con.BorderSizePixel = 0; Con.ZIndex = 2
+local SizeConstraint = Instance.new("UISizeConstraint")
+SizeConstraint.MinSize = Vector2.new(408, 316)
+SizeConstraint.MaxSize = Vector2.new(478, 370)
+SizeConstraint.Parent = Panel
 
--- A single vertically-laid-out content column prevents labels from
--- overlapping on short mobile viewports. UIScale shrinks the whole column
--- uniformly instead of letting independent percentage positions collide.
-local Content = Instance.new("Frame", Con)
-Content.Name = "Content"
-Content.AnchorPoint = Vector2.new(0.5,0.5)
-Content.Position = UDim2.fromScale(0.5,0.5)
-Content.Size = UDim2.new(0.88,0,0,350)
-Content.BackgroundTransparency = 1
-Content.BorderSizePixel = 0
-Content.ZIndex = 2
+-- Neon top line + animated shimmer.
+local NeonLine = Instance.new("Frame")
+NeonLine.Parent = Panel
+NeonLine.Position = UDim2.new(0, 18, 0, 0)
+NeonLine.Size = UDim2.new(1, -36, 0, 2)
+NeonLine.BackgroundColor3 = Color3.new(1,1,1)
+NeonLine.BorderSizePixel = 0
+NeonLine.ZIndex = 10
+AddCorner(NeonLine, 2)
+local NeonGradient = Instance.new("UIGradient")
+NeonGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, ACCENT_A),
+    ColorSequenceKeypoint.new(0.5, ACCENT_B),
+    ColorSequenceKeypoint.new(1, ACCENT_C),
+})
+NeonGradient.Offset = Vector2.new(-1, 0)
+NeonGradient.Parent = NeonLine
 
-local ContentConstraint = Instance.new("UISizeConstraint", Content)
-ContentConstraint.MinSize = Vector2.new(280,350)
-ContentConstraint.MaxSize = Vector2.new(760,350)
+-- Soft interior glows: UI-only, no particle emitters.
+local GlowA = Instance.new("Frame")
+GlowA.Parent = Panel
+GlowA.AnchorPoint = Vector2.new(0.5,0.5)
+GlowA.Position = UDim2.new(0, 55, 0, 48)
+GlowA.Size = UDim2.new(0, 150, 0, 150)
+GlowA.BackgroundColor3 = ACCENT_A
+GlowA.BackgroundTransparency = 0.91
+GlowA.BorderSizePixel = 0
+GlowA.ZIndex = 4
+AddCorner(GlowA, 75)
 
-local ContentScale = Instance.new("UIScale", Content)
+local GlowB = Instance.new("Frame")
+GlowB.Parent = Panel
+GlowB.AnchorPoint = Vector2.new(0.5,0.5)
+GlowB.Position = UDim2.new(1, -28, 1, -36)
+GlowB.Size = UDim2.new(0, 180, 0, 180)
+GlowB.BackgroundColor3 = ACCENT_B
+GlowB.BackgroundTransparency = 0.94
+GlowB.BorderSizePixel = 0
+GlowB.ZIndex = 4
+AddCorner(GlowB, 90)
+
+-- Header / drag handle.
+local Header = Instance.new("Frame")
+Header.Parent = Panel
+Header.Position = UDim2.new(0, 18, 0, 14)
+Header.Size = UDim2.new(1, -36, 0, 48)
+Header.BackgroundTransparency = 1
+Header.ZIndex = 8
+Header.Active = true
+
+local Brand = MkText(Header, "◈  BOBON HUB", 20, TEXT_MAIN, true)
+Brand.Position = UDim2.new(0, 0, 0, 0)
+Brand.Size = UDim2.new(0.55, 0, 0, 25)
+
+local Sub = MkText(Header, "GLASS NEON  •  KAITUN", 10, ACCENT_A, true)
+Sub.Position = UDim2.new(0, 27, 0, 24)
+Sub.Size = UDim2.new(0.58, 0, 0, 18)
+
+local OnlineDot = Instance.new("Frame")
+OnlineDot.Parent = Header
+OnlineDot.AnchorPoint = Vector2.new(1,0.5)
+OnlineDot.Position = UDim2.new(1, -63, 0, 16)
+OnlineDot.Size = UDim2.new(0, 8, 0, 8)
+OnlineDot.BackgroundColor3 = ACCENT_C
+OnlineDot.BackgroundTransparency = 0
+OnlineDot.BorderSizePixel = 0
+OnlineDot.ZIndex = 10
+AddCorner(OnlineDot, 8)
+local OnlineStroke = AddStroke(OnlineDot, ACCENT_C, 0.2, 2)
+
+local OnlineL = MkText(Header, "ONLINE", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
+OnlineL.AnchorPoint = Vector2.new(1,0)
+OnlineL.Position = UDim2.new(1, 0, 0, 6)
+OnlineL.Size = UDim2.new(0, 55, 0, 20)
+
+local VersionL = MkText(Header, "v18.7", 9, TEXT_MUTED, false, Enum.TextXAlignment.Right)
+VersionL.AnchorPoint = Vector2.new(1,0)
+VersionL.Position = UDim2.new(1, 0, 0, 27)
+VersionL.Size = UDim2.new(0, 55, 0, 16)
+
+-- Level / Sea cards.
+local LevelCard = MkCard(Panel, UDim2.new(0, 18, 0, 70), UDim2.new(0.50, -22, 0, 58))
+local LevelCaption = MkText(LevelCard, "LEVEL", 9, TEXT_MUTED, true)
+LevelCaption.Position = UDim2.new(0, 14, 0, 8)
+LevelCaption.Size = UDim2.new(0, 65, 0, 15)
+local LevelValue = MkText(LevelCard, "1", 23, TEXT_MAIN, true)
+LevelValue.Position = UDim2.new(0, 14, 0, 21)
+LevelValue.Size = UDim2.new(1, -28, 0, 30)
+local LevelScale = Instance.new("UIScale")
+LevelScale.Parent = LevelValue
+
+local SeaCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 70), UDim2.new(0.50, -22, 0, 58))
+local SeaCaption = MkText(SeaCard, "WORLD", 9, TEXT_MUTED, true)
+SeaCaption.Position = UDim2.new(0, 14, 0, 8)
+SeaCaption.Size = UDim2.new(0, 65, 0, 15)
+local SeaValue = MkText(SeaCard, "SEA 1", 20, ACCENT_A, true)
+SeaValue.Position = UDim2.new(0, 14, 0, 23)
+SeaValue.Size = UDim2.new(0.55, -14, 0, 26)
+local TeamL = MkText(SeaCard, "PIRATES ✓", 10, ACCENT_C, true, Enum.TextXAlignment.Right)
+TeamL.Position = UDim2.new(0.52, 0, 0, 24)
+TeamL.Size = UDim2.new(0.48, -14, 0, 24)
+
+-- Main status glass.
+local StatusCard = MkCard(Panel, UDim2.new(0, 18, 0, 136), UDim2.new(1, -36, 0, 78))
+StatusCard.BackgroundTransparency = 0.25
+local StatusDot = Instance.new("Frame")
+StatusDot.Parent = StatusCard
+StatusDot.Position = UDim2.new(0, 14, 0, 17)
+StatusDot.Size = UDim2.new(0, 9, 0, 9)
+StatusDot.BackgroundColor3 = ACCENT_C
+StatusDot.BorderSizePixel = 0
+StatusDot.ZIndex = 9
+AddCorner(StatusDot, 9)
+local StatusDotStroke = AddStroke(StatusDot, ACCENT_C, 0.36, 2)
+
+local ModeL = MkText(StatusCard, "FARMING", 10, ACCENT_C, true)
+ModeL.Position = UDim2.new(0, 31, 0, 10)
+ModeL.Size = UDim2.new(0.48, 0, 0, 20)
+
+local FlagL = MkText(StatusCard, "READY", 9, ACCENT_A, true, Enum.TextXAlignment.Right)
+FlagL.Position = UDim2.new(0.55, 0, 0, 10)
+FlagL.Size = UDim2.new(0.45, -14, 0, 20)
+
+local StatusL = MkText(StatusCard, "Initializing...", 16, TEXT_MAIN, true)
+StatusL.Position = UDim2.new(0, 14, 0, 31)
+StatusL.Size = UDim2.new(1, -28, 0, 27)
+local StatusBasePos = StatusL.Position
+
+local ClusterL = MkText(StatusCard, "Cluster: waiting", 10, TEXT_MUTED, false)
+ClusterL.Position = UDim2.new(0, 14, 1, -20)
+ClusterL.Size = UDim2.new(1, -28, 0, 15)
+
+-- Currency row.
+local BeliCard = MkCard(Panel, UDim2.new(0, 18, 0, 222), UDim2.new(0.50, -22, 0, 54))
+local BeliCap = MkText(BeliCard, "BELI", 9, TEXT_MUTED, true)
+BeliCap.Position = UDim2.new(0, 12, 0, 7); BeliCap.Size = UDim2.new(1,-24,0,13)
+local BeliL = MkText(BeliCard, "$ 0", 16, Color3.fromRGB(93,255,151), true)
+BeliL.Position = UDim2.new(0, 12, 0, 21); BeliL.Size = UDim2.new(1,-24,0,25)
+
+local FragCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 222), UDim2.new(0.50, -22, 0, 54))
+local FragCap = MkText(FragCard, "FRAGMENTS", 9, TEXT_MUTED, true)
+FragCap.Position = UDim2.new(0, 12, 0, 7); FragCap.Size = UDim2.new(1,-24,0,13)
+local FragL = MkText(FragCard, "◈ 0", 16, Color3.fromRGB(194,135,255), true)
+FragL.Position = UDim2.new(0, 12, 0, 21); FragL.Size = UDim2.new(1,-24,0,25)
+
+-- Kills / Time row.
+local KillCard = MkCard(Panel, UDim2.new(0, 18, 0, 284), UDim2.new(0.50, -22, 0, 48))
+local KillCap = MkText(KillCard, "KILLS", 9, TEXT_MUTED, true)
+KillCap.Position = UDim2.new(0, 12, 0, 5); KillCap.Size = UDim2.new(0.40,0,0,13)
+local KillL = MkText(KillCard, "0", 15, Color3.fromRGB(255,119,145), true)
+KillL.Position = UDim2.new(0, 12, 0, 18); KillL.Size = UDim2.new(1,-24,0,23)
+local KillScale = Instance.new("UIScale")
+KillScale.Parent = KillL
+
+local TimeCard = MkCard(Panel, UDim2.new(0.50, 4, 0, 284), UDim2.new(0.50, -22, 0, 48))
+local TimeCap = MkText(TimeCard, "RUNTIME", 9, TEXT_MUTED, true)
+TimeCap.Position = UDim2.new(0, 12, 0, 5); TimeCap.Size = UDim2.new(0.48,0,0,13)
+local TimeL = MkText(TimeCard, "00:00:00", 15, TEXT_MAIN, true)
+TimeL.Position = UDim2.new(0, 12, 0, 18); TimeL.Size = UDim2.new(1,-24,0,23)
+
+-- Diagnostics footer.
+local Footer = Instance.new("Frame")
+Footer.Parent = Panel
+Footer.Position = UDim2.new(0, 18, 1, -28)
+Footer.Size = UDim2.new(1, -36, 0, 18)
+Footer.BackgroundTransparency = 1
+Footer.ZIndex = 8
+local CombatL = MkText(Footer, "COMBAT  WAITING", 9, Color3.fromRGB(255,190,102), true)
+CombatL.Position = UDim2.new(0,0,0,0); CombatL.Size = UDim2.new(0.52,0,1,0)
+local BringL = MkText(Footer, "BRING  WAITING", 9, TEXT_MUTED, true, Enum.TextXAlignment.Right)
+BringL.Position = UDim2.new(0.48,0,0,0); BringL.Size = UDim2.new(0.52,0,1,0)
+
+-- Persistent mini toggle; remains usable while panel is hidden.
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "OverlayToggle"
+ToggleButton.Parent = SG
+ToggleButton.AnchorPoint = Vector2.new(0,0.5)
+ToggleButton.Position = UDim2.new(0, 10, 0.5, 0)
+ToggleButton.Size = UDim2.new(0, 36, 0, 36)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(10, 22, 39)
+ToggleButton.BackgroundTransparency = 0.08
+ToggleButton.BorderSizePixel = 0
+ToggleButton.Text = "◈"
+ToggleButton.TextColor3 = ACCENT_A
+ToggleButton.TextSize = 17
+ToggleButton.Font = Enum.Font.GothamBold
+ToggleButton.AutoButtonColor = false
+ToggleButton.ZIndex = 30
+AddCorner(ToggleButton, 12)
+local ToggleStroke = AddStroke(ToggleButton, ACCENT_A, 0.20, 1.4)
+AddGradient(ToggleButton, Color3.fromRGB(16,42,62), Color3.fromRGB(9,14,27), 90)
+
+-- Responsive scale without adding a second UIScale to the same panel.
+local HudBaseScale = 1
+local UITransitionBusy = false
 local function RefreshHudScale()
     local camera = workspace.CurrentCamera
     local viewport = camera and camera.ViewportSize or Vector2.new(1280,720)
-    ContentScale.Scale = math.clamp(math.min(viewport.X / 760, viewport.Y / 470), 0.72, 1)
+    local sx = viewport.X / 1180
+    local sy = viewport.Y / 720
+    HudBaseScale = math.clamp(math.min(sx, sy), 0.78, 1.05)
+    if not UITransitionBusy then PanelScale.Scale = HudBaseScale end
 end
 RefreshHudScale()
 workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-    if not SessionAlive() then return end
-    task.defer(RefreshHudScale)
+    if SessionAlive() then task.defer(RefreshHudScale) end
 end)
 if workspace.CurrentCamera then
     workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(RefreshHudScale)
 end
 
-local ContentLayout = Instance.new("UIListLayout", Content)
-ContentLayout.FillDirection = Enum.FillDirection.Vertical
-ContentLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-ContentLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
-ContentLayout.Padding = UDim.new(0,4)
+-- Dragging, limited to the header so status/cards remain clickable-proof.
+do
+    local dragging = false
+    local dragStart
+    local startPos
+    local dragInput
 
-local function MkLabel(txt,sz,col,bold,height,order,align)
-    local lb = Instance.new("TextLabel", Content)
-    lb.Size = UDim2.new(1,0,0,height or (sz+8))
-    lb.BackgroundTransparency = 1
-    lb.Text = txt; lb.TextColor3 = col; lb.TextSize = sz
-    lb.Font = bold and Enum.Font.GothamBlack or Enum.Font.GothamMedium
-    lb.TextXAlignment = align or Enum.TextXAlignment.Center
-    lb.TextYAlignment = Enum.TextYAlignment.Center
-    lb.TextTransparency = 1; lb.TextStrokeTransparency = 0.45
-    lb.TextStrokeColor3 = Color3.fromRGB(0,0,0); lb.ZIndex = 4
-    lb.LayoutOrder = order or 1
-    return lb
+    Header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = Panel.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+
+    Header.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UIS.InputChanged:Connect(function(input)
+        if dragging and input == dragInput and dragStart and startPos then
+            local delta = input.Position - dragStart
+            Panel.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
 end
-
-
-local function MkDivider(order)
-    local f = Instance.new("Frame", Content)
-    f.Size = UDim2.new(0.72,0,0,1)
-    f.BackgroundColor3 = Color3.fromRGB(87,218,255); f.BackgroundTransparency = 0.55
-    f.BorderSizePixel = 0; f.ZIndex = 3
-    f.LayoutOrder = order or 1
-    return f
-end
-
-
-local function MkCurrRow(order)
-    local row = Instance.new("Frame", Content)
-    row.Size = UDim2.new(0.82,0,0,34)
-    row.BackgroundTransparency = 1; row.BorderSizePixel = 0; row.ZIndex = 3
-    row.LayoutOrder = order or 1
-    local function Side(txt,col,pos,align)
-        local lb = Instance.new("TextLabel", row)
-        lb.Position = pos; lb.Size = UDim2.new(0.44,0,1,0); lb.BackgroundTransparency = 1
-        lb.Text = txt; lb.TextColor3 = col; lb.TextSize = 16; lb.Font = Enum.Font.GothamBold
-        lb.TextXAlignment = align; lb.TextYAlignment = Enum.TextYAlignment.Center
-        lb.TextTransparency = 1; lb.TextStrokeTransparency = 0.45
-        lb.TextStrokeColor3 = Color3.fromRGB(0,0,0); lb.ZIndex = 4
-        return lb
-    end
-    local sep = Instance.new("TextLabel", row)
-    sep.AnchorPoint = Vector2.new(0.5,0.5); sep.Position = UDim2.new(0.5,0,0.5,0)
-    sep.Size = UDim2.new(0,24,1,0); sep.BackgroundTransparency = 1; sep.Text = "•"
-    sep.TextColor3 = Color3.fromRGB(130,205,235); sep.TextSize = 18; sep.Font = Enum.Font.GothamBold
-    sep.TextXAlignment = Enum.TextXAlignment.Center; sep.TextYAlignment = Enum.TextYAlignment.Center
-    sep.TextTransparency = 1; sep.TextStrokeTransparency = 1; sep.ZIndex = 4
-    local beli = Side("Beli: 0",Color3.fromRGB(255,205,76),UDim2.new(0,0,0,0),Enum.TextXAlignment.Right)
-    beli.TextColor3 = Color3.fromRGB(66,255,133)
-    local frag = Side("Fragments: 0",Color3.fromRGB(190,115,255),UDim2.new(0.56,0,0,0),Enum.TextXAlignment.Left)
-    return row, beli, sep, frag
-end
-
-
-local TitleL = MkLabel("BoBonHub",54,Color3.fromRGB(248,253,255),true,68,1)
-local SubL   = MkLabel("STABLE KAITUN  •  AUTO FARM",12,Color3.fromRGB(75,222,255),true,22,2)
-local StatL  = MkLabel("Status: Initializing...",18,Color3.fromRGB(62,255,220),true,32,3)
-local ModeL  = MkLabel("Mode: Idle",14,Color3.fromRGB(255,214,92),false,22,4)
-local TimeL  = MkLabel("Time: 00:00:00",14,Color3.fromRGB(231,240,250),false,22,5)
-MkDivider(6)
-local CurrRow, BeliL, SepL, FragL = MkCurrRow(7)
-local KillL  = MkLabel("Kills: 0",13,Color3.fromRGB(255,105,126),false,22,8)
-local InfoL  = MkLabel("Sea: 1 | Lv: 1",13,Color3.fromRGB(100,198,255),false,22,9)
-local DiagL  = MkLabel("Combat: waiting  |  Bring: waiting",11,Color3.fromRGB(255,184,92),true,18,10)
-DiagL.TextScaled = true
-local DiagTextSize = Instance.new("UITextSizeConstraint", DiagL)
-DiagTextSize.MinTextSize = 8
-DiagTextSize.MaxTextSize = 11
-local HintL  = MkLabel("Nút bên trái / Right Ctrl: Ẩn hiện giao diện",11,Color3.fromRGB(157,178,205),false,18,11)
-
--- Compact persistent toggle on the left. It stays visible while the frosted
--- overlay is hidden, unlike toggling ScreenGui.Enabled.
-local ToggleButton = Instance.new("TextButton", SG)
-ToggleButton.Name = "OverlayToggle"
-ToggleButton.AnchorPoint = Vector2.new(0,0.5)
-ToggleButton.Position = UDim2.new(0,14,0.5,0)
-ToggleButton.Size = UDim2.new(0,46,0,58)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(8,25,44)
-ToggleButton.BackgroundTransparency = 0.12
-ToggleButton.BorderSizePixel = 0
-ToggleButton.Text = "◀"
-ToggleButton.TextColor3 = Color3.fromRGB(142,225,255)
-ToggleButton.TextSize = 22
-ToggleButton.Font = Enum.Font.GothamBold
-ToggleButton.AutoButtonColor = false
-ToggleButton.ZIndex = 20
-Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(0,13)
-local ToggleStroke = Instance.new("UIStroke", ToggleButton)
-ToggleStroke.Color = Color3.fromRGB(79,198,255)
-ToggleStroke.Transparency = 0.18
-ToggleStroke.Thickness = 1.5
-local ToggleGradient = Instance.new("UIGradient", ToggleButton)
-ToggleGradient.Rotation = 90
-ToggleGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, Color3.fromRGB(18,54,82)),
-    ColorSequenceKeypoint.new(1, Color3.fromRGB(5,18,34)),
-})
-
-
--- [G-1] Fade-in: nền kính + blur hiện dần, chữ cascade như bản gốc
-task.spawn(function()
-    task.wait(0.15)
-    TS:Create(Dim, TweenInfo.new(0.6, Enum.EasingStyle.Quad),
-        {BackgroundTransparency = _G.Settings.MenuDim}):Play()
-    TS:Create(Blur, TweenInfo.new(0.8, Enum.EasingStyle.Quad),
-        {Size = _G.Settings.MenuBlur}):Play()
-    task.wait(0.15)
-    for i,lb in ipairs({TitleL,SubL,StatL,ModeL,TimeL,BeliL,SepL,FragL,KillL,InfoL,DiagL,HintL}) do
-        task.delay((i-1)*0.07,function()
-            TS:Create(lb,TweenInfo.new(0.55,Enum.EasingStyle.Quad),{TextTransparency=0}):Play()
-        end)
-    end
-    print("[BobonHub v16.6 LIVE] UI Ready!")
-end)
 
 local OverlayVisible = true
 local function SetOverlayVisible(visible)
-    OverlayVisible = visible == true
-    Dim.Visible = OverlayVisible
-    Con.Visible = OverlayVisible
-    ToggleButton.Text = OverlayVisible and "◀" or "B"
-    pcall(function()
-        if Blur and Blur.Parent then Blur.Enabled = OverlayVisible end
-    end)
+    visible = visible == true
+    if UITransitionBusy or visible == OverlayVisible then return end
+    UITransitionBusy = true
+    OverlayVisible = visible
+
+    if visible then
+        Panel.Visible = true
+        PanelScale.Scale = HudBaseScale * 0.94
+        Panel.BackgroundTransparency = 0.30
+        TS:Create(PanelScale, TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=HudBaseScale}):Play()
+        TS:Create(Panel, TweenInfo.new(0.22, Enum.EasingStyle.Quad), {BackgroundTransparency=0.12}):Play()
+        TS:Create(Blur, TweenInfo.new(0.30, Enum.EasingStyle.Quad), {Size=_G.Settings.MenuBlur}):Play()
+        task.delay(0.30, function() UITransitionBusy = false end)
+    else
+        TS:Create(PanelScale, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {Scale=HudBaseScale * 0.94}):Play()
+        TS:Create(Panel, TweenInfo.new(0.18, Enum.EasingStyle.Quad), {BackgroundTransparency=0.45}):Play()
+        TS:Create(Blur, TweenInfo.new(0.20, Enum.EasingStyle.Quad), {Size=0}):Play()
+        task.delay(0.19, function()
+            if not OverlayVisible then Panel.Visible = false end
+            UITransitionBusy = false
+        end)
+    end
 end
 
 ToggleButton.MouseButton1Click:Connect(function()
     SetOverlayVisible(not OverlayVisible)
 end)
 ToggleButton.MouseEnter:Connect(function()
-    TS:Create(ToggleButton, TweenInfo.new(0.15), {
-        BackgroundTransparency = 0,
-        Size = UDim2.new(0,50,0,62),
-    }):Play()
+    TS:Create(ToggleButton, TweenInfo.new(0.15), {Size=UDim2.new(0,40,0,40), BackgroundTransparency=0}):Play()
 end)
 ToggleButton.MouseLeave:Connect(function()
-    TS:Create(ToggleButton, TweenInfo.new(0.15), {
-        BackgroundTransparency = 0.12,
-        Size = UDim2.new(0,46,0,58),
-    }):Play()
+    TS:Create(ToggleButton, TweenInfo.new(0.15), {Size=UDim2.new(0,36,0,36), BackgroundTransparency=0.08}):Play()
 end)
 
--- Right Ctrl mirrors the small left-side button.
 pcall(function()
     UIS.InputBegan:Connect(function(input, processed)
         if processed then return end
@@ -995,7 +1194,60 @@ pcall(function()
     end)
 end)
 
--- [G-2] Dọn blur khi UI bị destroy (re-execute / unload)
+-- Opening sequence.
+task.spawn(function()
+    PanelScale.Scale = HudBaseScale * 0.94
+    Panel.BackgroundTransparency = 0.40
+    for _, lb in ipairs(FadeTextObjects) do lb.TextTransparency = 1 end
+    task.wait(0.10)
+    TS:Create(Blur, TweenInfo.new(0.50, Enum.EasingStyle.Quad), {Size=_G.Settings.MenuBlur}):Play()
+    TS:Create(Panel, TweenInfo.new(0.35, Enum.EasingStyle.Quad), {BackgroundTransparency=0.12}):Play()
+    TS:Create(PanelScale, TweenInfo.new(0.48, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=HudBaseScale}):Play()
+    for i, lb in ipairs(FadeTextObjects) do
+        task.delay((i-1) * 0.018, function()
+            if lb and lb.Parent and SessionAlive() then
+                TS:Create(lb, TweenInfo.new(0.28, Enum.EasingStyle.Quad), {TextTransparency=0}):Play()
+            end
+        end)
+    end
+end)
+
+-- Low-cost neon animations.
+task.spawn(function()
+    while SessionAlive() and SG.Parent do
+        NeonGradient.Offset = Vector2.new(-1,0)
+        local t = TS:Create(NeonGradient, TweenInfo.new(3.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Offset=Vector2.new(1,0)})
+        t:Play(); t.Completed:Wait()
+        task.wait(0.35)
+    end
+end)
+
+task.spawn(function()
+    while SessionAlive() and SG.Parent do
+        TS:Create(OnlineDot, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+            BackgroundTransparency = 0.45,
+            Size = UDim2.new(0,6,0,6),
+        }):Play()
+        TS:Create(OnlineStroke, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency=0.72}):Play()
+        task.wait(0.78)
+        TS:Create(OnlineDot, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+            BackgroundTransparency = 0,
+            Size = UDim2.new(0,8,0,8),
+        }):Play()
+        TS:Create(OnlineStroke, TweenInfo.new(0.75, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Transparency=0.20}):Play()
+        task.wait(0.78)
+    end
+end)
+
+task.spawn(function()
+    while SessionAlive() and SG.Parent do
+        TS:Create(PanelStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Color=ACCENT_B, Transparency=0.42}):Play()
+        task.wait(1.45)
+        TS:Create(PanelStroke, TweenInfo.new(1.4, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {Color=ACCENT_A, Transparency=0.24}):Play()
+        task.wait(1.45)
+    end
+end)
+
 SG.Destroying:Connect(function()
     pcall(function()
         if Blur and Blur.Parent then Blur:Destroy() end
@@ -1003,50 +1255,122 @@ SG.Destroying:Connect(function()
 end)
 
 local function Fmt(n)
-    local s = tostring(math.floor(n or 0))
+    local s = tostring(math.floor(tonumber(n) or 0))
     return s:reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
 end
 
 local StatusColors = {
     Idle         = Color3.fromRGB(190,210,232),
-    Farming      = Color3.fromRGB(65,255,145),
+    Farming      = ACCENT_C,
     GettingQuest = Color3.fromRGB(255,214,92),
     GettingItem  = Color3.fromRGB(196,120,255),
     Bossing      = Color3.fromRGB(255,116,92),
-    UnlockingSea = Color3.fromRGB(75,222,255),
+    UnlockingSea = ACCENT_A,
     Recovering   = Color3.fromRGB(255,92,115),
     Dead         = Color3.fromRGB(255,92,115),
     Respawning   = Color3.fromRGB(255,183,85),
 }
 
+local LastStatusText = ""
+local LastLevel = nil
+local LastKills = nil
+
+local function AnimateStatus(newText)
+    if newText == LastStatusText then return end
+    LastStatusText = newText
+    StatusL.TextTransparency = 0.18
+    StatusL.Position = UDim2.new(StatusBasePos.X.Scale, StatusBasePos.X.Offset + 8,
+        StatusBasePos.Y.Scale, StatusBasePos.Y.Offset)
+    StatusL.Text = newText
+    TS:Create(StatusL, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        TextTransparency = 0,
+        Position = StatusBasePos,
+    }):Play()
+end
+
+local function Pop(scaleObj, peak)
+    if not scaleObj then return end
+    scaleObj.Scale = peak or 1.10
+    TS:Create(scaleObj, TweenInfo.new(0.22, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale=1}):Play()
+end
+
 task.spawn(function()
-    while SessionAlive() and task.wait(0.5) do
+    while SessionAlive() and task.wait(0.35) do
         pcall(function()
-            local e = os.time() - _G.State.StartTime
-            TimeL.Text = ("Time: %02d:%02d:%02d"):format(math.floor(e/3600),math.floor(e%3600/60),e%60)
-            StatL.Text = "Status: " .. (_G.BobonStatus or "Idle")
-            ModeL.Text = "Mode: " .. (_G.State.Mode or "Idle")
-            StatL.TextColor3 = StatusColors[_G.State.Mode] or Color3.fromRGB(62,255,220)
+            local state = _G.State or {}
             local diag = _G.BobonDiagnostics or {}
-            DiagL.Text = ("Combat: %s / %s / targets:%s / %s / dHP:%s  |  Bring: %s c:%s o:%s m:%s")
-                :format(tostring(diag.Tool or "?"), tostring(diag.Net or "?"),
-                    tostring(diag.Targets or 0), tostring(diag.Packet or "?"),
-                    tostring(diag.LastHPDelta or 0), tostring(diag.Bring or "?"),
-                    tostring(diag.BringCandidates or 0), tostring(diag.BringOwned or 0),
-                    tostring(diag.BringMoved or 0))
-            DiagL.TextColor3 = tostring(diag.Packet or ""):find("CONFIRMED", 1, true)
-                and Color3.fromRGB(85,255,145) or Color3.fromRGB(255,184,92)
-            KillL.Text = "Kills: " .. Fmt(_G.State.KillCount)
+            local elapsed = os.time() - (state.StartTime or os.time())
+            TimeL.Text = ("%02d:%02d:%02d"):format(
+                math.floor(elapsed/3600), math.floor(elapsed%3600/60), elapsed%60)
+
+            local mode = tostring(state.Mode or "Idle")
+            local modeColor = StatusColors[mode] or ACCENT_A
+            ModeL.Text = string.upper(mode)
+            ModeL.TextColor3 = modeColor
+            StatusDot.BackgroundColor3 = modeColor
+            StatusDotStroke.Color = modeColor
+            AnimateStatus(tostring(_G.BobonStatus or "Idle"))
+
             local d = LP:FindFirstChild("Data")
-            if d then
-                BeliL.Text = "Beli: " .. Fmt(d:FindFirstChild("Beli") and d.Beli.Value or 0)
-                FragL.Text = "Fragments: " .. Fmt(d:FindFirstChild("Fragments") and d.Fragments.Value or 0)
-                local lv = d:FindFirstChild("Level") and d.Level.Value or 1
-                InfoL.Text = ("Sea: %d  |  Level: %s"):format(_G.State.Sea, Fmt(lv))
+            local lv = d and d:FindFirstChild("Level") and d.Level.Value or 1
+            local beli = d and d:FindFirstChild("Beli") and d.Beli.Value or 0
+            local frag = d and d:FindFirstChild("Fragments") and d.Fragments.Value or 0
+            LevelValue.Text = Fmt(lv)
+            SeaValue.Text = "SEA " .. tostring(state.Sea or 1)
+            BeliL.Text = "$ " .. Fmt(beli)
+            FragL.Text = "◈ " .. Fmt(frag)
+            TeamL.Text = string.upper(tostring(_G.Settings.Team or "Pirates")) .. " ✓"
+
+            if LastLevel ~= nil and lv ~= LastLevel then Pop(LevelScale, 1.13) end
+            LastLevel = lv
+
+            local kills = tonumber(state.KillCount) or 0
+            KillL.Text = Fmt(kills)
+            if LastKills ~= nil and kills > LastKills then Pop(KillScale, 1.14) end
+            LastKills = kills
+
+            local clusterMode = tostring(state.ClusterMode or "OFF")
+            local candidateCount = tonumber(diag.BringCandidates) or 0
+            local ownedCount = tonumber(diag.BringOwned) or 0
+            local movedCount = tonumber(diag.BringMoved) or 0
+            if clusterMode ~= "OFF" then
+                ClusterL.Text = ("Cluster %s  •  %d mobs  •  owned %d  •  moved %d")
+                    :format(clusterMode, candidateCount, ownedCount, movedCount)
+            else
+                ClusterL.Text = "Cluster OFF  •  waiting for farm target"
+            end
+
+            local flags = {}
+            if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
+                flags[#flags+1] = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
+            end
+            if state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
+                flags[#flags+1] = "CONTESTED"
+            end
+            if #flags == 0 then
+                flags[1] = clusterMode ~= "OFF" and ("CLUSTER ×" .. tostring(candidateCount)) or "READY"
+            end
+            FlagL.Text = table.concat(flags, "  •  ")
+            FlagL.TextColor3 = (#flags > 0 and flags[#flags] == "CONTESTED")
+                and Color3.fromRGB(255,119,145) or ACCENT_A
+
+            local packet = tostring(diag.Packet or "WAITING")
+            local combatReady = packet:find("CONFIRMED", 1, true) ~= nil
+            CombatL.Text = combatReady and "COMBAT  READY" or ("COMBAT  " .. packet)
+            CombatL.TextColor3 = combatReady and ACCENT_C or Color3.fromRGB(255,190,102)
+
+            local bring = tostring(diag.Bring or "WAITING")
+            if movedCount > 0 then
+                BringL.Text = "BRING  FULL BATCH ×" .. tostring(movedCount)
+                BringL.TextColor3 = ACCENT_A
+            else
+                BringL.Text = "BRING  " .. bring
+                BringL.TextColor3 = TEXT_MUTED
             end
         end)
     end
 end)
+
 -- ══════════════════════════════════════════════════════════════════
 --                       HELPER FUNCTIONS
 -- ══════════════════════════════════════════════════════════════════
@@ -3039,7 +3363,9 @@ local function ExpandSimulationRadius()
     -- Keep the request inside the local farm envelope. Success here is never
     -- treated as ownership proof; every NPC is checked independently below.
     local radius = math.clamp(
-        (_G.Settings.GatherMaxDistance or 250) + 75, 100, 500)
+        _G.Settings.ClusterSimulationRadius
+            or ((_G.Settings.GatherMaxDistance or 600) + 150),
+        250, 2000)
 
     if type(setscriptable) == "function" then
         local ok = pcall(function()
@@ -3081,7 +3407,7 @@ ClientOwnsMob = function(root)
 end
 
 -- ══════════════════════════════════════════════════════════════════
---   v18.6 PERSISTENT CLUSTER FARM CONTROLLER
+--   v18.7 FULL-BATCH PERSISTENT CLUSTER FARM CONTROLLER
 --   Player movement remains owned exclusively by TravelManager.
 --   This controller only repositions network-owned NPC assemblies.
 --   The farm anchor survives individual mob deaths, so the player does not
@@ -3242,7 +3568,10 @@ function ClusterFarmController:Tick()
     end
 
     local candidates = {}
-    local maxDistance = math.min(_G.Settings.GatherMaxDistance or 250, 250)
+    -- v18.7: "bãi đang farm" is the stable cluster-anchor envelope, not merely
+    -- the few mobs closest to the current primary. This keeps every matching
+    -- quest/skip mob in the same spawn field eligible for the same batch pull.
+    local maxDistance = math.clamp(_G.Settings.GatherMaxDistance or 600, 100, 1200)
     for _, mob in ipairs(folder:GetChildren()) do
         if self:IsModelAllowed(mob) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -3252,7 +3581,9 @@ function ClusterFarmController:Tick()
                 if ok and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                     and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
                     and (pos - anchor).Magnitude <= maxDistance then
-                    candidates[#candidates + 1] = {Model=mob, Humanoid=hum, Root=root, Position=pos}
+                    candidates[#candidates + 1] = {
+                        Model=mob, Humanoid=hum, Root=root, Position=pos
+                    }
                 end
             end
         end
@@ -3264,8 +3595,11 @@ function ClusterFarmController:Tick()
     end)
 
     local moved, owned, unknown = 0, 0, false
-    local limit = math.min(#candidates, _G.Settings.FastAttackMaxTargets or 12)
-    local stackRadius = math.max(0, _G.Settings.ClusterStackRadius or 1.10)
+    -- IMPORTANT: gathering is no longer capped by FastAttackMaxTargets.
+    -- Magnet every matching mob we can really own; attack remains separately
+    -- capped so a large spawn field does not become one oversized remote packet.
+    local limit = math.min(#candidates, math.max(1, _G.Settings.ClusterGatherLimit or 64))
+    local stackRadius = math.max(0, _G.Settings.ClusterStackRadius or 0.75)
     local generation = GatherGeneration
     for i = 1, limit do
         if generation ~= GatherGeneration then return 0 end
@@ -3273,25 +3607,28 @@ function ClusterFarmController:Tick()
         local owns = ClientOwnsMob(entry.Root)
         if owns == true then
             owned = owned + 1
-            -- A very small deterministic spiral avoids exact same-root physics
-            -- while keeping every hit part inside one fast-attack pocket.
+            -- Tight deterministic stack: all owned mobs land in one attack pocket.
+            -- A tiny spiral keeps Roblox physics from ejecting perfectly-overlapped
+            -- root assemblies while remaining visually one pile.
             local angle = (i - 1) * 2.3999632297
-            local radius = stackRadius == 0 and 0 or math.min(stackRadius, 0.18 + (i - 1) * 0.10)
-            local destination = anchor + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
-            if ClientOwnsMob(entry.Root) == true then
-                local okMove = pcall(function()
-                    local rot = entry.Root.CFrame.Rotation
-                    entry.Root.CFrame = CFrame.new(destination) * rot
-                    entry.Root.AssemblyLinearVelocity = Vector3.zero
-                    entry.Root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                if okMove then
-                    VerifiedGatherRoots[entry.Root] = now
-                    moved = moved + 1
-                    if not state.ClusterPrimary or not self:IsVerified(state.ClusterPrimary) then
-                        state.ClusterPrimary = entry.Model
-                    end
+            local radius = stackRadius == 0 and 0
+                or math.min(stackRadius, 0.08 + (i - 1) * 0.035)
+            local destination = anchor
+                + Vector3.new(math.cos(angle) * radius, 0, math.sin(angle) * radius)
+            local okMove = pcall(function()
+                local rot = entry.Root.CFrame.Rotation
+                entry.Root.AssemblyLinearVelocity = Vector3.zero
+                entry.Root.AssemblyAngularVelocity = Vector3.zero
+                entry.Root.CFrame = CFrame.new(destination) * rot
+            end)
+            if okMove then
+                VerifiedGatherRoots[entry.Root] = now
+                moved = moved + 1
+                if not state.ClusterPrimary or not self:IsVerified(state.ClusterPrimary) then
+                    state.ClusterPrimary = entry.Model
                 end
+            else
+                VerifiedGatherRoots[entry.Root] = nil
             end
         elseif owns == nil then
             unknown = true
@@ -6247,8 +6584,8 @@ function KatakuriController:GatherSameMob(primary)
 
     ExpandSimulationRadius()
     local moved, index = 0, 0
-    local maxDistance = math.min(_G.Settings.GatherMaxDistance or 250, 250)
-    local spacing = math.min(math.max(_G.Settings.ClusterStackRadius or 1.10, 0.35), 1.50)
+    local maxDistance = math.clamp(_G.Settings.GatherMaxDistance or 600, 100, 1200)
+    local spacing = math.min(math.max(_G.Settings.ClusterStackRadius or 0.75, 0.20), 1.00)
     local anchor = primaryRoot.Position
 
     for _, mob in ipairs(folder:GetChildren()) do
@@ -7110,7 +7447,7 @@ task.spawn(function()
                 return
             end
 
-            -- v18.6 QUEST CLUSTER: q.MC is the stable spawn-area anchor.
+            -- v18.7 QUEST CLUSTER: q.MC is the stable spawn-area anchor.
             -- A mob death no longer destroys the cluster or forces player travel.
             ClusterFarmController:Activate("QUEST", {questMobName}, q.MC, "Farm")
             ClusterFarmController:Tick()
@@ -7370,10 +7707,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Full Script Loaded Successfully!")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
-print("[BobonHub v18.6 PERSISTENT CLUSTER + TEDDY SKIP] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Full Script Loaded Successfully!")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Core: TravelManager(v7+P1) | StateManager(v7) | RecoveryManager(v7+P10)")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Modules: QuestFarm | Health-Verified Combat | Ownership Bring | FruitManager | Responsive Glass HUD")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Progression: Farm 1-2800 | Sea2/3 | Saber/Pole/Rengoku/Yama/Tushita/CDK | RaceV2 | Styles | Soul Guitar | Katakuri/Dough King | Continuity")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Data: Sea1/2/3 QDB 1-2800 | Submerged | Boss/item catalog")
+print("[BobonHub v18.7 FULL-BATCH CLUSTER + TEDDY SKIP] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
