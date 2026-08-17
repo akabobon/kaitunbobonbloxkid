@@ -1,7 +1,27 @@
 -- =================================================================
---         BOBON HUB v21.13 REMOTE MAGNET RESTORE | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.14 REMOTE MAGNET + COMBAT STALL FIX | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.8 FAST MOVEMENT | Version: v21.13
+--         Base: v21.13 REMOTE MAGNET RESTORE | Version: v21.14
+--
+--  v21.14 COMBAT STALL FIX (video Roblox(6).mp4):
+--  [CS-1] Preserve v21.13 remote magnet: the video proves found 3/4, owned 0,
+--         stacked 3/4, so gather itself is already working.
+--  [CS-2] Fix long COMBAT WAIT-FAST-REMOTE stalls after several successful kills.
+--         A previously HP-verified remote backend no longer stops dispatching after
+--         exactly CombatProbeAttempts while waiting on one primary mob's HP.
+--  [CS-3] Cluster remote probes now verify against aggregate HP of the exact
+--         dispatched stacked batch. Damage on any non-contested stacked mob can
+--         confirm the backend; verification is no longer primary-only.
+--  [CS-4] Proven TOKEN-4 backends are not blacklisted for 60 seconds on one
+--         transient miss. Proven backends use a short retry; unproven bad tokens
+--         keep the long rejection window.
+--  [CS-5] A proven airborne remote backend may dispatch continuously for a bounded
+--         silent window. If the batch truly takes no damage, it is rotated after
+--         that timeout; no infinite blind remote spam is introduced.
+--  [CS-6] Movement, fast-descend, Haki hold, UI, progression and cluster positioning
+--         are otherwise unchanged from v21.13.
+--  [CS-7] Kill counter now counts recently dispatched stacked mobs, not only the
+--         promoted FarmTarget. This fixes KILLS staying 0 while cluster rewards appear.
 --
 --  v21.13 FULL FARM REVIEW / REMOTE MAGNET RESTORE:
 --  [RM-1] Reviewed v21.5 -> v21.12. The mandatory per-mob fly came from v21.6:
@@ -444,7 +464,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.13 REMOTE MAGNET RESTORE + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.14 REMOTE MAGNET + COMBAT STALL FIX + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -629,6 +649,14 @@ _G.Settings = {
     CombatFastUpgradeInterval = 90,
     CombatVerifiedMissLimit = 8,
     CombatVerifiedRetry = 0.25,
+    -- v21.14: once a remote backend has real HP proof, keep dispatching through
+    -- primary-only misses while a stacked batch is active. Aggregate HP proof below
+    -- confirms damage on any dispatched mob; a bounded silent timeout still rotates it.
+    CombatVerifiedContinuousWindow = 2.60,
+    CombatVerifiedBackendRetry = 0.85,
+    CombatClusterAggregateProof = true,
+    CombatClusterAggregateProofDelay = 0.12,
+    CombatClusterAggregateLateDelay = 0.30,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -1309,7 +1337,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.13", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.14", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2223,6 +2251,9 @@ local CombatController = {
     BackendProofs = {},
     BackendLastProof = {},
     VerifiedMisses = {},
+    -- Weak-key dispatch ledger for cluster kill accounting. It never owns movement
+    -- and automatically forgets destroyed NPC models.
+    RecentTargets = setmetatable({}, { __mode = "k" }),
     VerifiedBackend = nil,
     FastVerified = false,
     FastVerifiedAt = 0,
@@ -2498,6 +2529,42 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
     return results
 end
 
+function CombatController:SnapshotClusterHealth(entries)
+    local snapshot = {}
+    for _, entry in ipairs(entries or {}) do
+        local model = entry.Model
+        local hum = model and model:FindFirstChildOfClass("Humanoid")
+        if model and hum then
+            snapshot[#snapshot + 1] = {
+                Model = model,
+                Humanoid = hum,
+                Health = math.max(0, tonumber(hum.Health) or 0),
+            }
+        end
+    end
+    return snapshot
+end
+
+function CombatController:ClusterHealthDelta(snapshot)
+    local delta = 0
+    for _, row in ipairs(snapshot or {}) do
+        local model, hum = row.Model, row.Humanoid
+        local before = tonumber(row.Health) or 0
+        local after = 0
+        if hum and hum.Parent and model and model.Parent then
+            after = math.max(0, tonumber(hum.Health) or 0)
+        end
+        if after < before - 0.01 then
+            -- Never use a clearly-attributed nearby player's damage to validate
+            -- our remote backend. A destroyed/dead mob otherwise counts as 0 HP.
+            if not DamageAttributedToOtherPlayer(model, hum) then
+                delta = delta + (before - after)
+            end
+        end
+    end
+    return delta
+end
+
 function CombatController:ConfirmDamage(backend, delta)
     if not backend or delta <= 0 or self.PendingBackend ~= backend
         or self.PendingHumanoid ~= self.WatchedHumanoid
@@ -2600,11 +2667,19 @@ end
 
 function CombatController:FailBackend(backend, reason)
     if not backend then return end
-    self.FailedUntil[backend] = tick() + (_G.Settings.CombatBackendRetry or 12)
+    local proofs = self.BackendProofs[backend] or 0
+    local wasProven = self.VerifiedBackend == backend
+        and proofs >= (_G.Settings.CombatProofsRequired or 2)
+    local retryFor = wasProven
+        and (_G.Settings.CombatVerifiedBackendRetry or 0.85)
+        or (_G.Settings.CombatBackendRetry or 12)
+    self.FailedUntil[backend] = tick() + retryFor
     if backend == "TOKEN-4" then
         if IsCombatToken(self.SessionToken) then
             self.RejectedTokens = self.RejectedTokens or {}
-            self.RejectedTokens[self.SessionToken] = tick() + 60
+            -- A token that already produced verified HP damage should not disappear
+            -- for a full minute because one stacked primary missed.
+            self.RejectedTokens[self.SessionToken] = tick() + (wasProven and 2.0 or 60)
         end
         self.SessionToken = nil
         self.SessionTokenSource = nil
@@ -2656,6 +2731,24 @@ function CombatController:CheckPending(now)
     if not self.PendingBackend then return end
     local maxAttempts = _G.Settings.CombatProbeAttempts or 3
     local timeout = _G.Settings.CombatProbeTimeout or 1.2
+
+    -- v21.14: a remote backend with real HP proof must not enter the old
+    -- "3 packets -> WAIT-FAST-REMOTE" cycle while fighting a stacked air-farm batch.
+    -- ConfirmDamage (primary or aggregate batch proof) clears pending immediately
+    -- on real damage. A bounded silent window still rotates a truly dead backend.
+    local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+    local provenAirRemote = IsAirFarmCombat()
+        and not IsClientInputBackend(self.PendingBackend)
+        and self.VerifiedBackend == self.PendingBackend
+        and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+    if provenAirRemote then
+        local silentFor = now - (self.PendingSince or now)
+        if silentFor >= (_G.Settings.CombatVerifiedContinuousWindow or 2.60) then
+            self:FailBackend(self.PendingBackend, "VERIFIED-BATCH-NO-HP")
+        end
+        return
+    end
+
     if self.PendingAttempts >= maxAttempts
         and now - self.PendingLastDispatch >= timeout then
         -- Incoming NPC/PvP damage can interrupt the visible animation or
@@ -2735,7 +2828,13 @@ end
 
 function CombatController:SelectBackend(now)
     if self.PendingBackend then
-        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3) then
+        local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+        local provenAirRemote = IsAirFarmCombat()
+            and not IsClientInputBackend(self.PendingBackend)
+            and self.VerifiedBackend == self.PendingBackend
+            and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
+            and not provenAirRemote then
             return nil
         end
         -- A stale client-input probe must never pull an active farm cluster down.
@@ -3080,6 +3179,12 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
         dispatchEntries = { entries[1] }
     end
+    local aggregateSnapshot = nil
+    if clusterFanout and _G.Settings.CombatClusterAggregateProof ~= false
+        and not IsClientInputBackend(backend) then
+        -- Snapshot BEFORE dispatch so immediate server damage is still measurable.
+        aggregateSnapshot = self:SnapshotClusterHealth(dispatchEntries)
+    end
     local attempted = self:Dispatch(backend, tool, dispatchEntries, preferredRoot)
     local diag = _G.BobonDiagnostics
     diag.Net = backend
@@ -3088,6 +3193,35 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingAttempts = self.PendingAttempts + 1
         self.PendingLastDispatch = now
         self.PendingSettleUntil = 0
+        for _, dispatchedEntry in ipairs(dispatchEntries) do
+            if dispatchedEntry.Model then
+                self.RecentTargets[dispatchedEntry.Model] = now
+            end
+        end
+
+        -- v21.14 aggregate causal proof. A cluster remote dispatch fans out to
+        -- multiple verified targets, so the promoted primary is not guaranteed
+        -- to be the mob whose HP changes first.
+        if aggregateSnapshot then
+            local snapshot = aggregateSnapshot
+            local proofBackend = backend
+            local proofTarget = preferredModel
+            local function checkAggregateProof()
+                if not SessionAlive() or self.PendingBackend ~= proofBackend
+                    or self.PendingTarget ~= proofTarget then
+                    return
+                end
+                local delta = self:ClusterHealthDelta(snapshot)
+                if delta > 0 then
+                    self:ConfirmDamage(proofBackend, delta)
+                end
+            end
+            task.delay(_G.Settings.CombatClusterAggregateProofDelay or 0.12,
+                checkAggregateProof)
+            task.delay(_G.Settings.CombatClusterAggregateLateDelay or 0.30,
+                checkAggregateProof)
+        end
+
         diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
             and ("AIR-ATTACK:" .. backend) or ("ATTEMPT:" .. backend)
     else
@@ -3126,6 +3260,7 @@ function CombatController:Cleanup()
     self.BackendProofs = {}
     self.BackendLastProof = {}
     self.VerifiedMisses = {}
+    self.RecentTargets = setmetatable({}, { __mode = "k" })
     self.NextFastUpgrade = 0
     self.DesiredClientRange = false
     self.WatchedStableSince = 0
@@ -10465,7 +10600,13 @@ local function HookMob(mob)
             -- Count only a mob this kaitun was actively tracking. The old hook
             -- incremented for every NPC death in workspace.Enemies, including
             -- kills made by other players elsewhere in the server.
-            if _G.State.FarmTarget == mob or _G.State.CurrentTarget == mob then
+            local tracked = _G.State.FarmTarget == mob or _G.State.CurrentTarget == mob
+            local touchedAt = CombatController.RecentTargets
+                and CombatController.RecentTargets[mob] or nil
+            local recentlyDispatched = touchedAt
+                and tick() - touchedAt <= 3.0
+            if (tracked or recentlyDispatched)
+                and not DamageAttributedToOtherPlayer(mob, h) then
                 _G.State.KillCount = _G.State.KillCount + 1
             end
         end)
@@ -10521,10 +10662,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.13] Full Script Loaded Successfully!")
-print("[BobonHub v21.13] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.13] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.13] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.13] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.13] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.13] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.14] Full Script Loaded Successfully!")
+print("[BobonHub v21.14] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.14] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.14] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.14] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.14] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.14] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
