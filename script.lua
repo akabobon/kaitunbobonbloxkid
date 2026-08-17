@@ -1,7 +1,95 @@
 -- =================================================================
---         BOBON HUB v21.7 SKIP SWEEP FIX | TEDDY AIR FARM | FULL PROGRESSION
+--         BOBON HUB v21.17 FULL-CONTEXT CLUSTER DAMAGE | REMOTE MAGNET | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.6 VIDEO SWEEP GATHER | Version: v21.7
+--         Base: v21.16 CLUSTER ROUND-ROBIN FIX | Version: v21.17
+--
+--
+--  v21.17 FULL-CONTEXT CLUSTER VICTIM FIX (v21.16 still damaged one mob):
+--  [CTX-1] Root cause in v21.16: only dispatchEntries rotated. preferredModel /
+--          preferredHumanoid / preferredRoot and WatchTarget stayed bound to the old
+--          primary, so helpers/server-side combat state could keep resolving one NPC.
+--  [CTX-2] Cluster rotation now promotes the rotated victim into the ENTIRE combat
+--          context before WatchTarget/backend verification/dispatch. The player still
+--          stays over the same cluster anchor; only the combat victim changes.
+--  [CTX-3] Each victim is held until it actually loses HP (or a short bounded hold
+--          expires), preventing a new victim every 0.08s from resetting HP proof.
+--  [CTX-4] Dispatch is single-victim while context rotation is active. That means the
+--          remote first part, hit list, pending target and HP watcher all name the same mob.
+--  [CTX-5] Remote magnet / RestackBatch / ClusterFarmController movement is unchanged.
+--  v21.16 CLUSTER ROUND-ROBIN DAMAGE FIX (v21.15 still damaged only one mob):
+--  [RR-1] Keep v21.13/v21.14 remote magnet and v21.15 target collection unchanged.
+--  [RR-2] The current server/executor session is evidently consuming only one victim
+--         from a registered melee swing even when a multi-entry RegisterHit list is sent.
+--         Stop relying on fake-looking batch success as the only cluster path.
+--  [RR-3] When 2+ verified stacked mobs are eligible, dispatch ONE real target per normal
+--         attack tick and rotate the victim 1->2->3->... at the existing AttackDelay.
+--         This keeps remote traffic bounded while every stacked mob receives damage.
+--  [RR-4] Rotation is tied to ClusterGeneration and skips dead/despawned entries automatically.
+--  [RR-5] Aggregate HP verification still validates the active backend from whichever rotated
+--         mob actually loses HP; kill accounting records every rotated victim.
+--  [RR-6] No gather/magnet/anchor/movement/Haki/UI/progression code is changed.
+--
+--  v21.15 TRUE CLUSTER MULTI-HIT FIX (video Roblox(7).mp4):
+--  [MH-1] Preserve v21.13/v21.14 remote magnet byte-for-byte: STACK xN positioning
+--         is not changed by this patch.
+--  [MH-2] Cluster melee dispatch now prefers the canonical ONE-SWING / ONE-BATCH
+--         RegisterAttack + RegisterHit(BasePart, {{Model,Head},...}) shape.
+--         The previous TOKEN-4 loop consumed one registered swing across several
+--         separate RegisterHit calls, which could leave only the first mob damaged.
+--  [MH-3] TOKEN-4 keeps its single-target token path, but when 2+ verified cluster
+--         targets are present it uses the same batched hit-list shape first.
+--  [MH-4] Native helper fan-out now also receives Head-based batch entries, matching
+--         the live RegisterHit target layout instead of mixed limb-first parts.
+--  [MH-5] While a real 2+ stack is active, LEGACY-2 batch is preferred over a
+--         previously verified TOKEN-4 single-target route. If batch HP proof fails,
+--         the existing verifier/failure cooldown rotates normally.
+--  [MH-6] No movement, gather, anchor, Haki, UI, quest or progression behavior changed.
+--
+--  v21.14 COMBAT STALL FIX (video Roblox(6).mp4):
+--  [CS-1] Preserve v21.13 remote magnet: the video proves found 3/4, owned 0,
+--         stacked 3/4, so gather itself is already working.
+--  [CS-2] Fix long COMBAT WAIT-FAST-REMOTE stalls after several successful kills.
+--         A previously HP-verified remote backend no longer stops dispatching after
+--         exactly CombatProbeAttempts while waiting on one primary mob's HP.
+--  [CS-3] Cluster remote probes now verify against aggregate HP of the exact
+--         dispatched stacked batch. Damage on any non-contested stacked mob can
+--         confirm the backend; verification is no longer primary-only.
+--  [CS-4] Proven TOKEN-4 backends are not blacklisted for 60 seconds on one
+--         transient miss. Proven backends use a short retry; unproven bad tokens
+--         keep the long rejection window.
+--  [CS-5] A proven airborne remote backend may dispatch continuously for a bounded
+--         silent window. If the batch truly takes no damage, it is rotated after
+--         that timeout; no infinite blind remote spam is introduced.
+--  [CS-6] Movement, fast-descend, Haki hold, UI, progression and cluster positioning
+--         are otherwise unchanged from v21.13.
+--  [CS-7] Kill counter now counts recently dispatched stacked mobs, not only the
+--         promoted FarmTarget. This fixes KILLS staying 0 while cluster rewards appear.
+--
+--  v21.13 FULL FARM REVIEW / REMOTE MAGNET RESTORE:
+--  [RM-1] Reviewed v21.5 -> v21.12. The mandatory per-mob fly came from v21.6:
+--         ownership false OR unknown was queued for physical acquisition, and unknown
+--         roots were only test-moved after the player reached touch radius.
+--  [RM-2] Remote-pull-first: every same-name mob in the active field is attempted at
+--         the shared anchor immediately after SimulationRadius expansion. No near-player
+--         gate is required for the remote test. Position persistence still proves the
+--         move before the mob becomes a verified multi-hit target.
+--  [RM-3] Physical acquisition is now FALLBACK ONLY when zero mobs have been remotely
+--         verified after a grace window. Once any verified stack exists, Farm stays on
+--         the anchor instead of flying to every remaining mob.
+--  [RM-4] Removed the v21.9/v21.10 anti-backstep restack delay; it fixed a rare jerk by
+--         waiting near each acquire target, which directly conflicts with remote magnet.
+--  [RM-5] Attack/CollectTargets stays v21.8: verified same-name roots at one anchor are
+--         attacked as a group. Fast descent is TravelManager-only. Armament Haki is
+--         silently held ON with state-check/cooldown and never writes Status.
+--
+--  v21.8 FAST MOVEMENT TUNING:
+--  [FM-1] Global travel speed raised moderately; skip Floor 1/2 uses a faster
+--         dedicated speed so ownership sweeps do not crawl between mobs.
+--  [FM-2] Near-target deceleration shortened and given a minimum approach speed;
+--         arrival threshold is wider so the bot settles quickly instead of easing
+--         for a long time during the final descent.
+--  [FM-3] No anti-kick/anti-cheat bypass is added. Existing validation, movement
+--         ownership, fallback and recovery logic are preserved.
 --
 --  v21.7 EARLY SKIP FLOOR 1/2 SWEEP FIX:
 --  [SF-1] Fixed the shared Floor 1 / Floor 2 deadlock where SKIP first requested
@@ -418,7 +506,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.7 SKIP SWEEP FIX + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.17 CLUSTER ROUND-ROBIN FIX + REMOTE MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -564,12 +652,21 @@ _G.Settings = {
     FarmOffsetX         = 1.5,
     -- Retained for compatibility only; enemy roots are no longer resized.
     HitboxSize          = 0,
-    FlySpeed            = 180,
+    FlySpeed            = 240,
+    SkipTravelSpeed      = 320,
+    NearMoveDecelDistance= 18,
+    NearMoveMinSpeed     = 110,
+    -- v21.13: accelerate only the final vertical combat-hover descent.
+    FastDescendEnabled   = true,
+    FastDescendRadius    = 70,
+    FastDescendMinGap    = 7,
+    FastDescendSpeed     = 380,
+    FastDescendHorizontalFactor = 0.82,
     MinY                = 10,
     -- Submerged Island (Sea 3) dùng tọa độ âm dưới mặt biển.
     UnderwaterMinY      = -2300,
     CloseThreshold      = 35,
-    FarmArrivalThreshold= 2.5,
+    FarmArrivalThreshold= 5.5,
     HoverConfirmRadius  = 5,
     -- [A-4] Farm position / gom mob config (điều chỉnh theo game physics)
     MobGatherRadius     = 50,
@@ -594,6 +691,21 @@ _G.Settings = {
     CombatFastUpgradeInterval = 90,
     CombatVerifiedMissLimit = 8,
     CombatVerifiedRetry = 0.25,
+    -- v21.14: once a remote backend has real HP proof, keep dispatching through
+    -- primary-only misses while a stacked batch is active. Aggregate HP proof below
+    -- confirms damage on any dispatched mob; a bounded silent timeout still rotates it.
+    CombatVerifiedContinuousWindow = 2.60,
+    CombatVerifiedBackendRetry = 0.85,
+    CombatClusterAggregateProof = true,
+    CombatClusterAggregateProofDelay = 0.12,
+    CombatClusterAggregateLateDelay = 0.30,
+    -- v21.15 batch payload remains available for compatibility, but v21.17 uses
+    -- reliable one-target-per-swing rotation when a verified 2+ stack is present.
+    ClusterPreferBatchHit = true,
+    ClusterBatchMinTargets = 2,
+    ClusterReliableRoundRobin = true,
+    ClusterRoundRobinMinTargets = 2,
+    ClusterContextVictimHold = 0.32,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -671,7 +783,7 @@ _G.Settings = {
     ClusterAcquireRetry = 0.25,
     ClusterAcquireMaxAttempts = 2,
     ClusterAcquireCycleRetry = 3.0,
-    ClusterAcquireArrivalThreshold = 4.5,
+    ClusterAcquireArrivalThreshold = 6.0,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -680,9 +792,17 @@ _G.Settings = {
     -- A root is moved only after Farm physically approaches it, then it must remain
     -- at the anchor for several Heartbeats before it becomes a verified attack target.
     ClusterUnknownOwnerFallback = true,
-    ClusterOwnershipTouchRadius = 85,
+    ClusterOwnershipTouchRadius = 85, -- compatibility only; remote pull no longer requires touch
     ClusterUnknownProofTime = 0.28,
     ClusterUnknownProofChecks = 3,
+    -- v21.13 remote-magnet-first policy.
+    ClusterRemotePullFirst = true,
+    ClusterRemotePullRetry = 0.12,
+    ClusterRemotePullProofTime = 0.18,
+    ClusterRemotePullProofChecks = 2,
+    ClusterRemotePullGrace = 1.20,
+    ClusterPhysicalAcquireFallback = true,
+    ClusterUnknownPhysicalFallbackDelay = 3.00,
     -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
     AutoFragmentRaid     = true,
     RaidPreferredNames   = {"Flame","Dark","Ice","Sand","Smoke"},
@@ -728,6 +848,10 @@ _G.Settings = {
     -- Server validates level/money/ownership; probes are throttled and never own movement.
     AutoCoreAbilities   = true,
     CoreAbilityRetry    = 45,
+    -- Silent always-on Armament watcher. Remote itself is state/cooldown gated.
+    ArmamentWatchInterval = 0.15,
+    ArmamentRetryCooldown = 0.45,
+    ArmamentConfirmGrace  = 0.80,
     -- Core kaitun progression: always enabled internally; intentionally NOT exposed in Configs.
     AutoFightingStyles  = true,
     AutoBuyMelee        = true,
@@ -1262,7 +1386,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.7", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.17", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2176,6 +2300,9 @@ local CombatController = {
     BackendProofs = {},
     BackendLastProof = {},
     VerifiedMisses = {},
+    -- Weak-key dispatch ledger for cluster kill accounting. It never owns movement
+    -- and automatically forgets destroyed NPC models.
+    RecentTargets = setmetatable({}, { __mode = "k" }),
     VerifiedBackend = nil,
     FastVerified = false,
     FastVerifiedAt = 0,
@@ -2196,6 +2323,19 @@ local CombatController = {
     WatchedHealth = nil,
     WatchedStableSince = 0,
     HealthConnection = nil,
+    -- v21.16: deterministic victim rotation for server builds that consume only
+    -- one NPC from each registered melee swing even when a batch list is supplied.
+    ClusterRoundRobinCursor = 0,
+    ClusterRoundRobinGeneration = -1,
+    -- v21.17: unlike the old payload-only rotation, this victim owns the full
+    -- combat context (watcher + pending target + remote first part) for a short burst.
+    ClusterContextVictim = nil,
+    ClusterContextGeneration = -1,
+    ClusterContextCursor = 0,
+    ClusterContextSelectedAt = 0,
+    ClusterContextStartHealth = nil,
+    ClusterContextIndex = 0,
+    ClusterContextCount = 0,
 }
 
 function CombatController:ResolveRemotes()
@@ -2451,6 +2591,42 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
     return results
 end
 
+function CombatController:SnapshotClusterHealth(entries)
+    local snapshot = {}
+    for _, entry in ipairs(entries or {}) do
+        local model = entry.Model
+        local hum = model and model:FindFirstChildOfClass("Humanoid")
+        if model and hum then
+            snapshot[#snapshot + 1] = {
+                Model = model,
+                Humanoid = hum,
+                Health = math.max(0, tonumber(hum.Health) or 0),
+            }
+        end
+    end
+    return snapshot
+end
+
+function CombatController:ClusterHealthDelta(snapshot)
+    local delta = 0
+    for _, row in ipairs(snapshot or {}) do
+        local model, hum = row.Model, row.Humanoid
+        local before = tonumber(row.Health) or 0
+        local after = 0
+        if hum and hum.Parent and model and model.Parent then
+            after = math.max(0, tonumber(hum.Health) or 0)
+        end
+        if after < before - 0.01 then
+            -- Never use a clearly-attributed nearby player's damage to validate
+            -- our remote backend. A destroyed/dead mob otherwise counts as 0 HP.
+            if not DamageAttributedToOtherPlayer(model, hum) then
+                delta = delta + (before - after)
+            end
+        end
+    end
+    return delta
+end
+
 function CombatController:ConfirmDamage(backend, delta)
     if not backend or delta <= 0 or self.PendingBackend ~= backend
         or self.PendingHumanoid ~= self.WatchedHumanoid
@@ -2553,11 +2729,19 @@ end
 
 function CombatController:FailBackend(backend, reason)
     if not backend then return end
-    self.FailedUntil[backend] = tick() + (_G.Settings.CombatBackendRetry or 12)
+    local proofs = self.BackendProofs[backend] or 0
+    local wasProven = self.VerifiedBackend == backend
+        and proofs >= (_G.Settings.CombatProofsRequired or 2)
+    local retryFor = wasProven
+        and (_G.Settings.CombatVerifiedBackendRetry or 0.85)
+        or (_G.Settings.CombatBackendRetry or 12)
+    self.FailedUntil[backend] = tick() + retryFor
     if backend == "TOKEN-4" then
         if IsCombatToken(self.SessionToken) then
             self.RejectedTokens = self.RejectedTokens or {}
-            self.RejectedTokens[self.SessionToken] = tick() + 60
+            -- A token that already produced verified HP damage should not disappear
+            -- for a full minute because one stacked primary missed.
+            self.RejectedTokens[self.SessionToken] = tick() + (wasProven and 2.0 or 60)
         end
         self.SessionToken = nil
         self.SessionTokenSource = nil
@@ -2609,6 +2793,24 @@ function CombatController:CheckPending(now)
     if not self.PendingBackend then return end
     local maxAttempts = _G.Settings.CombatProbeAttempts or 3
     local timeout = _G.Settings.CombatProbeTimeout or 1.2
+
+    -- v21.14: a remote backend with real HP proof must not enter the old
+    -- "3 packets -> WAIT-FAST-REMOTE" cycle while fighting a stacked air-farm batch.
+    -- ConfirmDamage (primary or aggregate batch proof) clears pending immediately
+    -- on real damage. A bounded silent window still rotates a truly dead backend.
+    local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+    local provenAirRemote = IsAirFarmCombat()
+        and not IsClientInputBackend(self.PendingBackend)
+        and self.VerifiedBackend == self.PendingBackend
+        and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+    if provenAirRemote then
+        local silentFor = now - (self.PendingSince or now)
+        if silentFor >= (_G.Settings.CombatVerifiedContinuousWindow or 2.60) then
+            self:FailBackend(self.PendingBackend, "VERIFIED-BATCH-NO-HP")
+        end
+        return
+    end
+
     if self.PendingAttempts >= maxAttempts
         and now - self.PendingLastDispatch >= timeout then
         -- Incoming NPC/PvP damage can interrupt the visible animation or
@@ -2687,20 +2889,59 @@ function CombatController:BackendAvailable(name)
 end
 
 function CombatController:SelectBackend(now)
+    local airFarm = IsAirFarmCombat()
+    local stackedCount = tonumber(_G.BobonDiagnostics
+        and _G.BobonDiagnostics.BringMoved) or 0
+    local clusterBatch = airFarm
+        and _G.Settings.ClusterPreferBatchHit ~= false
+        and _G.State and _G.State.ClusterMode ~= "OFF"
+        and stackedCount >= (_G.Settings.ClusterBatchMinTargets or 2)
+
     if self.PendingBackend then
-        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3) then
-            return nil
-        end
-        -- A stale client-input probe must never pull an active farm cluster down.
-        if IsAirFarmCombat() and IsClientInputBackend(self.PendingBackend) then
-            self:AbortPending("AIR-FARM-REMOTE-ONLY")
+        -- v21.15: if TOKEN-4 was proving one target and a real multi-stack becomes
+        -- available, switch to the canonical batched RegisterHit route instead of
+        -- keeping the old single-target swing alive forever.
+        if clusterBatch and self.PendingBackend == "TOKEN-4"
+            and self:BackendAvailable("LEGACY-2") then
+            self:AbortPending("CLUSTER-BATCH-UPGRADE")
         else
-            return self.PendingBackend
+            local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+            local provenAirRemote = airFarm
+                and not IsClientInputBackend(self.PendingBackend)
+                and self.VerifiedBackend == self.PendingBackend
+                and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+            if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
+                and not provenAirRemote then
+                return nil
+            end
+            -- A stale client-input probe must never pull an active farm cluster down.
+            if airFarm and IsClientInputBackend(self.PendingBackend) then
+                self:AbortPending("AIR-FARM-REMOTE-ONLY")
+            else
+                return self.PendingBackend
+            end
         end
     end
     if now < self.NextProbeAt then return nil end
 
-    local airFarm = IsAirFarmCombat()
+    -- For a real 2+ mob stack, prefer the current public batched hit shape.
+    -- Do this BEFORE returning a previously verified TOKEN-4 route because TOKEN-4
+    -- may be perfectly valid for one target while still consuming only one target
+    -- from a registered swing when called repeatedly.
+    if clusterBatch then
+        if self.VerifiedBackend == "LEGACY-2"
+            and self:BackendAvailable("LEGACY-2") then
+            return "LEGACY-2"
+        end
+        if self:BackendAvailable("LEGACY-2") then
+            return "LEGACY-2"
+        end
+        if self.VerifiedBackend == "CLIENT-HELPER"
+            and self:BackendAvailable("CLIENT-HELPER") then
+            return "CLIENT-HELPER"
+        end
+    end
+
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
@@ -2708,10 +2949,11 @@ function CombatController:SelectBackend(now)
     end
 
     -- During farm/skip/raid only long-range helper/token/legacy paths are valid.
-    -- This is the key Teddy-style behavior: remain above the stack and hit it
-    -- remotely instead of dipping into physical M1 range.
     if airFarm then
-        for _, name in ipairs({"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}) do
+        local order = clusterBatch
+            and {"LEGACY-2", "CLIENT-HELPER", "TOKEN-4"}
+            or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}
+        for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
         end
         return nil
@@ -2805,25 +3047,48 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     elseif backend == "CLIENT-HELPER" then
         local helper = self:ResolveNativeHelper()
         local hitList = {}
+        local basePart = nil
         for _, entry in ipairs(entries) do
-            hitList[#hitList + 1] = { entry.Model, entry.Part }
+            local part = entry.Model:FindFirstChild("Head") or entry.Part
+            if part and part:IsA("BasePart") then
+                hitList[#hitList + 1] = { entry.Model, part }
+                basePart = basePart or part
+            end
         end
+        if not basePart or #hitList == 0 then return false end
         pcall(function() self.RegisterAttack:FireServer(0) end)
-        local hitOk = pcall(function() helper(entries[1].Part, hitList) end)
+        local hitOk = pcall(function() helper(basePart, hitList) end)
         return hitOk
     elseif backend == "TOKEN-4" then
         local token = self:ResolveSessionToken()
-        local hitOk = false
-        -- One attack registration describes one swing; every stacked target then
-        -- receives a hit in that same batch. This matters for six-Zombie Swamp.
-        pcall(function() self.RegisterAttack:FireServer(0.5) end)
-        for _, entry in ipairs(entries) do
-            local ok = pcall(function()
-                self.RegisterHit:FireServer(entry.Part, {}, nil, token)
+
+        -- v21.15 TRUE CLUSTER FAN-OUT:
+        -- A RegisterAttack describes ONE swing. Sending several independent
+        -- RegisterHit calls after it can make the server consume only the first.
+        -- When a verified stack has 2+ targets, send ONE batched hit list exactly
+        -- like the native/public melee route. Keep TOKEN-4 only for a genuine
+        -- single-target hit.
+        if #entries >= (_G.Settings.ClusterBatchMinTargets or 2) then
+            local hitList = {}
+            local basePart = nil
+            for _, entry in ipairs(entries) do
+                local part = entry.Model:FindFirstChild("Head") or entry.Part
+                if part and part:IsA("BasePart") then
+                    hitList[#hitList + 1] = { entry.Model, part }
+                    basePart = basePart or part
+                end
+            end
+            if not basePart or #hitList == 0 then return false end
+            pcall(function() self.RegisterAttack:FireServer(0) end)
+            return pcall(function()
+                self.RegisterHit:FireServer(basePart, hitList)
             end)
-            hitOk = hitOk or ok
         end
-        return hitOk
+
+        pcall(function() self.RegisterAttack:FireServer(0.5) end)
+        return pcall(function()
+            self.RegisterHit:FireServer(entries[1].Part, {}, nil, token)
+        end)
     elseif backend == "LEGACY-2" then
         -- Current public clients commonly use Head as the 2-argument hit part.
         -- Keep entry.Part as fallback for rigs without Head.
@@ -2863,6 +3128,102 @@ end
 
 function CombatController:Attack(tool, kind, preferredModel, preferredHum, preferredRoot, mobName)
     local now = tick()
+
+    -- v21.17 FULL-CONTEXT ROTATION. v21.16 changed only dispatchEntries, leaving
+    -- WatchTarget/PendingTarget/preferredRoot on the same primary. Some live helper
+    -- implementations resolve their victim from that surrounding combat context, so
+    -- changing only the payload can still damage the same NPC forever.
+    local contextRoundRobinActive = false
+    local contextRoundRobinIndex, contextRoundRobinCount = 0, 0
+    if IsAirFarmCombat() and _G.State and _G.State.ClusterMode ~= "OFF"
+        and mobName and _G.Settings.ClusterReliableRoundRobin ~= false then
+        local prelim = self:CollectTargets(preferredModel, mobName,
+            _G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
+        local minTargets = _G.Settings.ClusterRoundRobinMinTargets or 2
+        if #prelim >= minTargets then
+            local generation = tonumber(_G.State.ClusterGeneration) or 0
+            if self.ClusterContextGeneration ~= generation then
+                self.ClusterContextGeneration = generation
+                self.ClusterContextCursor = 0
+                self.ClusterContextVictim = nil
+                self.ClusterContextSelectedAt = 0
+                self.ClusterContextStartHealth = nil
+            end
+
+            local victimStillValid = false
+            if self.ClusterContextVictim and self.ClusterContextVictim.Parent then
+                local vh = self.ClusterContextVictim:FindFirstChildOfClass("Humanoid")
+                local vr = self.ClusterContextVictim:FindFirstChild("HumanoidRootPart")
+                victimStillValid = vh and vh.Health > 0 and vr and vr.Parent
+                    and ClusterFarmController and ClusterFarmController:IsVerified(self.ClusterContextVictim)
+            end
+
+            local observedDamage = false
+            if victimStillValid and self.ClusterContextStartHealth ~= nil then
+                local vh = self.ClusterContextVictim:FindFirstChildOfClass("Humanoid")
+                observedDamage = vh and vh.Health < self.ClusterContextStartHealth - 0.01
+            end
+            local hold = math.max(0.12, tonumber(_G.Settings.ClusterContextVictimHold) or 0.32)
+            local holdExpired = victimStillValid and now - (self.ClusterContextSelectedAt or 0) >= hold
+
+            if not victimStillValid or observedDamage or holdExpired then
+                -- Find the next live verified model in the freshly collected list.
+                local start = self.ClusterContextCursor
+                local chosenIndex = nil
+                for step = 1, #prelim do
+                    local idx = ((start + step - 1) % #prelim) + 1
+                    local row = prelim[idx]
+                    if row and row.Model and row.Humanoid and row.Humanoid.Health > 0
+                        and row.Root and row.Root.Parent then
+                        chosenIndex = idx
+                        break
+                    end
+                end
+                if chosenIndex then
+                    self.ClusterContextCursor = chosenIndex
+                    local row = prelim[chosenIndex]
+                    self.ClusterContextVictim = row.Model
+                    self.ClusterContextSelectedAt = now
+                    self.ClusterContextStartHealth = row.Humanoid.Health
+                end
+            end
+
+            -- Re-resolve the current victim from prelim so the payload and context use
+            -- the exact currently streamed instances for this frame.
+            local selectedRow, selectedIndex
+            for i, row in ipairs(prelim) do
+                if row.Model == self.ClusterContextVictim then
+                    selectedRow, selectedIndex = row, i
+                    break
+                end
+            end
+            if not selectedRow then
+                selectedIndex = 1
+                selectedRow = prelim[1]
+                self.ClusterContextVictim = selectedRow.Model
+                self.ClusterContextCursor = selectedIndex
+                self.ClusterContextSelectedAt = now
+                self.ClusterContextStartHealth = selectedRow.Humanoid.Health
+            end
+
+            if selectedRow then
+                preferredModel = selectedRow.Model
+                preferredHum = selectedRow.Humanoid
+                preferredRoot = selectedRow.Root
+                contextRoundRobinActive = true
+                contextRoundRobinIndex = selectedIndex or 1
+                contextRoundRobinCount = #prelim
+                self.ClusterContextIndex = contextRoundRobinIndex
+                self.ClusterContextCount = contextRoundRobinCount
+            end
+        else
+            self.ClusterContextVictim = nil
+            self.ClusterContextStartHealth = nil
+            self.ClusterContextIndex = 0
+            self.ClusterContextCount = #prelim
+        end
+    end
+
     self:WatchTarget(preferredModel, preferredHum)
 
     -- Choose the desired physical range before dispatching. Fast/helper
@@ -3023,15 +3384,44 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingSettleUntil = 0
         self.PendingAttempts = 0
     end
-    -- v19.3: the whole stacked batch is dispatched even while the remote backend
-    -- is being health-verified. Verification still watches the primary HP delta,
-    -- but the other stacked mobs no longer wait for that primary to die first.
+    -- v21.16 RELIABLE CLUSTER DAMAGE:
+    -- The server session shown by the user accepts the stacked positioning but consumes
+    -- only one victim from a nominal multi-entry melee swing. Instead of repeatedly
+    -- feeding the same preferred mob, rotate one real registered swing across every
+    -- verified stacked entry at the existing attack cadence. This is deliberately
+    -- bounded to one victim per AttackDelay tick; no extra attack loop/thread is created.
     local dispatchEntries = entries
     local clusterFanout = _G.State and _G.State.ClusterMode ~= "OFF"
         and not IsClientInputBackend(backend)
-    if not (clusterFanout and (_G.Settings.RemoteProbeAllCluster ~= false))
-        and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
+
+    -- v21.17: if a full-context victim was selected above, entries[1] is that victim
+    -- because CollectTargets always inserts preferred first. Do NOT rotate the payload
+    -- a second time here; watcher/pending/first-part/hit-list must all name one model.
+    local roundRobinActive = false
+    if contextRoundRobinActive then
         dispatchEntries = { entries[1] }
+    else
+        roundRobinActive = clusterFanout
+            and _G.Settings.ClusterReliableRoundRobin ~= false
+            and #entries >= (_G.Settings.ClusterRoundRobinMinTargets or 2)
+        if roundRobinActive then
+            local generation = tonumber(_G.State and _G.State.ClusterGeneration) or 0
+            if self.ClusterRoundRobinGeneration ~= generation then
+                self.ClusterRoundRobinGeneration = generation
+                self.ClusterRoundRobinCursor = 0
+            end
+            self.ClusterRoundRobinCursor = (self.ClusterRoundRobinCursor % #entries) + 1
+            dispatchEntries = { entries[self.ClusterRoundRobinCursor] }
+        elseif not (clusterFanout and (_G.Settings.RemoteProbeAllCluster ~= false))
+            and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
+            dispatchEntries = { entries[1] }
+        end
+    end
+    local aggregateSnapshot = nil
+    if clusterFanout and _G.Settings.CombatClusterAggregateProof ~= false
+        and not IsClientInputBackend(backend) then
+        -- Snapshot BEFORE dispatch so immediate server damage is still measurable.
+        aggregateSnapshot = self:SnapshotClusterHealth(dispatchEntries)
     end
     local attempted = self:Dispatch(backend, tool, dispatchEntries, preferredRoot)
     local diag = _G.BobonDiagnostics
@@ -3041,8 +3431,48 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingAttempts = self.PendingAttempts + 1
         self.PendingLastDispatch = now
         self.PendingSettleUntil = 0
-        diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
-            and ("AIR-ATTACK:" .. backend) or ("ATTEMPT:" .. backend)
+        for _, dispatchedEntry in ipairs(dispatchEntries) do
+            if dispatchedEntry.Model then
+                self.RecentTargets[dispatchedEntry.Model] = now
+            end
+        end
+
+        -- v21.14 aggregate causal proof. A cluster remote dispatch fans out to
+        -- multiple verified targets, so the promoted primary is not guaranteed
+        -- to be the mob whose HP changes first.
+        if aggregateSnapshot then
+            local snapshot = aggregateSnapshot
+            local proofBackend = backend
+            local proofTarget = preferredModel
+            local function checkAggregateProof()
+                if not SessionAlive() or self.PendingBackend ~= proofBackend
+                    or self.PendingTarget ~= proofTarget then
+                    return
+                end
+                local delta = self:ClusterHealthDelta(snapshot)
+                if delta > 0 then
+                    self:ConfirmDamage(proofBackend, delta)
+                end
+            end
+            task.delay(_G.Settings.CombatClusterAggregateProofDelay or 0.12,
+                checkAggregateProof)
+            task.delay(_G.Settings.CombatClusterAggregateLateDelay or 0.30,
+                checkAggregateProof)
+        end
+
+        if contextRoundRobinActive then
+            diag.Packet = ("AIR-CTX-RR:%s %d/%d"):format(
+                tostring(backend), contextRoundRobinIndex, contextRoundRobinCount)
+        elseif roundRobinActive then
+            diag.Packet = ("AIR-RR:%s %d/%d"):format(
+                tostring(backend), self.ClusterRoundRobinCursor, #entries)
+        else
+            local batchSuffix = (#dispatchEntries > 1)
+                and (" x" .. tostring(#dispatchEntries)) or ""
+            diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
+                and ("AIR-ATTACK:" .. backend .. batchSuffix)
+                or ("ATTEMPT:" .. backend .. batchSuffix)
+        end
     else
         self:FailBackend(backend, "DISPATCH-ERROR")
         diag.Packet = "ERROR:" .. backend
@@ -3079,9 +3509,19 @@ function CombatController:Cleanup()
     self.BackendProofs = {}
     self.BackendLastProof = {}
     self.VerifiedMisses = {}
+    self.RecentTargets = setmetatable({}, { __mode = "k" })
     self.NextFastUpgrade = 0
     self.DesiredClientRange = false
     self.WatchedStableSince = 0
+    self.ClusterRoundRobinCursor = 0
+    self.ClusterRoundRobinGeneration = -1
+    self.ClusterContextVictim = nil
+    self.ClusterContextGeneration = -1
+    self.ClusterContextCursor = 0
+    self.ClusterContextSelectedAt = 0
+    self.ClusterContextStartHealth = nil
+    self.ClusterContextIndex = 0
+    self.ClusterContextCount = 0
 end
 
 local function Attack(preferredTarget, mobName)
@@ -3686,6 +4126,7 @@ function FarmPositionController:ReleaseCluster()
         ClusterFarmController.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         ClusterFarmController.AcquireAttempts = setmetatable({}, { __mode = "k" })
         ClusterFarmController.PositionProof = setmetatable({}, { __mode = "k" })
+        ClusterFarmController.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
     end
     if _G.State then
         _G.State.ClusterMode = "OFF"
@@ -3799,6 +4240,8 @@ ClusterFarmController = {
     -- server has had time to snap them back. Only roots that stay at the anchor
     -- become verified group targets.
     PositionProof = setmetatable({}, { __mode = "k" }),
+    -- v21.13: bounded remote-pull retries; weak keys avoid retaining dead NPC roots.
+    RemotePullRetryAt = setmetatable({}, { __mode = "k" }),
 }
 
 local function NormalizeClusterNames(names)
@@ -3888,6 +4331,7 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
+        self.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
         state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
         state.ClusterActivatedAt = tick()
         state.ClusterPrimary = nil
@@ -3953,9 +4397,6 @@ end
 -- after ClientOwnsMob becomes true. Unknown ownership is never treated as safe.
 function ClusterFarmController:GetAcquireTarget()
     local state = _G.State
-    -- v21.7: the same bounded ownership-acquisition sweep is valid for normal
-    -- QUEST clusters and the two early SKIP floors. Other modes keep their
-    -- dedicated movement policies.
     if not state or (state.ClusterMode ~= "QUEST" and state.ClusterMode ~= "SKIP")
         or _G.Settings.ClusterAcquireSweep == false or not self:PolicyValid() then
         if state then
@@ -3967,6 +4408,35 @@ function ClusterFarmController:GetAcquireTarget()
     end
 
     local now = tick()
+    local verified = self:GetVerifiedCount()
+
+    -- v21.13: once the remote magnet has produced ANY real stack, stay parked
+    -- above that stack. Do not turn the remaining batch into a per-mob flight tour.
+    if verified > 0 then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
+    -- Give SimulationRadius + remote position proof a short chance to collapse
+    -- the whole batch before allowing any physical acquisition fallback.
+    local age = now - (state.ClusterActivatedAt or now)
+    local remoteGrace = math.max(0.25, tonumber(_G.Settings.ClusterRemotePullGrace) or 1.20)
+    if _G.Settings.ClusterRemotePullFirst ~= false and age < remoteGrace then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
+    if _G.Settings.ClusterPhysicalAcquireFallback == false then
+        state.ClusterAcquireTarget = nil
+        state.ClusterAcquireStartedAt = 0
+        state.ClusterAcquireDeadline = 0
+        return nil
+    end
+
     local current = state.ClusterAcquireTarget
     if current and current.Parent and self:IsModelAllowed(current)
         and not self:IsVerified(current) then
@@ -3989,6 +4459,8 @@ function ClusterFarmController:GetAcquireTarget()
 
     local me = HRP()
     local best, bestDist
+    local unknownFallbackDelay = math.max(remoteGrace,
+        tonumber(_G.Settings.ClusterUnknownPhysicalFallbackDelay) or 3.0)
     for _, entry in ipairs(self.LastBatch or {}) do
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
@@ -3998,12 +4470,13 @@ function ClusterFarmController:GetAcquireTarget()
                 >= (_G.Settings.ClusterAcquireMaxAttempts or 1) then
                 self.AcquireAttempts[model] = 0
             end
-            -- v21.6: false = server/other owner, nil = executor cannot query it.
-            -- Both states need a physical visit. RestackBatch remains the authority:
-            -- false roots are never moved, while nil roots use the bounded
-            -- position-proof fallback only after the player reaches them.
             local ownership = ClientOwnsMob(root)
-            if ownership ~= true then
+            -- Explicit false may need one physical visit. Unknown ownership gets a
+            -- longer remote-only window because many mobile executors can still
+            -- replicate the CFrame move even though they cannot expose ownership.
+            local allowPhysical = ownership == false
+                or (ownership == nil and age >= unknownFallbackDelay)
+            if allowPhysical then
                 local ok, pos = pcall(function() return root.Position end)
                 if ok and IsValidPos(pos) then
                     local dist = me and (pos - me.Position).Magnitude or 0
@@ -4061,12 +4534,29 @@ function ClusterFarmController:RestackBatch()
     local anchor = anchorCF.Position
     local now = tick()
     local kept, moved = {}, 0
-    local me = HRP()
     local verifyRadius = _G.Settings.ClusterAnchorVerifyRadius or 9
-    local touchRadius = math.max(verifyRadius + (_G.Settings.FarmHeight or 22),
-        tonumber(_G.Settings.ClusterOwnershipTouchRadius) or 85)
-    local proofTime = math.max(0.12, tonumber(_G.Settings.ClusterUnknownProofTime) or 0.28)
-    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterUnknownProofChecks) or 3))
+    local proofTime = math.max(0.10, tonumber(_G.Settings.ClusterRemotePullProofTime)
+        or tonumber(_G.Settings.ClusterUnknownProofTime) or 0.18)
+    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterRemotePullProofChecks)
+        or tonumber(_G.Settings.ClusterUnknownProofChecks) or 2))
+    local remoteRetry = math.max(0.06, tonumber(_G.Settings.ClusterRemotePullRetry) or 0.12)
+
+    local function writeToAnchor(model, root)
+        return pcall(function()
+            local rot = root.CFrame.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            -- Root move is the authoritative path used by the working v21.8 cluster.
+            -- PivotTo is only a protected assist for executors that replicate model pivots
+            -- more reliably; root CFrame is written last to guarantee one exact pocket.
+            pcall(function()
+                if model and type(model.PivotTo) == "function" then
+                    model:PivotTo(CFrame.new(anchor) * rot)
+                end
+            end)
+            root.CFrame = CFrame.new(anchor) * rot
+        end)
+    end
 
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
@@ -4082,37 +4572,23 @@ function ClusterFarmController:RestackBatch()
                 and (rootPos - anchor).Magnitude <= verifyRadius
 
             if own == true then
-                -- Authoritative fast path: confirmed client ownership.
-                local ok = pcall(function()
-                    local rot = root.CFrame.Rotation
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = CFrame.new(anchor) * rot
-                end)
-                if ok then
+                -- Best case: SimulationRadius already gave this client ownership.
+                -- Pull it immediately from wherever it is; no player visit required.
+                if writeToAnchor(model, root) then
                     VerifiedGatherRoots[root] = now
                     self.PositionProof[root] = nil
+                    self.RemotePullRetryAt[root] = nil
                     moved = moved + 1
                 end
-
-            elseif own == nil and _G.Settings.ClusterUnknownOwnerFallback ~= false then
-                -- Some mobile executors do not expose isnetworkowner/GetNetworkOwner.
-                -- Do NOT treat nil as ownership. Instead, after Farm physically reaches
-                -- this mob, perform exactly one test move and then stop rewriting it
-                -- while the server has time to snap the root back.
+            else
                 local verifiedAt = VerifiedGatherRoots[root]
                 if verifiedAt and atAnchor then
-                    -- It already passed the persistence proof. Keep the batch pinned.
-                    local ok = pcall(function()
-                        local rot = root.CFrame.Rotation
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        root.CFrame = CFrame.new(anchor) * rot
-                    end)
-                    if ok then
-                        VerifiedGatherRoots[root] = now
-                        moved = moved + 1
-                    end
+                    -- A previously proven remote pull is still physically resident in
+                    -- the pocket. Keep unknown-owner roots pinned; explicit-false roots
+                    -- are refreshed by proof/retry rather than being called owned.
+                    if own == nil then pcall(writeToAnchor, model, root) end
+                    VerifiedGatherRoots[root] = now
+                    moved = moved + 1
                 else
                     if verifiedAt and not atAnchor then
                         VerifiedGatherRoots[root] = nil
@@ -4120,44 +4596,42 @@ function ClusterFarmController:RestackBatch()
 
                     local proof = self.PositionProof[root]
                     if proof then
-                        if not atAnchor then
-                            -- Server rejected/snapped the test move. Re-acquire later.
-                            self.PositionProof[root] = nil
-                            VerifiedGatherRoots[root] = nil
-                        else
+                        if atAnchor then
                             proof.Checks = (proof.Checks or 0) + 1
                             if now - (proof.StartedAt or now) >= proofTime
                                 and proof.Checks >= proofChecks then
+                                -- The mob stayed at the shared anchor across multiple
+                                -- Heartbeats. This is the server-persistence proof used
+                                -- before group attack eligibility.
                                 VerifiedGatherRoots[root] = now
                                 self.PositionProof[root] = nil
+                                self.RemotePullRetryAt[root] = nil
                                 moved = moved + 1
                             end
-                        end
-                    else
-                        local nearPlayer = me and okPos and IsValidPos(rootPos)
-                            and (rootPos - me.Position).Magnitude <= touchRadius
-                        if nearPlayer then
-                            local ok = pcall(function()
-                                local rot = root.CFrame.Rotation
-                                root.AssemblyLinearVelocity = Vector3.zero
-                                root.AssemblyAngularVelocity = Vector3.zero
-                                root.CFrame = CFrame.new(anchor) * rot
-                            end)
-                            if ok then
-                                self.PositionProof[root] = {
-                                    StartedAt = now,
-                                    Checks = 0,
-                                }
-                            end
+                        elseif now - (proof.StartedAt or now) >= 0.06 then
+                            -- Server snapped it back: revoke the local test and retry
+                            -- later. Do not mark a visual-only ghost as stacked.
+                            self.PositionProof[root] = nil
+                            VerifiedGatherRoots[root] = nil
+                            self.RemotePullRetryAt[root] = now + remoteRetry
                         end
                     end
-                end
 
-            else
-                -- A reliable ownership API explicitly says this root is not ours.
-                -- Never create a local-only dummy; acquisition travel will approach it.
-                VerifiedGatherRoots[root] = nil
-                self.PositionProof[root] = nil
+                    -- v21.13 core behavior: remote test from ANY distance. There is no
+                    -- nearPlayer/touch-radius gate here. This is what restores the
+                    -- 'stand at the anchor and mobs collapse into one spot' feel.
+                    if not self.PositionProof[root]
+                        and now >= (self.RemotePullRetryAt[root] or 0) then
+                        if writeToAnchor(model, root) then
+                            self.PositionProof[root] = {
+                                StartedAt = now,
+                                Checks = 0,
+                                OwnerState = own,
+                            }
+                        end
+                        self.RemotePullRetryAt[root] = now + remoteRetry
+                    end
+                end
             end
         end
     end
@@ -4904,15 +5378,42 @@ function TravelManager:Request(targetCF, owner, options)
             end
 
 
-            -- Movement with deceleration
+            -- v21.13: preserve v21.8 horizontal approach exactly; only accelerate
+            -- the final vertical combat-hover descent. No cluster/root state is touched.
             self.AtCombatAnchor = false
             self.AtCombatTarget = nil
-            local direction = (targetPos - currentPos).Unit
+            local delta = targetPos - currentPos
+            local direction = delta.Unit
             local speed = flySpeed
-            if dist < 60 then speed = speed * math.max(dist / 60, 0.15) end
+            local decelDistance = math.max(8, tonumber(_G.Settings.NearMoveDecelDistance) or 18)
+            if dist < decelDistance then
+                local minNear = math.min(speed, tonumber(_G.Settings.NearMoveMinSpeed) or 110)
+                speed = math.max(minNear, speed * (dist / decelDistance))
+            end
 
+            local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
+            local horizontalDist = horizontalDelta.Magnitude
+            local fastDescend = _G.Settings.FastDescendEnabled ~= false
+                and isCombatHover
+                and delta.Y < -(tonumber(_G.Settings.FastDescendMinGap) or 7)
+                and horizontalDist <= (tonumber(_G.Settings.FastDescendRadius) or 70)
 
-            bv.Velocity = direction * speed
+            if fastDescend then
+                local horizontalVelocity = Vector3.zero
+                if horizontalDist > 0.05 then
+                    local factor = math.clamp(
+                        tonumber(_G.Settings.FastDescendHorizontalFactor) or 0.82, 0, 1)
+                    horizontalVelocity = horizontalDelta.Unit * (speed * factor)
+                end
+                local descendCap = math.max(speed,
+                    tonumber(_G.Settings.FastDescendSpeed) or 380)
+                local safeDt = math.max(stepDt, 1 / 60)
+                local ySpeed = math.min(descendCap, math.abs(delta.Y) / safeDt)
+                bv.Velocity = Vector3.new(
+                    horizontalVelocity.X, -ySpeed, horizontalVelocity.Z)
+            else
+                bv.Velocity = direction * speed
+            end
             local face = combatLookPos or targetPos
             local flatFace = Vector3.new(face.X, currentPos.Y, face.Z)
             if (flatFace - currentPos).Magnitude > 0.05 then
@@ -4978,29 +5479,93 @@ function TravelManager:Request(targetCF, owner, options)
 end
 
 
--- Haki is enabled once for each character lifetime.  Re-sending `Buso`
--- repeatedly can act like a toggle on some builds, so never run it from a
--- heartbeat/watchdog; reset and re-enable only after CharacterAdded.
+-- v21.13 SILENT ALWAYS-ON ARMAMENT HAKI. Never call Buso blindly.
 local HakiController = {
     Character = nil,
     Enabled = false,
+    ArmamentObservable = false,
+    LastBusoRequest = 0,
+    PendingBusoAt = 0,
+    KenSent = false,
 }
 
 function HakiController:Reset()
     self.Character = nil
     self.Enabled = false
+    self.ArmamentObservable = false
+    self.LastBusoRequest = 0
+    self.PendingBusoAt = 0
+    self.KenSent = false
+end
+
+function HakiController:ReadArmamentState(character)
+    if not character then return nil, false end
+    local marker = character:FindFirstChild("HasBuso")
+    if marker then
+        if marker:IsA("BoolValue") then
+            return marker.Value == true, true
+        elseif marker:IsA("IntValue") or marker:IsA("NumberValue") then
+            return tonumber(marker.Value) ~= 0, true
+        end
+        return true, true
+    end
+    local okAttr, attr = pcall(function() return character:GetAttribute("HasBuso") end)
+    if okAttr and type(attr) == "boolean" then return attr, true end
+    return nil, false
 end
 
 function HakiController:EnableForCharacter()
     local character = Char()
     if not character or not IsAlive() then return false end
-    if self.Character == character and self.Enabled then return true end
-    self.Character = character
-    self.Enabled = false
+
+    if self.Character ~= character then
+        self.Character = character
+        self.Enabled = false
+        self.ArmamentObservable = false
+        self.LastBusoRequest = 0
+        self.PendingBusoAt = 0
+        self.KenSent = false
+    end
+
+    local active, observableNow = self:ReadArmamentState(character)
+    if observableNow then self.ArmamentObservable = true end
+    if active == true then
+        self.Enabled = true
+        self.PendingBusoAt = 0
+        if not self.KenSent then
+            self.KenSent = true
+            pcall(function() CommF_:InvokeServer("Ken", true) end)
+        end
+        return true
+    end
+
+    if self.ArmamentObservable then
+        self.Enabled = false
+    elseif self.Enabled then
+        return true
+    end
+
+    local now = tick()
+    local grace = math.max(0.20, tonumber(_G.Settings.ArmamentConfirmGrace) or 0.80)
+    local cooldown = math.max(0.20, tonumber(_G.Settings.ArmamentRetryCooldown) or 0.45)
+    if self.PendingBusoAt > 0 and now - self.PendingBusoAt < grace then return false end
+    if now - (self.LastBusoRequest or 0) < cooldown then return false end
+
+    self.LastBusoRequest = now
+    self.PendingBusoAt = now
     local okBuso = pcall(function() CommF_:InvokeServer("Buso", true) end)
-    pcall(function() CommF_:InvokeServer("Ken", true) end)
-    self.Enabled = okBuso
+    if not self.ArmamentObservable and okBuso then self.Enabled = true end
+
+    if not self.KenSent then
+        self.KenSent = true
+        pcall(function() CommF_:InvokeServer("Ken", true) end)
+    end
     return okBuso
+end
+
+function HakiController:WatchTick()
+    if not IsAlive() then return false end
+    return self:EnableForCharacter()
 end
 
 -- v20.1 core ability purchases. These are baseline movement/haki abilities used
@@ -5830,6 +6395,7 @@ function SkipRouteController:Run()
                     or _G.Settings.FarmArrivalThreshold,
                 fallback = hoverCF or route.Fallback,
                 combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
             })
         end
 
@@ -5847,49 +6413,28 @@ function SkipRouteController:Run()
                 arrivalThreshold = _G.Settings.FarmArrivalThreshold,
                 fallback = route.Fallback,
                 combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
                 persistent = true,
             })
         end
 
     else
-        -- Tick() normally populates LastBatch immediately. Keep a direct live-mob
-        -- fallback for replication gaps so SKIP cannot become an anchor-only wait.
-        local nearest, nearestName = self:FindTarget(route)
-        local nearestRoot = nearest and nearest:FindFirstChild("HumanoidRootPart")
-
-        if nearest and nearestRoot and _G.State:IsTargetValid(nearest) then
-            _G.State.FState = "SKIP_FARM"
-            _G.State.FarmTarget = nearest
-            _G.State.CurrentTarget = nearest
-            target = nearest
-            targetRoot = nearestRoot
-            acquiring = true
-            PrepareCombatTarget(nearest)
-
-            if _G.State:CanRequestTravel() then
-                TravelManager:Request(nearestRoot, "Farm", {
-                    arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
-                        or _G.Settings.FarmArrivalThreshold,
-                    fallback = hoverCF or route.Fallback,
-                    combatHover = true,
-                })
-            end
-            _G.BobonStatus = "Skip: Acquiring " .. tostring(nearestName or route.Display)
-        else
-            -- No live mob exists yet. Waiting at the real floor anchor is correct.
-            _G.State.FarmTarget = nil
-            _G.State.CurrentTarget = nil
-            if hoverCF and _G.State:CanRequestTravel() then
-                TravelManager:Request(hoverCF, "Farm", {
-                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                    fallback = route.Fallback,
-                    combatHover = true,
-                    persistent = true,
-                })
-            end
-            _G.BobonStatus = "Skip: Waiting for " .. tostring(route.Display) .. " spawn"
-            return true
+        -- v21.13: no immediate nearest-mob chase here. RestackBatch gets the first
+        -- chance to remote-pull the whole floor; GetAcquireTarget becomes the single
+        -- bounded fallback only if zero mobs can be proven at the anchor.
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        if hoverCF and _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                fallback = route.Fallback,
+                combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
+                persistent = true,
+            })
         end
+        _G.BobonStatus = "Skip: Remote gathering " .. tostring(route.Display)
+        return true
     end
 
     -- HYBRID ATTACK: while acquiring, damage the exact real floor mob as soon as
@@ -10079,8 +10624,11 @@ task.spawn(function()
                     end
                 end
             else
-                -- Give the anchor a short ownership-acquisition window before
-                -- chasing a spawn. The anchor itself is never released here.
+                -- v21.13 REMOTE-MAGNET FIRST: stay on the shared hover anchor.
+                -- GetAcquireTarget is now the ONLY physical-acquisition fallback, and
+                -- it activates only after the remote-pull grace with zero verified mobs.
+                -- This removes the second independent path that used to chase a spawn
+                -- even while the remote magnet was still trying to collapse the batch.
                 if hoverCF and _G.State:CanRequestTravel() then
                     TravelManager:Request(hoverCF, "Farm", {
                         arrivalThreshold = _G.Settings.FarmArrivalThreshold,
@@ -10088,24 +10636,6 @@ task.spawn(function()
                         combatHover = true,
                         persistent = true,
                     })
-                end
-                if tick() - (_G.State.ClusterActivatedAt or 0)
-                    > (_G.Settings.ClusterAcquireGrace or 1.75) then
-                    local mob, dist = FindNearestMob(questMobName)
-                    if mob and mob:FindFirstChild("HumanoidRootPart") then
-                        _G.State.FarmTarget = mob
-                        _G.State.CurrentTarget = mob
-                        PrepareCombatTarget(mob)
-                        if (_G.State.ClusterLastMoved or 0) == 0
-                            and dist <= QuestChaseLimit()
-                            and _G.State:CanRequestTravel() then
-                            TravelManager:Request(mob.HumanoidRootPart, "Farm", {
-                                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-                                fallback = hoverCF or q.MC,
-                                combatHover = true,
-                            })
-                        end
-                    end
                 end
             end
 
@@ -10212,11 +10742,8 @@ task.spawn(function()
         DLog("TEAM", "Verified team: " .. LP.Team.Name)
     end
     task.wait(0.5)
-    if HakiController:EnableForCharacter() then
-        _G.BobonStatus = "Haki: ON ✓"
-    else
-        _G.BobonStatus = "Haki: Waiting for character"
-    end
+    -- Silent: never overwrite farm/skip/boss Status with Haki text.
+    pcall(function() HakiController:EnableForCharacter() end)
     task.wait(0.5)
     _G.State:SetMode("Idle")
 end)
@@ -10228,6 +10755,15 @@ end)
 --   pcall wrap mọi remote, lỗi không ảnh hưởng main loop
 -- ══════════════════════════════════════════════════════════════════
 
+
+-- Silent Armament keeper. Polling is cheap; Buso itself is sent only after
+-- ReadArmamentState reports OFF and cooldown/grace permits it.
+task.spawn(function()
+    while SessionAlive() do
+        task.wait(_G.Settings.ArmamentWatchInterval or 0.15)
+        pcall(function() HakiController:WatchTick() end)
+    end
+end)
 
 -- Core ability purchase probe (non-blocking, throttled).
 task.spawn(function()
@@ -10322,7 +10858,13 @@ local function HookMob(mob)
             -- Count only a mob this kaitun was actively tracking. The old hook
             -- incremented for every NPC death in workspace.Enemies, including
             -- kills made by other players elsewhere in the server.
-            if _G.State.FarmTarget == mob or _G.State.CurrentTarget == mob then
+            local tracked = _G.State.FarmTarget == mob or _G.State.CurrentTarget == mob
+            local touchedAt = CombatController.RecentTargets
+                and CombatController.RecentTargets[mob] or nil
+            local recentlyDispatched = touchedAt
+                and tick() - touchedAt <= 3.0
+            if (tracked or recentlyDispatched)
+                and not DamageAttributedToOtherPlayer(mob, h) then
                 _G.State.KillCount = _G.State.KillCount + 1
             end
         end)
@@ -10378,10 +10920,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.7] Full Script Loaded Successfully!")
-print("[BobonHub v21.7] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.7] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.7] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.7] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.7] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.7] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.17] Full Script Loaded Successfully!")
+print("[BobonHub v21.17] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.17] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.17] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.17] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.17] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.17] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
