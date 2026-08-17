@@ -1,7 +1,23 @@
 -- =================================================================
---         BOBON HUB v21.14 REMOTE MAGNET + COMBAT STALL FIX | FAST DESCEND | HAKI HOLD
+--         BOBON HUB v21.15 TRUE CLUSTER MULTI-HIT | REMOTE MAGNET | FAST DESCEND | HAKI HOLD
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.13 REMOTE MAGNET RESTORE | Version: v21.14
+--         Base: v21.14 REMOTE MAGNET + COMBAT STALL FIX | Version: v21.15
+--
+--  v21.15 TRUE CLUSTER MULTI-HIT FIX (video Roblox(7).mp4):
+--  [MH-1] Preserve v21.13/v21.14 remote magnet byte-for-byte: STACK xN positioning
+--         is not changed by this patch.
+--  [MH-2] Cluster melee dispatch now prefers the canonical ONE-SWING / ONE-BATCH
+--         RegisterAttack + RegisterHit(BasePart, {{Model,Head},...}) shape.
+--         The previous TOKEN-4 loop consumed one registered swing across several
+--         separate RegisterHit calls, which could leave only the first mob damaged.
+--  [MH-3] TOKEN-4 keeps its single-target token path, but when 2+ verified cluster
+--         targets are present it uses the same batched hit-list shape first.
+--  [MH-4] Native helper fan-out now also receives Head-based batch entries, matching
+--         the live RegisterHit target layout instead of mixed limb-first parts.
+--  [MH-5] While a real 2+ stack is active, LEGACY-2 batch is preferred over a
+--         previously verified TOKEN-4 single-target route. If batch HP proof fails,
+--         the existing verifier/failure cooldown rotates normally.
+--  [MH-6] No movement, gather, anchor, Haki, UI, quest or progression behavior changed.
 --
 --  v21.14 COMBAT STALL FIX (video Roblox(6).mp4):
 --  [CS-1] Preserve v21.13 remote magnet: the video proves found 3/4, owned 0,
@@ -464,7 +480,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.14 REMOTE MAGNET + COMBAT STALL FIX + FAST DESCEND + HAKI HOLD] Loading...")
+print("[BobonHub v21.15 TRUE CLUSTER MULTI-HIT + REMOTE MAGNET + FAST DESCEND + HAKI HOLD] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -657,6 +673,10 @@ _G.Settings = {
     CombatClusterAggregateProof = true,
     CombatClusterAggregateProofDelay = 0.12,
     CombatClusterAggregateLateDelay = 0.30,
+    -- v21.15: true multi-target cluster attack prefers one canonical batched
+    -- RegisterHit payload instead of several single-target hits on one swing.
+    ClusterPreferBatchHit = true,
+    ClusterBatchMinTargets = 2,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -1337,7 +1357,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.14", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.15", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -2827,26 +2847,59 @@ function CombatController:BackendAvailable(name)
 end
 
 function CombatController:SelectBackend(now)
+    local airFarm = IsAirFarmCombat()
+    local stackedCount = tonumber(_G.BobonDiagnostics
+        and _G.BobonDiagnostics.BringMoved) or 0
+    local clusterBatch = airFarm
+        and _G.Settings.ClusterPreferBatchHit ~= false
+        and _G.State and _G.State.ClusterMode ~= "OFF"
+        and stackedCount >= (_G.Settings.ClusterBatchMinTargets or 2)
+
     if self.PendingBackend then
-        local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
-        local provenAirRemote = IsAirFarmCombat()
-            and not IsClientInputBackend(self.PendingBackend)
-            and self.VerifiedBackend == self.PendingBackend
-            and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
-        if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
-            and not provenAirRemote then
-            return nil
-        end
-        -- A stale client-input probe must never pull an active farm cluster down.
-        if IsAirFarmCombat() and IsClientInputBackend(self.PendingBackend) then
-            self:AbortPending("AIR-FARM-REMOTE-ONLY")
+        -- v21.15: if TOKEN-4 was proving one target and a real multi-stack becomes
+        -- available, switch to the canonical batched RegisterHit route instead of
+        -- keeping the old single-target swing alive forever.
+        if clusterBatch and self.PendingBackend == "TOKEN-4"
+            and self:BackendAvailable("LEGACY-2") then
+            self:AbortPending("CLUSTER-BATCH-UPGRADE")
         else
-            return self.PendingBackend
+            local pendingProofs = self.BackendProofs[self.PendingBackend] or 0
+            local provenAirRemote = airFarm
+                and not IsClientInputBackend(self.PendingBackend)
+                and self.VerifiedBackend == self.PendingBackend
+                and pendingProofs >= (_G.Settings.CombatProofsRequired or 2)
+            if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3)
+                and not provenAirRemote then
+                return nil
+            end
+            -- A stale client-input probe must never pull an active farm cluster down.
+            if airFarm and IsClientInputBackend(self.PendingBackend) then
+                self:AbortPending("AIR-FARM-REMOTE-ONLY")
+            else
+                return self.PendingBackend
+            end
         end
     end
     if now < self.NextProbeAt then return nil end
 
-    local airFarm = IsAirFarmCombat()
+    -- For a real 2+ mob stack, prefer the current public batched hit shape.
+    -- Do this BEFORE returning a previously verified TOKEN-4 route because TOKEN-4
+    -- may be perfectly valid for one target while still consuming only one target
+    -- from a registered swing when called repeatedly.
+    if clusterBatch then
+        if self.VerifiedBackend == "LEGACY-2"
+            and self:BackendAvailable("LEGACY-2") then
+            return "LEGACY-2"
+        end
+        if self:BackendAvailable("LEGACY-2") then
+            return "LEGACY-2"
+        end
+        if self.VerifiedBackend == "CLIENT-HELPER"
+            and self:BackendAvailable("CLIENT-HELPER") then
+            return "CLIENT-HELPER"
+        end
+    end
+
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
@@ -2854,10 +2907,11 @@ function CombatController:SelectBackend(now)
     end
 
     -- During farm/skip/raid only long-range helper/token/legacy paths are valid.
-    -- This is the key Teddy-style behavior: remain above the stack and hit it
-    -- remotely instead of dipping into physical M1 range.
     if airFarm then
-        for _, name in ipairs({"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}) do
+        local order = clusterBatch
+            and {"LEGACY-2", "CLIENT-HELPER", "TOKEN-4"}
+            or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}
+        for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
         end
         return nil
@@ -2951,25 +3005,48 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     elseif backend == "CLIENT-HELPER" then
         local helper = self:ResolveNativeHelper()
         local hitList = {}
+        local basePart = nil
         for _, entry in ipairs(entries) do
-            hitList[#hitList + 1] = { entry.Model, entry.Part }
+            local part = entry.Model:FindFirstChild("Head") or entry.Part
+            if part and part:IsA("BasePart") then
+                hitList[#hitList + 1] = { entry.Model, part }
+                basePart = basePart or part
+            end
         end
+        if not basePart or #hitList == 0 then return false end
         pcall(function() self.RegisterAttack:FireServer(0) end)
-        local hitOk = pcall(function() helper(entries[1].Part, hitList) end)
+        local hitOk = pcall(function() helper(basePart, hitList) end)
         return hitOk
     elseif backend == "TOKEN-4" then
         local token = self:ResolveSessionToken()
-        local hitOk = false
-        -- One attack registration describes one swing; every stacked target then
-        -- receives a hit in that same batch. This matters for six-Zombie Swamp.
-        pcall(function() self.RegisterAttack:FireServer(0.5) end)
-        for _, entry in ipairs(entries) do
-            local ok = pcall(function()
-                self.RegisterHit:FireServer(entry.Part, {}, nil, token)
+
+        -- v21.15 TRUE CLUSTER FAN-OUT:
+        -- A RegisterAttack describes ONE swing. Sending several independent
+        -- RegisterHit calls after it can make the server consume only the first.
+        -- When a verified stack has 2+ targets, send ONE batched hit list exactly
+        -- like the native/public melee route. Keep TOKEN-4 only for a genuine
+        -- single-target hit.
+        if #entries >= (_G.Settings.ClusterBatchMinTargets or 2) then
+            local hitList = {}
+            local basePart = nil
+            for _, entry in ipairs(entries) do
+                local part = entry.Model:FindFirstChild("Head") or entry.Part
+                if part and part:IsA("BasePart") then
+                    hitList[#hitList + 1] = { entry.Model, part }
+                    basePart = basePart or part
+                end
+            end
+            if not basePart or #hitList == 0 then return false end
+            pcall(function() self.RegisterAttack:FireServer(0) end)
+            return pcall(function()
+                self.RegisterHit:FireServer(basePart, hitList)
             end)
-            hitOk = hitOk or ok
         end
-        return hitOk
+
+        pcall(function() self.RegisterAttack:FireServer(0.5) end)
+        return pcall(function()
+            self.RegisterHit:FireServer(entries[1].Part, {}, nil, token)
+        end)
     elseif backend == "LEGACY-2" then
         -- Current public clients commonly use Head as the 2-argument hit part.
         -- Keep entry.Part as fallback for rigs without Head.
@@ -3222,8 +3299,11 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
                 checkAggregateProof)
         end
 
+        local batchSuffix = (#dispatchEntries > 1)
+            and (" x" .. tostring(#dispatchEntries)) or ""
         diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
-            and ("AIR-ATTACK:" .. backend) or ("ATTEMPT:" .. backend)
+            and ("AIR-ATTACK:" .. backend .. batchSuffix)
+            or ("ATTEMPT:" .. backend .. batchSuffix)
     else
         self:FailBackend(backend, "DISPATCH-ERROR")
         diag.Packet = "ERROR:" .. backend
@@ -10662,10 +10742,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.14] Full Script Loaded Successfully!")
-print("[BobonHub v21.14] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.14] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.14] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.14] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.14] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.14] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.15] Full Script Loaded Successfully!")
+print("[BobonHub v21.15] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.15] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.15] Modules: QuestFarm | Video Sweep Gather | Teddy Air Combat | TRUE ALL-MOB Sweep | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.15] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.15] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.15] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
