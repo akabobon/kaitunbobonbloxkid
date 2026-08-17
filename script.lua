@@ -400,21 +400,22 @@ _G.Settings = {
     -- [A-8] DEBUG log: true = in [TAG] log ra console (không spam khi false)
     DEBUG               = false,
     Team                = "Pirates",
-    -- Safe hover for verified fast attack. Before fast damage is confirmed,
-    -- the controller temporarily uses ClientHoverHeight for a genuine M1.
-    FarmHeight          = 15,
-    BossFarmHeight      = 24,
-    -- Only the real-click fallback descends this low. Verified fast attack
-    -- remains at FarmHeight/BossFarmHeight, safely outside ordinary NPC M1.
-    ClientHoverHeight   = 6.5,
-    -- v19.2: client-input fallback is allowed to dip only briefly. If HP drops,
-    -- keep the same farm/action/cluster but rise out of NPC melee range until safe.
-    ClientDipHold       = 0.22,
-    ClientRetreatDelay  = 0.55,
-    EmergencyHoverHeight = 28,
-    EmergencyHealthPercent = 55,
-    EmergencyResumePercent = 82,
-    EmergencyMinHold    = 2.5,
+    -- v19.3 Teddy-style air farm: player never descends into ordinary M1 range.
+    -- Quest/skip/raid farming stays parked above the persistent cluster while
+    -- helper/token/legacy fast-hit backends damage the whole stacked batch.
+    FarmHeight          = 22,
+    BossFarmHeight      = 28,
+    -- Compatibility value only. Air-farm code never intentionally requests a
+    -- lower client-click height; keeping it equal prevents accidental dipping.
+    ClientHoverHeight   = 22,
+    ClientDipHold       = 0,
+    ClientRetreatDelay  = 0,
+    EmergencyHoverHeight = 22,
+    EmergencyHealthPercent = 35,
+    EmergencyResumePercent = 60,
+    EmergencyMinHold    = 0,
+    RemoteOnlyFarmCombat = true,
+    RemoteProbeAllCluster = true,
     FarmOffsetX         = 1.5,
     -- Retained for compatibility only; enemy roots are no longer resized.
     HitboxSize          = 0,
@@ -441,10 +442,10 @@ _G.Settings = {
     AttackRange         = 100,
     FastAttackRange     = 100,
     ClientAttackRange   = 8,
-    FastAttackMaxTargets= 32,
-    CombatProbeTimeout  = 1.2,
+    FastAttackMaxTargets= 64,
+    CombatProbeTimeout  = 0.9,
     CombatProbeAttempts = 3,
-    CombatBackendRetry  = 12,
+    CombatBackendRetry  = 4,
     CombatFastUpgradeInterval = 90,
     CombatVerifiedMissLimit = 8,
     CombatVerifiedRetry = 0.25,
@@ -453,7 +454,7 @@ _G.Settings = {
     -- A previously verified backend is re-probed after a quiet period, but
     -- ordinary island travel must not invalidate it every few seconds.
     CombatVerificationTTL= 120,
-    CombatBaselineQuiet = 0.25,
+    CombatBaselineQuiet = 0.10,
     CombatRepeatProofGap= 0.9,
     CombatCausalWindow  = 0.65,
     IgnoreIncomingDamage= true,
@@ -517,14 +518,14 @@ _G.Settings = {
     ClusterAcquireGrace = 0.75,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
-    ClusterAttackMaxTargets = 32,
+    ClusterAttackMaxTargets = 64,
     -- v19.0 smart fragment raid (core-only; not exposed in external Configs).
     AutoFragmentRaid     = true,
     RaidPreferredNames   = {"Flame","Dark","Ice","Sand","Smoke"},
     RaidGatherRadius     = 700,
     RaidTravelSpeed      = 300,
     RaidHoverHeight      = 22,
-    RaidFastAttackMaxTargets = 16,
+    RaidFastAttackMaxTargets = 32,
     RaidRunTimeout       = 900,
     RaidNoChipRetry      = 90,
     RaidFragmentDemandTTL= 120,
@@ -1847,6 +1848,17 @@ local function IsClientInputBackend(name)
         or name == "CLIENT-TOOL"
 end
 
+-- Teddy-style farm policy: level/skip/raid combat must remain airborne.
+-- Client mouse/tool fallbacks require physical weapon range, so they are never
+-- selected while a persistent farm cluster is active. Boss/item controllers
+-- outside farming may still use the old client fallback if no fast backend exists.
+local function IsAirFarmCombat()
+    local state = _G.State
+    if not state or not (_G.Settings and _G.Settings.RemoteOnlyFarmCombat) then return false end
+    return state.ClusterMode ~= nil and state.ClusterMode ~= "OFF"
+        or state.Mode == "Farming" or state.Mode == "Raiding"
+end
+
 -- v18.5 CONTEST FARM: a quest target is sticky while another player is
 -- actively near/tagging it. This only affects the current level-quest mob;
 -- bosses and unrelated NPCs are never treated as contested farm targets.
@@ -2360,28 +2372,32 @@ function CombatController:SelectBackend(now)
         if self.PendingAttempts >= (_G.Settings.CombatProbeAttempts or 3) then
             return nil
         end
-        return self.PendingBackend
+        -- A stale client-input probe must never pull an active farm cluster down.
+        if IsAirFarmCombat() and IsClientInputBackend(self.PendingBackend) then
+            self:AbortPending("AIR-FARM-REMOTE-ONLY")
+        else
+            return self.PendingBackend
+        end
     end
     if now < self.NextProbeAt then return nil end
 
-    -- A verified real-click backend is fine for one mob, but it cannot fan out
-    -- to a whole cluster. Whenever 2+ mobs are in the magnet, immediately prefer
-    -- helper/token/legacy fast paths instead of waiting the old 90-second upgrade.
-    local clusterNeedsFanout = _G.State and _G.State.ClusterMode ~= "OFF"
-        and (tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates) or 0) >= 2
+    local airFarm = IsAirFarmCombat()
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
-        if not IsClientInputBackend(self.VerifiedBackend) then
-            return self.VerifiedBackend
-        elseif not clusterNeedsFanout and now < self.NextFastUpgrade then
+        if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
         end
     end
 
-    if clusterNeedsFanout then
+    -- During farm/skip/raid only long-range helper/token/legacy paths are valid.
+    -- This is the key Teddy-style behavior: remain above the stack and hit it
+    -- remotely instead of dipping into physical M1 range.
+    if airFarm then
         for _, name in ipairs({"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"}) do
             if self:BackendAvailable(name) then return name end
         end
+        return nil
     end
+
     for _, name in ipairs({
         "CLIENT-HELPER", "TOKEN-4", "LEGACY-2",
         "CLIENT-MOUSE", "CLIENT-VIM", "CLIENT-TOOL",
@@ -2408,6 +2424,7 @@ function CombatController:IsDamageReady()
 end
 
 function CombatController:WantsClientRange()
+    if IsAirFarmCombat() then return false end
     if FarmSafetyActive() then return false end
     if tick() < (self.ClientRetreatUntil or 0) then return false end
     return self.DesiredClientRange == true
@@ -2457,6 +2474,7 @@ end
 function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     if #entries == 0 then return false end
     if IsClientInputBackend(backend) then
+        if IsAirFarmCombat() then return false end
         local ok = self:DispatchClientClick(tool, preferredRoot, backend)
         if ok then
             -- Do not park at melee height waiting for the next M1. One click gets
@@ -2521,12 +2539,16 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     -- Choose the desired physical range before dispatching. Fast/helper
     -- probes stay at safe hover; only an actual client-input backend asks the
     -- travel controller to descend into real melee/sword range.
+    local airFarm = IsAirFarmCombat()
     local candidateBackend = kind == "Gun" and "GUN-REMOTE"
         or self.PendingBackend or self:SelectBackend(now)
-    self.DesiredClientRange = IsClientInputBackend(candidateBackend)
-        or (not candidateBackend and IsClientInputBackend(self.VerifiedBackend))
+    if airFarm and IsClientInputBackend(candidateBackend) then
+        candidateBackend = self:SelectBackend(now)
+    end
+    self.DesiredClientRange = (not airFarm) and (IsClientInputBackend(candidateBackend)
+        or (not candidateBackend and IsClientInputBackend(self.VerifiedBackend))) or false
     if not candidateBackend then
-        _G.BobonDiagnostics.Packet = "WAIT-BACKEND"
+        _G.BobonDiagnostics.Packet = airFarm and "WAIT-FAST-REMOTE" or "WAIT-BACKEND"
         return false
     end
     local candidateInputBackend = IsClientInputBackend(candidateBackend)
@@ -2612,13 +2634,18 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     self:CheckPending(now)
     local backend = kind == "Gun" and "GUN-REMOTE" or self:SelectBackend(now)
     if not backend then
-        self.DesiredClientRange = IsClientInputBackend(self.PendingBackend)
-            or IsClientInputBackend(self.VerifiedBackend)
-        _G.BobonDiagnostics.Packet = "WAIT-HP"
+        self.DesiredClientRange = false
+        _G.BobonDiagnostics.Packet = airFarm and "WAIT-FAST-REMOTE" or "WAIT-HP"
         return false
     end
     local inputBackend = IsClientInputBackend(backend)
-    self.DesiredClientRange = inputBackend
+    if airFarm and inputBackend then
+        self:AbortPending("AIR-FARM-REMOTE-ONLY")
+        self.DesiredClientRange = false
+        _G.BobonDiagnostics.Packet = "WAIT-FAST-REMOTE"
+        return false
+    end
+    self.DesiredClientRange = (not airFarm) and inputBackend or false
     -- SelectBackend can change after CheckPending. Revalidate only the
     -- physical client-input path; verified remote/helper attacks do not need
     -- Tool.Enabled to remain true during an incoming hit animation.
@@ -2667,14 +2694,14 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingSettleUntil = 0
         self.PendingAttempts = 0
     end
-    -- Probe only the watched primary. Once that backend has produced real HP
-    -- deltas, helper/remote backends may fan out to the matching cluster.
+    -- v19.3: the whole stacked batch is dispatched even while the remote backend
+    -- is being health-verified. Verification still watches the primary HP delta,
+    -- but the other stacked mobs no longer wait for that primary to die first.
     local dispatchEntries = entries
     local clusterFanout = _G.State and _G.State.ClusterMode ~= "OFF"
         and not IsClientInputBackend(backend)
-        and self.VerifiedBackend == backend
-        and self:IsDamageReady()
-    if not clusterFanout and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
+    if not (clusterFanout and (_G.Settings.RemoteProbeAllCluster ~= false))
+        and (self.VerifiedBackend ~= backend or not self:IsFastReady()) then
         dispatchEntries = { entries[1] }
     end
     local attempted = self:Dispatch(backend, tool, dispatchEntries, preferredRoot)
@@ -2685,7 +2712,8 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         self.PendingAttempts = self.PendingAttempts + 1
         self.PendingLastDispatch = now
         self.PendingSettleUntil = 0
-        diag.Packet = "ATTEMPT:" .. backend
+        diag.Packet = (IsAirFarmCombat() and not IsClientInputBackend(backend))
+            and ("AIR-ATTACK:" .. backend) or ("ATTEMPT:" .. backend)
     else
         self:FailBackend(backend, "DISPATCH-ERROR")
         diag.Packet = "ERROR:" .. backend
@@ -4145,18 +4173,17 @@ function TravelManager:Request(targetCF, owner, options)
                     local model = self.TargetRef:IsA("Model") and self.TargetRef
                         or self.TargetRef:FindFirstAncestorOfClass("Model")
                     local hoverHeight = travelOptions.hoverHeight
-                    if FarmSafetyActive() then
+                    if owner == "Farm" or owner == "Raid" or IsAirFarmCombat() then
+                        hoverHeight = owner == "Raid"
+                            and (_G.Settings.RaidHoverHeight or _G.Settings.FarmHeight or 22)
+                            or (_G.Settings.FarmHeight or 22)
+                    elseif FarmSafetyActive() then
                         hoverHeight = math.max(tonumber(hoverHeight) or 0,
-                            _G.Settings.EmergencyHoverHeight or 28)
+                            _G.Settings.EmergencyHoverHeight or 22)
                     elseif not hoverHeight then
-                        if CombatController:IsFastReady()
-                            or not CombatController:WantsClientRange() then
-                            hoverHeight = owner == "Farm"
-                                and (_G.Settings.FarmHeight or 15)
-                                or (_G.Settings.BossFarmHeight or 24)
-                        else
-                            hoverHeight = _G.Settings.ClientHoverHeight or 6.5
-                        end
+                        hoverHeight = CombatController:WantsClientRange()
+                            and (_G.Settings.ClientHoverHeight or 22)
+                            or (_G.Settings.BossFarmHeight or 28)
                     end
                     -- Never change hover height because player health fell.
                     -- PvP damage is ignored; NPC skills are handled only by
@@ -5204,10 +5231,7 @@ function SkipRouteController:Run()
     ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
     ClusterFarmController:Tick()
 
-    local hoverHeight = (CombatController:IsFastReady()
-        or not CombatController:WantsClientRange())
-        and (_G.Settings.FarmHeight or 15)
-        or (_G.Settings.ClientHoverHeight or 5)
+    local hoverHeight = _G.Settings.FarmHeight or 22
     local hoverCF = ClusterFarmController:GetHoverCFrame(hoverHeight)
     if hoverCF and _G.State:CanRequestTravel() then
         TravelManager:Request(hoverCF, "Farm", {
@@ -8090,10 +8114,7 @@ task.spawn(function()
             ClusterFarmController:Activate("QUEST", {questMobName}, q.MC, "Farm")
             ClusterFarmController:Tick()
 
-            local anchorHeight = (CombatController:IsFastReady()
-                or not CombatController:WantsClientRange())
-                and (_G.Settings.FarmHeight or 15)
-                or (_G.Settings.ClientHoverHeight or 5)
+            local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
 
             -- VERIFY/PROMOTE: first prefer a verified mob already stacked at the
