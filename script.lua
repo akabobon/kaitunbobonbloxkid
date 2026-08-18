@@ -1,7 +1,21 @@
 -- =================================================================
---         BOBON HUB v21.35 PRIORITY HARDENED ALL-IN | FARM + RAID + FULL PROGRESSION
+--         BOBON HUB v21.36 VIDEO7837 FIX | FARM/GATHER/COMBAT RECOVERY + FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.34 FIXED-PILE ALL-IN | Version: v21.35
+--         Base: v21.35 PRIORITY HARDENED | Version: v21.36
+--
+--  v21.36 VIDEO 1000007837 ROOT-CAUSE FIX:
+--  [V36-1] ACQUIRE no longer resets its budget every time another streamed mob appears.
+--          New mobs reopen ACQUIRE only from KILL; an active ACQUIRE keeps its hard deadline.
+--  [V36-2] Fixed pile anchor is a REAL live mob position (medoid), never an empty geometric
+--          centroid such as the middle of the Marine Fortress fountain/pool seen in the video.
+--  [V36-3] Executor ownership=false is no longer an absolute dead-end after physical touch.
+--          One write + no-rewrite persistence proof is allowed; server snap-back fails immediately.
+--  [V36-4] PERSIST roots are guarded by real HP liveness. A visual-only statue is restored,
+--          blocked from immediate re-pull, and farm falls back to the real server position.
+--  [V36-5] If zero mobs can be stacked, KILL gets a longer real-position fallback slice so quest
+--          progress cannot remain frozen while the player only circles the field.
+--  [V36-6] Real HP loss on an unstacked touched victim feeds the SAME persistence proof used by ACQUIRE;
+--          the orphan DAMAGE-TRIAL path from 21.23/21.34 is removed from the live decision path.
 --
 --  v21.35 PRIORITY / PROGRESSION HARDENING:
 --  [P35-1] ONE Priority Scheduler owns permanent movement work: hard gates -> ready melee/key ->
@@ -1086,6 +1100,11 @@ _G.Settings = {
     ClusterAcquirePhaseBudget = 4.0,
     ClusterKillPhaseSlice = 1.15,
     ClusterAcquireTouchRadius = 95,
+    -- v21.36: allow one proximity persistence probe even when an executor
+    -- keeps reporting isnetworkowner=false. Snap-back + HP liveness still decide truth.
+    ClusterProbeExplicitFalseOwner = true,
+    ClusterFalseOwnerProofCooldown = 2.50,
+    ClusterUnstackedKillSlice = 3.25,
     ClusterUnknownPersistenceProof = true,
     ClusterUnknownPersistenceTime = 0.18,
     ClusterUnknownPersistenceChecks = 2,
@@ -5237,9 +5256,11 @@ function ClusterFarmController:IsVerified(model)
             return false
         end
     elseif authority == "PERSIST" then
-        -- Unknown owner API is allowed only after a no-rewrite persistence proof.
-        -- If a working API explicitly says server-owned, immediately revoke it.
-        if ClientOwnsMob(root) == false then
+        -- v21.36: a proximity persistence proof can stay valid even if an
+        -- executor owner API keeps returning false. Position + HP liveness
+        -- become authoritative after the one-write/no-rewrite proof.
+        if ClientOwnsMob(root) == false
+            and _G.Settings.ClusterProbeExplicitFalseOwner ~= true then
             GatherAuthorityClass[root] = nil
             VerifiedGatherRoots[root] = nil
             self.PositionProof[root] = nil
@@ -5522,10 +5543,13 @@ function ClusterFarmController:ConfirmDamageProof(model)
         return true
     end
 
-    -- v21.23 fallback: only UNKNOWN ownership may try this path. We never override an
-    -- explicit false result from a working ownership API. The hit happened while the
-    -- mob was still at its real replicated position, so the HP delta is genuine.
-    if own == nil and _G.Settings.ClusterDamageLeaseEnabled ~= false
+    -- v21.36 damage-first recovery. The HP delta happened at the mob's real
+    -- replicated position, so the victim is definitely server-live. Try the SAME
+    -- one-write/no-rewrite persistence proof used by ACQUIRE instead of the old
+    -- orphan DAMAGE-TRIAL table (which v21.34 RestackBatch no longer consumed).
+    if (own == nil
+            or (own == false and _G.Settings.ClusterProbeExplicitFalseOwner == true))
+        and _G.Settings.ClusterDamageLeaseEnabled ~= false
         and state and (state.ClusterMode == "QUEST" or state.ClusterMode == "SKIP") then
         local me = HRP()
         local okPos, pos = pcall(function() return root.Position end)
@@ -5534,21 +5558,22 @@ function ClusterFarmController:ConfirmDamageProof(model)
             and (pos - me.Position).Magnitude <= acquireRadius then
             local pile = self:GetPileAnchorPosition()
                 or (state.ClusterAnchor and state.ClusterAnchor.Position)
-            if pile and not _G.BobonGatherMoveTrial[root] then
+            if pile and not self.UnknownProof[root] then
                 local okMove = pcall(function()
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
                     root.CFrame = CFrame.new(pile)
                 end)
                 if okMove then
-                    -- One write only. RestackBatch will intentionally NOT rewrite this root
-                    -- until enough Heartbeats prove the position did not snap back.
-                    _G.BobonGatherMoveTrial[root] = {
-                        StartedAt = now,
+                    self.UnknownProof[root] = {
                         Anchor = pile,
+                        StartedAt = now,
                         Checks = 0,
+                        Original = GatherOriginalPositions[root] or pos,
+                        DamageBacked = true,
                     }
-                    GatherAuthorityClass[root] = "DAMAGE-TRIAL"
+                    _G.BobonGatherMoveTrial[root] = nil
+                    GatherAuthorityClass[root] = nil
                     VerifiedGatherRoots[root] = nil
                 end
             end
@@ -5703,9 +5728,16 @@ function ClusterFarmController:UpdatePhase()
 
     local previous = tonumber(state.ClusterLastCandidateCount) or 0
     if _G.Settings.ClusterWaveNewMobPreempt ~= false and total > previous then
-        state.ClusterPhase = "ACQUIRE"
-        state.ClusterPhaseStartedAt = now
-        state.ClusterWaveStartedAt = now
+        -- v21.36: streaming another mob must NOT restart an ACQUIRE that
+        -- is already running. That reset caused the video-7837 infinite circle.
+        if state.ClusterPhase == "KILL" then
+            state.ClusterPhase = "ACQUIRE"
+            state.ClusterPhaseStartedAt = now
+            state.ClusterWaveStartedAt = now
+        elseif state.ClusterPhaseStartedAt == nil or state.ClusterPhaseStartedAt <= 0 then
+            state.ClusterPhaseStartedAt = now
+            state.ClusterWaveStartedAt = now
+        end
     end
     state.ClusterLastCandidateCount = total
     state.ClusterPhaseVerified = verified
@@ -5732,8 +5764,11 @@ function ClusterFarmController:UpdatePhase()
             state.ClusterPhaseStartedAt = now
         end
     elseif state.ClusterPhase == "KILL" then
+        local killSlice = verified <= 0
+            and (_G.Settings.ClusterUnstackedKillSlice or 3.25)
+            or (_G.Settings.ClusterKillPhaseSlice or 1.15)
         if verified < total and now - (state.ClusterPhaseStartedAt or now)
-            >= (_G.Settings.ClusterKillPhaseSlice or 1.15) then
+            >= killSlice then
             state.ClusterPhase = "ACQUIRE"
             state.ClusterPhaseStartedAt = now
         end
@@ -5777,7 +5812,9 @@ function ClusterFarmController:AuditVictimLiveness()
                 self.UnknownProof[root] = nil
                 self.PositionProof[root] = nil
                 self.VictimWatch[model] = nil
-                self.AcquireBlockedUntil[model] = now + (_G.Settings.ClusterPersistReacquireCooldown or 0.55)
+                self.AcquireBlockedUntil[model] = now + math.max(
+                    _G.Settings.ClusterPersistReacquireCooldown or 0.55,
+                    _G.Settings.ClusterFalseOwnerProofCooldown or 2.50)
                 local original = GatherOriginalPositions[root]
                 if original and IsValidPos(original) then
                     pcall(function()
@@ -6064,7 +6101,9 @@ function ClusterFarmController:RestackBatch()
             end
         end
         if model then
-            self.AcquireBlockedUntil[model] = now + (_G.Settings.ClusterPersistReacquireCooldown or 0.55)
+            self.AcquireBlockedUntil[model] = now + math.max(
+                _G.Settings.ClusterPersistReacquireCooldown or 0.55,
+                _G.Settings.ClusterFalseOwnerProofCooldown or 2.50)
         end
     end
 
@@ -6098,7 +6137,8 @@ function ClusterFarmController:RestackBatch()
                     verifiedCount = verifiedCount + 1
                 end
 
-            elseif authority == "PERSIST" and own ~= false then
+            elseif authority == "PERSIST"
+                and (own ~= false or _G.Settings.ClusterProbeExplicitFalseOwner == true) then
                 if writeRoot(root) then
                     VerifiedGatherRoots[root] = now
                     verifiedCount = verifiedCount + 1
@@ -6106,7 +6146,9 @@ function ClusterFarmController:RestackBatch()
                     revoke(model, root, false)
                 end
 
-            elseif own == nil and _G.Settings.ClusterUnknownPersistenceProof ~= false then
+            elseif (own == nil
+                    or (own == false and _G.Settings.ClusterProbeExplicitFalseOwner == true))
+                and _G.Settings.ClusterUnknownPersistenceProof ~= false then
                 local proof = self.UnknownProof[root]
                 if proof then
                     -- Do not rewrite while proving persistence. A server-owned assembly
@@ -13509,16 +13551,12 @@ local function ResolveQuestClusterAnchor(q, mobName)
             minZ, maxZ = math.min(minZ, p.Z), math.max(maxZ, p.Z)
         end
         local centroid = sum / #positions
-        local boxCenter = Vector3.new(
-            (minX + maxX) * 0.5,
-            (minY + maxY) * 0.5,
-            (minZ + maxZ) * 0.5
-        )
-        local centers = {centroid, boxCenter}
-        if base and typeof(base) == "CFrame" then centers[#centers + 1] = base.Position end
+        -- v21.36: fixed pile must sit on a REAL live mob position. A geometric
+        -- centroid can land in empty terrain/water (exactly the fountain in video 7837).
+        local centers = {}
         for _, p in ipairs(positions) do centers[#centers + 1] = p end
 
-        local bestCenter, bestMax, bestAvg
+        local bestCenter, bestMax, bestAvg, bestCentroidDist
         for _, center in ipairs(centers) do
             local maxDist, total = 0, 0
             for _, p in ipairs(positions) do
@@ -13527,13 +13565,18 @@ local function ResolveQuestClusterAnchor(q, mobName)
                 total = total + d
             end
             local avg = total / #positions
+            local centroidDist = (center - centroid).Magnitude
             if not bestCenter or maxDist < bestMax - 0.01
-                or (math.abs(maxDist - bestMax) <= 0.01 and avg < bestAvg) then
-                bestCenter, bestMax, bestAvg = center, maxDist, avg
+                or (math.abs(maxDist - bestMax) <= 0.01 and avg < bestAvg - 0.01)
+                or (math.abs(maxDist - bestMax) <= 0.01
+                    and math.abs(avg-bestAvg) <= 0.01
+                    and centroidDist < bestCentroidDist) then
+                bestCenter, bestMax, bestAvg, bestCentroidDist =
+                    center, maxDist, avg, centroidDist
             end
         end
         if bestCenter then
-            DLog("FARM", ("Authority minimax anchor -> %s (%d mobs, max %.1f)")
+            DLog("FARM", ("Live-medoid pile anchor -> %s (%d mobs, max %.1f)")
                 :format(tostring(mobName), #positions, bestMax or 0))
             return CFrame.new(bestCenter)
         end
@@ -13908,6 +13951,9 @@ task.spawn(function()
                 local promoted = ClusterFarmController:SelectPrimary()
                 if not promoted and _G.State.ClusterPhase == "KILL" then
                     promoted = ClusterFarmController:SelectFallbackRealTarget()
+                    if promoted and (tonumber(_G.State.ClusterPhaseVerified) or 0) <= 0 then
+                        _G.BobonStatus = "Farm: KILL-FALLBACK real " .. tostring(questMobName)
+                    end
                 end
                 local probeTarget = not promoted and ClusterFarmController:SelectProbePrimary() or nil
                 local chosen = promoted or probeTarget
@@ -14297,7 +14343,7 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.35] Full Script Loaded Successfully!")
+print("[BobonHub v21.36] Full Script Loaded Successfully!")
 print("[BobonHub v21.35] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
 print("[BobonHub v21.35] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
 print("[BobonHub v21.35] Modules: QuestFarm | Fixed-Pile Acquire/Stack/Kill | All-Victim Air Combat | Smart Raid/Fragments | Fruit Reserve | Factory | Full Melee | CDK/Skull | Fire HUD")
