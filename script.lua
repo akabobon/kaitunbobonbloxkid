@@ -1,7 +1,13 @@
 -- =================================================================
---         BOBON HUB v21.40 | SHARED FARM + SKID UTILITIES HARDENED + FULL PROGRESSION
+--         BOBON HUB v21.41 | SHARED FARM + SKID UTILITIES HARDENED + FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.38 SHARED-SOURCE FARM + BN BRING | Version: v21.40
+--         Base: v21.40 FIXED SHARED PILE | Version: v21.41
+--
+--  v21.41 ROBLOX(14) QUEST-UI / TRAVEL PING-PONG FIX:
+--  [Q41-1] Quest detection reads both PlayerGui.Main and PlayerGui["Main (minimal)"], recursively.
+--  [Q41-2] A hidden/minimized Quest wrapper is no longer treated as completion while live title/objective text remains.
+--  [Q41-3] Completion scans mounted labels even while hidden and requires explicit completion text or x/y >= total.
+--  [Q41-4] Stops Farm goal from flipping QuestGiver <-> mob pile when mobile/minimal quest UI collapses or flickers.
 --
 --  v21.39 SKID-UTILITY INTEGRATION:
 --  [U39-1] World Fruit Finder is event/scheduler-driven: detect dropped fruit, claim one action,
@@ -2373,14 +2379,18 @@ end
 
 local function HasQuest()
     local ok, r = pcall(function()
-        local main = LP:FindFirstChild("PlayerGui")
-            and LP.PlayerGui:FindFirstChild("Main")
-        local quest = main and main:FindFirstChild("Quest")
-        -- nil means the quest UI is not ready/readable yet.  Do not let the
-        -- main controller mistake that transient state for a safe item window.
+        local pgui = LP:FindFirstChild("PlayerGui")
+        local main = pgui and pgui:FindFirstChild("Main")
+        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
+        local quest = (main and main:FindFirstChild("Quest", true))
+            or (minimal and minimal:FindFirstChild("Quest", true))
+        -- nil means the quest UI tree is not mounted yet.  Modern mobile/minimal
+        -- builds can keep an ACTIVE quest inside a hidden wrapper, so wrapper
+        -- visibility alone must never mean "quest finished".
         if not quest then return nil end
+
         local function IsDynamicQuestLabel(node)
-            if not node:IsA("TextLabel") or not node.Visible then return false end
+            if not node:IsA("TextLabel") then return false end
             local text = tostring(node.Text or "")
             local lower = string.lower(text)
             if text == "" or lower == "quest" or lower == "quest details"
@@ -2388,33 +2398,27 @@ local function HasQuest()
                 return false
             end
             local nodeName = string.lower(node.Name)
-            -- Current UI uses QuestTitle.Title.  Older builds may expose a
-            -- label named Task/Objective instead, so accept those explicitly.
             if nodeName:find("title", 1, true)
                 or nodeName:find("task", 1, true)
                 or nodeName:find("objective", 1, true) then
                 return true
             end
-            -- Last fallback: quest objectives normally contain a counter or
-            -- an action verb; static panel labels do not.
             return lower:find("defeat", 1, true) ~= nil
                 or lower:find("kill", 1, true) ~= nil
                 or lower:find("collect", 1, true) ~= nil
                 or lower:find("bounty", 1, true) ~= nil
                 or lower:match("%d+%s*/%s*%d+") ~= nil
         end
-        -- The wrapper is the authoritative active/inactive signal in the
-        -- current UI.  A hidden wrapper means the previous quest is over.
-        if quest:IsA("GuiObject") and not quest.Visible then return false end
+
         local container = quest:FindFirstChild("Container") or quest
         local title = container:FindFirstChild("QuestTitle", true)
         local titleText = title and title:FindFirstChild("Title", true)
 
-        -- Completed objectives can leave the title text visible for a short
-        -- time.  A visible x/y counter at x >= y is an immediate completion
-        -- signal, so request the next quest on this same controller tick.
+        -- Explicit completion wins even when the wrapper is hidden/minimized.
+        -- Scan the stored labels, not only Visible labels; mobile UI can collapse
+        -- the quest panel while leaving the live objective text mounted.
         for _, node in ipairs(container:GetDescendants()) do
-            if node:IsA("TextLabel") and node.Visible then
+            if node:IsA("TextLabel") then
                 local labelText = tostring(node.Text or "")
                 local labelLower = string.lower(labelText)
                 if labelLower:find("quest completed", 1, true)
@@ -2424,12 +2428,16 @@ local function HasQuest()
                     return false
                 end
                 local current, total = labelText:match("(%d+)%s*/%s*(%d+)")
-                if current and total and tonumber(current) >= tonumber(total) then
-                    return false
+                if current and total then
+                    current, total = tonumber(current), tonumber(total)
+                    if current and total and total > 0 and current >= total then
+                        return false
+                    end
                 end
             end
         end
 
+        -- Canonical title is authoritative even if Quest.Visible == false.
         if titleText and titleText:IsA("TextLabel") then
             local text = tostring(titleText.Text or "")
             local lower = string.lower(text)
@@ -2437,16 +2445,20 @@ local function HasQuest()
                 return true
             end
         end
-        -- Fallback for builds that omit QuestTitle but expose visible labels.
+
+        -- Fallback objective labels are also allowed while the panel is collapsed.
         for _, node in ipairs(container:GetDescendants()) do
             if IsDynamicQuestLabel(node) then return true end
         end
-        return false
+
+        -- No active text remains.  A hidden empty wrapper is genuinely closed;
+        -- a visible-but-empty wrapper is usually rebuilding, so return nil.
+        if quest:IsA("GuiObject") and not quest.Visible then return false end
+        return nil
     end)
     if not ok then return nil end
     return r
 end
-
 
 -- [FIX-P11] Kiểm tra Vector3 hợp lệ (reject NaN / vô hạn)
 local function IsValidPos(p)
@@ -2516,20 +2528,19 @@ end
 -- Trả về text đọc được, hoặc nil nếu UI không đọc được.
 local function GetQuestText()
     local ok, text = pcall(function()
-        local main = LP:FindFirstChild("PlayerGui")
-            and LP.PlayerGui:FindFirstChild("Main")
-        local quest = main and main:FindFirstChild("Quest")
+        local pgui = LP:FindFirstChild("PlayerGui")
+        local main = pgui and pgui:FindFirstChild("Main")
+        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
+        local quest = (main and main:FindFirstChild("Quest", true))
+            or (minimal and minimal:FindFirstChild("Quest", true))
         if not quest then return nil end
         local container = quest:FindFirstChild("Container") or quest
         local title = container:FindFirstChild("QuestTitle", true)
         local titleText = title and title:FindFirstChild("Title", true)
-        if titleText and titleText:IsA("TextLabel") then
-            -- When the canonical title exists but is empty, the quest is
-            -- genuinely closed; do not resurrect stale descendant labels.
-            if titleText.Text == "" then return nil end
-            -- Include the task/counter labels too.  Some UI revisions put
-            -- only a generic quest name in QuestTitle and the mob name in
-            -- QuestTask, so matching the title alone can reject a valid quest.
+        if titleText and titleText:IsA("TextLabel") and tostring(titleText.Text or "") ~= "" then
+            -- Include the task/counter labels too.  Some mobile/minimal builds keep
+            -- QuestTitle empty while the real mob/objective lives in another label,
+            -- so an empty title must fall through instead of being treated as closed.
             local parts = {titleText.Text}
             for _, d in ipairs(container:GetDescendants()) do
                 if d:IsA("TextLabel") and d ~= titleText and d.Text and d.Text ~= "" then
@@ -15158,10 +15169,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.40] Full Script Loaded Successfully!")
-print("[BobonHub v21.40] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.40] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.40] Modules: QuestFarm | Shared BN + Failure Blacklist | Fruit Finder | Smart Stuck/Hop | Entrance Shortcuts | Elite Wake | Mastery Tool Scheduler | Raid/Fragments | Full Progression | Fire HUD")
-print("[BobonHub v21.40] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.40] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.40] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.41] Full Script Loaded Successfully!")
+print("[BobonHub v21.41] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.41] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.41] Modules: QuestFarm | Shared BN + Failure Blacklist | Fruit Finder | Smart Stuck/Hop | Entrance Shortcuts | Elite Wake | Mastery Tool Scheduler | Raid/Fragments | Full Progression | Fire HUD")
+print("[BobonHub v21.41] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.41] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.41] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
