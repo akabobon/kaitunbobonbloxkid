@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v21.27 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
+--         BOBON HUB v21.28 SMART SKILL DODGE | FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.24.3 STARTUP-SAFE | Version: v21.27
+--         Base: v21.27 CHECKPOINT-STABLE | Version: v21.28
 --
 --
 --  v21.24.3 STARTUP ROOT-CAUSE FIX:
@@ -641,7 +641,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.27 ANYWHERE AUTO GACHA + FULL PROGRESSION + ALL-MOB PILE] Loading...")
+print("[BobonHub v21.28 SMART SKILL DODGE + ANYWHERE GACHA + FULL PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1024,10 +1024,21 @@ _G.Settings = {
     -- [D-1/C-8] Chỉ né chiêu của NPC trong workspace.Enemies. Kỹ năng và
     -- sát thương từ người chơi không làm đổi target/hover/bring của kaitun.
     DodgeAttacks        = true,
-    DodgeCooldown       = 1.5,
-    DodgeDistance       = 12,
-    DodgeHeight         = 4,
-    DodgeRadius         = 15,
+    -- v21.28 SMART SKILL DODGE: detect cast/charge/transient AoE, pause attacks,
+    -- evade with the SAME TravelManager owner, confirm clear, then resume target.
+    DodgeCooldown       = 0.35,
+    DodgeDistance       = 30,
+    DodgeHeight         = 9,
+    DodgeRadius         = 55,
+    DodgeEmergencySpeed = 520,
+    DodgeMinHold        = 0.35,
+    DodgeSafeConfirm    = 0.55,
+    DodgeMaxHold        = 3.50,
+    DodgeReplanInterval = 0.16,
+    DodgeMonitorInterval= 0.05,
+    DodgeHazardTTL      = 2.40,
+    DodgeHazardMargin   = 9,
+    DodgeHazardTrackRadius = 150,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
     SkipRouteFallbackTimeout = 90,
@@ -1294,6 +1305,8 @@ _G.State = {
     LastPosition     = nil,
     LastAttackTime   = 0,
     LastIncomingDamage = 0,
+    DodgeActive       = false,
+    DodgeThreatName   = nil,
     FarmSafetyUntil   = 0,
     FarmSafetyActive  = false,
     LastTargetContested = 0,
@@ -1588,7 +1601,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.27", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.28", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -3943,6 +3956,12 @@ end
 
 local function Attack(preferredTarget, mobName)
     if not IsAlive() then return false end
+    -- v21.28: while a confirmed NPC skill dodge is active, preserve the exact
+    -- combat target but do not keep swinging inside the danger window.
+    if _G.State and _G.State.DodgeActive then
+        _G.BobonDiagnostics.Packet = "DODGE-HOLD"
+        return false
+    end
     local c = Char()
     local tool = c and c:FindFirstChildOfClass("Tool")
     local kind = ToolCombatKind(tool)
@@ -5837,6 +5856,12 @@ function TravelManager:Stop(reason)
     self.AtCombatTarget = nil
     self.DodgeOffset = Vector3.zero
     self.DodgeUntil = 0
+    self.DodgeSpeed = 0
+    self.DodgeSpeedUntil = 0
+    if _G.State then
+        _G.State.DodgeActive = false
+        _G.State.DodgeThreatName = nil
+    end
     _G.State.IsTraveling = false
     -- [A-3] Release movement owner qua MovementManager API
     MovementManager:Release()
@@ -5848,14 +5873,26 @@ function TravelManager:IsAtCombatAnchor(target)
     return self.AtCombatAnchor and (not target or self.AtCombatTarget == target)
 end
 
-function TravelManager:ApplyDodgeOffset(offset, duration)
-    if typeof(offset) ~= "Vector3" or not self.AtCombatAnchor
+function TravelManager:ApplyDodgeOffset(offset, duration, emergencySpeed)
+    -- Skill dodge is allowed during the final combat approach too; waiting for
+    -- AtCombatAnchor was too late for charge/projectile/AoE casts. It still
+    -- requires an active combatHover trip, so puzzle/island travel is untouched.
+    if typeof(offset) ~= "Vector3" or not _G.State.IsTraveling
         or not self.CurrentOptions or not self.CurrentOptions.combatHover then
         return false
     end
     self.DodgeOffset = offset
-    self.DodgeUntil = tick() + (duration or 0.25)
+    self.DodgeUntil = tick() + (duration or 0.35)
+    self.DodgeSpeed = math.max(tonumber(emergencySpeed) or 0, tonumber(self.DodgeSpeed) or 0)
+    self.DodgeSpeedUntil = self.DodgeUntil
     return true
+end
+
+function TravelManager:ClearDodgeOffset()
+    self.DodgeOffset = Vector3.zero
+    self.DodgeUntil = 0
+    self.DodgeSpeed = 0
+    self.DodgeSpeedUntil = 0
 end
 
 local function SameTravelOptions(a, b)
@@ -6381,6 +6418,11 @@ function TravelManager:Request(targetCF, owner, options)
             local delta = targetPos - currentPos
             local direction = delta.Unit
             local speed = flySpeed
+            -- v21.28: a skill dodge gets a short emergency burst but never creates
+            -- another movement coroutine. The original owner/target remains intact.
+            if stepNow < (self.DodgeSpeedUntil or 0) then
+                speed = math.max(speed, tonumber(self.DodgeSpeed) or 0)
+            end
             local decelDistance = math.max(8, tonumber(_G.Settings.NearMoveDecelDistance) or 18)
             if dist < decelDistance then
                 local minNear = math.min(speed, tonumber(_G.Settings.NearMoveMinSpeed) or 110)
@@ -6827,121 +6869,344 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
---         [D-1] DODGE CONTROLLER — NÉ CHIÊU KHI QUÁI TẤN CÔNG
---   Một monitor loop DUY NHẤT, chỉ DÒ chiêu (không điều khiển movement
---   liên tục nên không phá Single Movement Owner). Khi phát hiện quái
---   gần player đang tung chiêu (animation tấn công đang phát / tốc độ
---   lao nhanh về phía player) → dịch ngang 1 phát (CFrame offset) né,
---   rồi để TravelManager hover kéo về điểm farm như thường.
---   Có cooldown chống spam; không hoạt động khi bay xa (giver/island)
---   hay khi recovery/dead/respawn.
+--    v21.28 SMART SKILL DODGE — CAST/AOE/CHARGE → EVADE → CONFIRM → RESUME
+--   * No second movement owner/coroutine: only TravelManager.DodgeOffset.
+--   * Detects attack animations (including Action priority), charge velocity,
+--     and short-lived skill/AoE/projectile parts spawned near active combat.
+--   * Attack() is paused only while DodgeActive=true; current target/action token
+--     is never cleared. After the danger is absent for DodgeSafeConfirm seconds,
+--     the offset is cleared and TravelManager returns to the exact old target.
+--   * Dodge helpers live in a narrow lexical scope to protect Luau local limits.
 -- ══════════════════════════════════════════════════════════════════
+do
 local DodgeController = {
     LastDodge = 0,
+    Active = false,
+    StartedAt = 0,
+    LastThreatAt = 0,
+    LastReplan = 0,
+    Threat = nil,
+    ThreatRoot = nil,
+    ThreatReason = nil,
+    HazardParts = setmetatable({}, {__mode="k"}),
 }
 
-local DODGE_ATTACK_KEYWORDS = {
-    "attack","combo","kick","punch","slash","swing","hit",
-    "strike","beat","smash","bite","claw","fist","spin","haki",
+local ATTACK_WORDS = {
+    "attack","combo","kick","punch","slash","swing","hit","strike",
+    "beat","smash","bite","claw","fist","spin","haki","skill","cast",
+    "blast","beam","wave","shot","charge","roar","stomp","slam","burst",
+}
+local SAFE_ANIM_WORDS = {"idle","walk","run","swim","jump","fall","climb"}
+local HAZARD_WORDS = {
+    "hitbox","damage","skill","attack","projectile","bullet","beam","blast",
+    "explosion","shockwave","slash","wave","aoe","area","vortex","tornado",
+    "flame","fire","magma","ice","snow","lightning","thunder","venom",
+    "poison","smoke","bomb","quake","spike","puddle","eruption","laser",
 }
 
-local function DodgeAnimIsAttack(track)
-    local ok, name = pcall(function() return track.Name end)
-    if not ok or type(name) ~= "string" then return false end
-    local lower = string.lower(name)
-    for _, kw in ipairs(DODGE_ATTACK_KEYWORDS) do
-        if string.find(lower, kw, 1, true) then return true end
+local function WordMatch(text, words)
+    text = string.lower(tostring(text or ""))
+    for _, word in ipairs(words) do
+        if string.find(text, word, 1, true) then return true end
     end
     return false
 end
 
-local function DodgeEnemyIsAttacking(enemy, me)
-    local hum = enemy:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return false end
-    local okTracks, tracks = pcall(function() return hum:GetPlayingAnimationTracks() end)
-    if okTracks and tracks then
-        for _, track in ipairs(tracks) do
-            if track.IsPlaying and DodgeAnimIsAttack(track) then
-                return true
+local function FlatUnit(v, fallback)
+    local flat = Vector3.new(v.X, 0, v.Z)
+    if flat.Magnitude > 0.05 then return flat.Unit end
+    if fallback then
+        local f = Vector3.new(fallback.X, 0, fallback.Z)
+        if f.Magnitude > 0.05 then return f.Unit end
+    end
+    return Vector3.new(1,0,0)
+end
+
+local function IsOurCharacterDescendant(obj)
+    local c = Char()
+    return c and obj and obj:IsDescendantOf(c) or false
+end
+
+local function LooksLikeEffectContainer(obj)
+    local cur = obj
+    for _=1,4 do
+        if not cur then break end
+        local n = string.lower(tostring(cur.Name or ""))
+        if n == "_worldorigin" or n == "worldorigin"
+            or string.find(n,"effect",1,true)
+            or string.find(n,"projectile",1,true)
+            or string.find(n,"skill",1,true) then
+            return true
+        end
+        cur = cur.Parent
+    end
+    return false
+end
+
+local function TrackHazard(obj)
+    if not obj or not obj:IsA("BasePart") or IsOurCharacterDescendant(obj) then return end
+    local me = HRP()
+    if not me then return end
+    local ok, pos = pcall(function() return obj.Position end)
+    if not ok or not IsValidPos(pos) then return end
+    if (pos-me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 150) then return end
+    local label = tostring(obj.Name or "") .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
+    local named = WordMatch(label, HAZARD_WORDS)
+    local effectContainer = LooksLikeEffectContainer(obj.Parent)
+    local size = obj.Size
+    local largeTransient = math.max(size.X,size.Y,size.Z) >= 5
+    if named or (effectContainer and largeTransient) then
+        DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 2.4)
+    end
+end
+
+local hazardConn = workspace.DescendantAdded:Connect(function(obj)
+    if not SessionAlive() then return end
+    if obj:IsA("BasePart") then pcall(TrackHazard,obj) end
+end)
+BobonUIConnections[#BobonUIConnections+1] = hazardConn
+
+local function AttackTrackPlaying(hum)
+    local ok, tracks = pcall(function() return hum:GetPlayingAnimationTracks() end)
+    if not ok or not tracks then return false,nil end
+    for _, track in ipairs(tracks) do
+        if track.IsPlaying then
+            local name = tostring(track.Name or "")
+            if WordMatch(name, ATTACK_WORDS) then return true,"animation:"..name end
+            local safe = WordMatch(name, SAFE_ANIM_WORDS)
+            local actionPriority = false
+            pcall(function()
+                actionPriority = track.Priority.Value >= Enum.AnimationPriority.Action.Value
+            end)
+            if actionPriority and not safe then
+                local weight = 1
+                pcall(function() weight = tonumber(track.WeightCurrent) or 1 end)
+                if weight > 0.05 then return true,"action-animation" end
             end
         end
     end
-    local root = enemy:FindFirstChild("HumanoidRootPart")
-    if root and me then
-        local okVel, vel = pcall(function() return root.AssemblyLinearVelocity end)
-        if okVel and type(vel) == "Vector3" then
-            local toMe = me.Position - root.Position
-            local dist = toMe.Magnitude
-            if dist > 0.5 and dist <= (_G.Settings.DodgeRadius or 15) then
-                local closing = toMe.Unit:Dot(vel)
-                if closing > 35 then return true end
+    return false,nil
+end
+
+local function HazardTouchesPoint(part, point)
+    if not part or not part.Parent then return false end
+    local ok, pos, size = pcall(function() return part.Position,part.Size end)
+    if not ok or not IsValidPos(pos) then return false end
+    local radius = math.max(size.X,size.Y,size.Z)*0.5 + (_G.Settings.DodgeHazardMargin or 9)
+    return (point-pos).Magnitude <= radius
+end
+
+local function HazardNearPlayer(me)
+    local now=tick()
+    local best,bestDist
+    for part,expires in pairs(DodgeController.HazardParts) do
+        if not part.Parent or now>expires then
+            DodgeController.HazardParts[part]=nil
+        else
+            local ok,pos=pcall(function() return part.Position end)
+            if ok and IsValidPos(pos) then
+                local d=(me.Position-pos).Magnitude
+                if HazardTouchesPoint(part,me.Position) and (not bestDist or d<bestDist) then
+                    best,bestDist=part,d
+                end
             end
         end
+    end
+    return best,bestDist
+end
+
+local function EnemyThreat(enemy,me)
+    if not enemy or Players:GetPlayerFromCharacter(enemy) then return false,nil end
+    local hum=enemy:FindFirstChildOfClass("Humanoid")
+    local root=enemy:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health<=0 or not root then return false,nil end
+    local dist=(root.Position-me.Position).Magnitude
+    if dist>(_G.Settings.DodgeRadius or 55) then return false,nil end
+    local anim,why=AttackTrackPlaying(hum)
+    if anim then return true,why end
+    local okVel,vel=pcall(function() return root.AssemblyLinearVelocity end)
+    if okVel and typeof(vel)=="Vector3" and dist>0.5 then
+        local toMe=me.Position-root.Position
+        local closing=toMe.Unit:Dot(vel)
+        if closing>32 then return true,"charge" end
+    end
+    for _,obj in ipairs(enemy:GetDescendants()) do
+        if obj:IsA("BasePart") and WordMatch(obj.Name,HAZARD_WORDS)
+            and HazardTouchesPoint(obj,me.Position) then
+            return true,"enemy-hitbox"
+        end
+    end
+    return false,nil
+end
+
+local function FindThreat()
+    local me=HRP(); if not me then return nil,nil,nil end
+    local folder=workspace:FindFirstChild("Enemies"); if not folder then return nil,nil,nil end
+    -- Active combat target first so a boss cast wins over unrelated nearby mobs.
+    local ref=TravelManager.TargetRef
+    local activeModel=typeof(ref)=="Instance" and (ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")) or nil
+    if activeModel and activeModel.Parent==folder then
+        local yes,why=EnemyThreat(activeModel,me)
+        if yes then return activeModel,activeModel:FindFirstChild("HumanoidRootPart"),why end
+    end
+    local best,bestRoot,bestDist,bestWhy
+    for _,enemy in ipairs(folder:GetChildren()) do
+        local root=enemy:FindFirstChild("HumanoidRootPart")
+        if root then
+            local d=(root.Position-me.Position).Magnitude
+            if d<=(_G.Settings.DodgeRadius or 55) then
+                local yes,why=EnemyThreat(enemy,me)
+                if yes and (not bestDist or d<bestDist) then
+                    best,bestRoot,bestDist,bestWhy=enemy,root,d,why
+                end
+            end
+        end
+    end
+    if best then return best,bestRoot,bestWhy end
+    local hazard=HazardNearPlayer(me)
+    if hazard then
+        return activeModel,activeModel and activeModel:FindFirstChild("HumanoidRootPart") or nil,"spawned-hazard"
+    end
+    return nil,nil,nil
+end
+
+local function CandidateDangerScore(worldPos)
+    local score=9999
+    local folder=workspace:FindFirstChild("Enemies")
+    if folder then
+        for _,enemy in ipairs(folder:GetChildren()) do
+            local hum=enemy:FindFirstChildOfClass("Humanoid")
+            local root=enemy:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health>0 and root then
+                score=math.min(score,(worldPos-root.Position).Magnitude)
+            end
+        end
+    end
+    for part,expires in pairs(DodgeController.HazardParts) do
+        if part.Parent and tick()<=expires then
+            local ok,pos,size=pcall(function() return part.Position,part.Size end)
+            if ok and IsValidPos(pos) then
+                local r=math.max(size.X,size.Y,size.Z)*0.5+(_G.Settings.DodgeHazardMargin or 9)
+                score=math.min(score,(worldPos-pos).Magnitude-r)
+            end
+        end
+    end
+    return score
+end
+
+local function ChooseOffset(dangerRoot)
+    local me=HRP(); if not me then return Vector3.zero end
+    local distance=_G.Settings.DodgeDistance or 30
+    local up=_G.Settings.DodgeHeight or 9
+    local look=dangerRoot and FlatUnit(dangerRoot.CFrame.LookVector,Vector3.new(0,0,-1)) or Vector3.new(0,0,-1)
+    local away=dangerRoot and FlatUnit(me.Position-dangerRoot.Position,-look) or -look
+    local side=Vector3.new(-away.Z,0,away.X)
+    -- Include "behind the caster" as requested, but score it against every live
+    -- enemy/hazard so we do not blindly cross through a larger AoE.
+    local candidates={
+        away*distance+Vector3.new(0,up,0),
+        side*distance+Vector3.new(0,up,0),
+        -side*distance+Vector3.new(0,up,0),
+        -look*distance+Vector3.new(0,up,0),
+        away*(distance*1.35)+Vector3.new(0,up*1.25,0),
+    }
+    local base=me.Position
+    local best,bestScore=candidates[1],-math.huge
+    for _,off in ipairs(candidates) do
+        local p=base+off
+        if IsAllowedWorldPosition(p) then
+            local sc=CandidateDangerScore(p)
+            if sc>bestScore then best,bestScore=off,sc end
+        end
+    end
+    return best
+end
+
+function DodgeController:Finish(reason)
+    self.Active=false
+    self.Threat=nil; self.ThreatRoot=nil; self.ThreatReason=nil
+    _G.State.DodgeActive=false
+    _G.State.DodgeThreatName=nil
+    TravelManager:ClearDodgeOffset()
+    _G.BobonDiagnostics.Dodge="CLEAR:"..tostring(reason or "safe")
+    DLog("DODGE","safe → resume exact target")
+end
+
+function DodgeController:StartOrReplan(enemy,root,why,now)
+    if not self.Active then
+        self.Active=true
+        self.StartedAt=now
+        self.LastDodge=now
+        _G.State.DodgeActive=true
+    end
+    self.LastThreatAt=now
+    self.Threat=enemy or self.Threat
+    self.ThreatRoot=root or self.ThreatRoot
+    self.ThreatReason=why or self.ThreatReason
+    if now-(self.LastReplan or 0)<(_G.Settings.DodgeReplanInterval or 0.16) then return true end
+    self.LastReplan=now
+    local offset=ChooseOffset(self.ThreatRoot)
+    local hold=math.max((_G.Settings.DodgeSafeConfirm or 0.55)+0.20,0.75)
+    if TravelManager:ApplyDodgeOffset(offset,hold,_G.Settings.DodgeEmergencySpeed or 520) then
+        _G.State.DodgeThreatName=self.Threat and self.Threat.Name or tostring(why or "skill")
+        _G.BobonDiagnostics.Dodge=("EVADE:%s"):format(tostring(why or "skill"))
+        DLog("DODGE","evade "..tostring(_G.State.DodgeThreatName).." • "..tostring(why))
+        return true
     end
     return false
 end
 
 function DodgeController:TryDodge()
-    if not _G.Settings.DodgeAttacks then return false end
-    if not IsAlive() then return false end
-    if _G.State.Mode == "Recovering" or _G.State.Mode == "Dead"
-        or _G.State.Mode == "Respawning" or _G.State.Mode == "ServerHop" then
+    if not _G.Settings.DodgeAttacks or not IsAlive() then
+        if self.Active then self:Finish("disabled/dead") end
         return false
     end
-    local now = tick()
-    if now - self.LastDodge < (_G.Settings.DodgeCooldown or 1.5) then return false end
-    -- Không né khi đang bay xa tới giver/island (target là CFrame xa):
-    -- dodge chỉ dành cho lúc đứng farm gần mob (target Instance/CFrame gần).
-    if _G.State.IsTraveling then
-        local ref = TravelManager.TargetRef
-        if typeof(ref) == "CFrame" or typeof(ref) == "Vector3" then
-            local me = HRP()
-            local targetPos = typeof(ref) == "CFrame" and ref.Position or ref
-            if not me or (me.Position - targetPos).Magnitude > 60 then
-                return false
-            end
-        end
+    if _G.State.Mode=="Recovering" or _G.State.Mode=="Dead"
+        or _G.State.Mode=="Respawning" or _G.State.Mode=="ServerHop" then
+        if self.Active then self:Finish("state-change") end
+        return false
     end
-    local me = HRP()
-    if not me then return false end
-    local folder = workspace:FindFirstChild("Enemies")
-    if not folder then return false end
-    local danger = nil
-    local dangerRoot = nil
-    for _, enemy in ipairs(folder:GetChildren()) do
-        -- Hard boundary: never classify another player's character as a
-        -- dodge source, even if a future game update reparents it here.
-        if Players:GetPlayerFromCharacter(enemy) then continue end
-        local root = enemy:FindFirstChild("HumanoidRootPart")
-        if not root then continue end
-        local p = root.Position
-        if IsValidPos(p) and (p - me.Position).Magnitude <= (_G.Settings.DodgeRadius or 15)
-            and DodgeEnemyIsAttacking(enemy, me) then
-            danger, dangerRoot = enemy, root
-            break
-        end
+    -- Dodge only while TravelManager is actually handling a combat-hover target.
+    -- This prevents Saber plates, NPC dialogue, sea travel, etc. from being diverted.
+    if not _G.State.IsTraveling or not TravelManager.CurrentOptions
+        or not TravelManager.CurrentOptions.combatHover then
+        if self.Active then self:Finish("combat-ended") end
+        return false
     end
-    if not danger or not dangerRoot then return false end
-    -- Né: dịch ngang vuông góc với hướng quái → player + nhấc nhẹ lên,
-    -- giữ rotation; hover của TravelManager sẽ kéo về điểm farm sau đó.
-    local dir = (dangerRoot.Position - me.Position).Unit
-    local side = Vector3.new(-dir.Z, 0, dir.X)
-    local dodgeOffset = side * (_G.Settings.DodgeDistance or 12)
-        + Vector3.new(0, _G.Settings.DodgeHeight or 4, 0)
-    if not TravelManager:ApplyDodgeOffset(dodgeOffset, 0.25) then return false end
-    self.LastDodge = now
-    DLog("DODGE", "Né chiêu " .. tostring(danger.Name))
-    -- Do not overwrite the current job/status; this is only a one-shot offset.
-    return true
+
+    local now=tick()
+    local enemy,root,why=FindThreat()
+    if enemy or why=="spawned-hazard" then
+        return self:StartOrReplan(enemy,root,why,now)
+    end
+
+    if self.Active then
+        local minHold=_G.Settings.DodgeMinHold or 0.35
+        local safeConfirm=_G.Settings.DodgeSafeConfirm or 0.55
+        local maxHold=_G.Settings.DodgeMaxHold or 3.5
+        if now-self.StartedAt>=maxHold then
+            self:Finish("max-hold")
+            return true
+        end
+        if now-self.StartedAt>=minHold and now-self.LastThreatAt>=safeConfirm then
+            self:Finish("confirmed-safe")
+            return true
+        end
+        -- Keep the current evade anchor alive while waiting for a clear window.
+        TravelManager:ApplyDodgeOffset(TravelManager.DodgeOffset,0.25,_G.Settings.DodgeEmergencySpeed or 520)
+        return true
+    end
+
+    return false
 end
 
--- [D-1] Monitor loop duy nhất cho dodge (0.1s — phản xạ nhanh hơn farm
--- tick). Chỉ dò + dịch 1 phát, không điều khiển movement liên tục.
 task.spawn(function()
-    while SessionAlive() and task.wait(0.1) do
+    while SessionAlive() do
+        task.wait(_G.Settings.DodgeMonitorInterval or 0.05)
         pcall(function() DodgeController:TryDodge() end)
     end
 end)
+end -- v21.28 smart dodge lexical scope
 -- ══════════════════════════════════════════════════════════════════
 --         RECOVERY MANAGER v7 (Fix #2,#6)
 --   State machine: STOP → CLEANUP → RESET → WAIT → CHECK → IDLE
@@ -12506,10 +12771,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.27] Full Script Loaded Successfully!")
-print("[BobonHub v21.27] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.27] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.27] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.27] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.27] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.27] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.28] Full Script Loaded Successfully!")
+print("[BobonHub v21.28] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.28] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.28] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.28] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.28] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.28] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
