@@ -1,7 +1,7 @@
 -- =================================================================
---         BOBON HUB v21.26 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
+--         BOBON HUB v21.27 FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.24.3 STARTUP-SAFE | Version: v21.26
+--         Base: v21.24.3 STARTUP-SAFE | Version: v21.27
 --
 --
 --  v21.24.3 STARTUP ROOT-CAUSE FIX:
@@ -641,7 +641,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.26 ANYWHERE AUTO GACHA + FULL PROGRESSION + ALL-MOB PILE] Loading...")
+print("[BobonHub v21.27 ANYWHERE AUTO GACHA + FULL PROGRESSION + ALL-MOB PILE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -915,7 +915,7 @@ _G.Settings = {
     CruiseAltitude      = 60,
     ApproachThreshold   = 120,
     TravelTimeoutMargin = 20,
-    -- v21.26: Blox Fruit Gacha is available from Lv50 in every sea.
+    -- v21.27: Blox Fruit Gacha is available from Lv50 in every sea.
     -- The server owns the real level-scaled price/cooldown; do not hard-code Sea2/3 prices.
     RandomFruitInterval = 30,      -- retry only when a roll was NOT confirmed
     RandomFruitSuccessCooldown = 7200, -- confirmed roll: 2-hour server cooldown
@@ -928,7 +928,7 @@ _G.Settings = {
     QuestRetryBackoff   = 6,
     QuestAcceptGrace    = 6,
     RecoveryDelay       = 3,
-    ActionLockTimeout   = 240,  -- v21.26 progression puzzles refresh token; 4m hard safety only
+    ActionLockTimeout   = 240,  -- v21.27 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
     FruitEnabled        = true,
     AutoStats           = true,
@@ -1588,7 +1588,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.26", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.27", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -5743,6 +5743,9 @@ TravelManager.AtCombatTarget = nil
 TravelManager.DodgeOffset = Vector3.zero
 TravelManager.DodgeUntil = 0
 TravelManager.LastNearQuestSnap = 0
+TravelManager.LastExitOwner = nil
+TravelManager.LastExitReason = nil
+TravelManager.LastExitToken = 0
 TravelManager.NoclipConn = nil
 TravelManager.PhysicsBV = nil
 TravelManager.PhysicsBG = nil
@@ -5998,6 +6001,9 @@ function TravelManager:Request(targetCF, owner, options)
     _G.State.LastPosition = HRP() and HRP().Position or nil
     self.TargetRef = targetCF
     self.CurrentOptions = normalizedOptions
+    self.LastExitOwner = nil
+    self.LastExitReason = nil
+    self.LastExitToken = 0
     self.AtCombatAnchor = false
     self.AtCombatTarget = nil
     DLog("TRAVEL", "Request by " .. owner .. ", dist="
@@ -6100,7 +6106,15 @@ function TravelManager:Request(targetCF, owner, options)
                 end
                 warn("[Travel] Timeout by " .. owner)
                 DLog("TRAVEL", "Timeout by " .. owner)
-                _G.State.IsRecovering = true
+                self.LastExitOwner = owner
+                self.LastExitReason = "Timeout"
+                self.LastExitToken = myToken
+                -- A single puzzle/item leg must not cancel the whole progression.
+                -- Farm/Raid keep the heavy recovery path; claimed progression actions
+                -- are retried by TravelAndWait while their ActionToken remains valid.
+                if owner == "Farm" or owner == "Raid" then
+                    _G.State.IsRecovering = true
+                end
                 break
             end
 
@@ -6120,7 +6134,12 @@ function TravelManager:Request(targetCF, owner, options)
                     end
                     targetLostTimer = targetLostTimer + task.wait(0.2)
                     if targetLostTimer >= _G.Settings.TargetLostTimeout then
-                        _G.State.IsRecovering = true
+                        self.LastExitOwner = owner
+                        self.LastExitReason = "TargetLost"
+                        self.LastExitToken = myToken
+                        if owner == "Farm" or owner == "Raid" then
+                            _G.State.IsRecovering = true
+                        end
                         break
                     end
                     continue
@@ -6409,7 +6428,12 @@ function TravelManager:Request(targetCF, owner, options)
                     stuckLimit = _G.Settings.CruiseStuckTimeout
                 end
                 if stuckTimer >= stuckLimit then
-                    _G.State.IsRecovering = true
+                    self.LastExitOwner = owner
+                    self.LastExitReason = "Stuck"
+                    self.LastExitToken = myToken
+                    if owner == "Farm" or owner == "Raid" then
+                        _G.State.IsRecovering = true
+                    end
                     warn("[Travel] Stuck by " .. owner)
                     DLog("TRAVEL", "Stuck by " .. owner)
                     break
@@ -6428,7 +6452,12 @@ function TravelManager:Request(targetCF, owner, options)
         if not threadOk then
             warn("[BobonHub] Module Error: TravelManager: " .. tostring(threadErr))
             if self.CurrentToken == myToken then
-                _G.State.IsRecovering = true
+                self.LastExitOwner = owner
+                self.LastExitReason = "ThreadError"
+                self.LastExitToken = myToken
+                if owner == "Farm" or owner == "Raid" then
+                    _G.State.IsRecovering = true
+                end
             end
         end
 
@@ -6690,10 +6719,8 @@ end)
 -- Trả về true khi đã tới + còn sống + token còn hợp lệ.
 local function TravelAndWait(owner, token, cf, opts)
     opts = opts or {}
-    if not _G.State:IsActionValid(token) then return false end
-    if not IsAlive() then return false end
-    local ok = TravelManager:Request(cf, owner, opts)
-    if not ok then return false end
+    if not _G.State:IsActionValid(token) or not IsAlive() then return false end
+
     local function ResolvePosition(target)
         local targetType = typeof(target)
         if targetType == "CFrame" then return target.Position end
@@ -6707,29 +6734,74 @@ local function TravelAndWait(owner, token, cf, opts)
         end
         return nil
     end
+
     local destination = ResolvePosition(cf)
     if not IsValidPos(destination) then return false end
-    local hrp = HRP()
     local thresh = opts.arrivalThreshold or _G.Settings.CloseThreshold
-    local timeout = os.time() + (opts.timeout or 60)
-    local arrived = false
-    while _G.State:IsActionValid(token) and IsAlive() and os.time() < timeout do
+    local retryCount = tonumber(opts.retries)
+    if retryCount == nil then
+        retryCount = (owner == "Farm" or owner == "Raid") and 0 or 2
+    end
+    retryCount = math.max(0, math.floor(retryCount))
+    local perTryTimeout = math.max(3, tonumber(opts.timeout) or 60)
+
+    for attempt = 1, retryCount + 1 do
+        if not _G.State:IsActionValid(token) or not IsAlive() then return false end
         _G.State:TouchAction(token)
-        hrp = HRP()
-        if hrp and (hrp.Position - destination).Magnitude <= thresh then
-            arrived = true
-            break
+
+        local ok, travelToken = TravelManager:Request(cf, owner, opts)
+        if ok then
+            local deadline = tick() + perTryTimeout
+            local arrived = false
+            while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+                _G.State:TouchAction(token)
+                local hrp = HRP()
+                if hrp and (hrp.Position - destination).Magnitude <= thresh then
+                    arrived = true
+                    break
+                end
+
+                -- Do not sit for the full timeout after the movement coroutine has
+                -- already reported a local progression failure. Retry this leg instead.
+                if TravelManager.LastExitOwner == owner
+                    and TravelManager.LastExitToken == travelToken then
+                    break
+                end
+                if not _G.State.IsTraveling
+                    and _G.State.MovementOwner ~= owner
+                    and TravelManager.CurrentToken == travelToken then
+                    break
+                end
+                task.wait(0.12)
+            end
+
+            if arrived then
+                _G.State:TouchAction(token)
+                local settleUntil = tick() + (opts.settle or 1)
+                while _G.State:IsActionValid(token) and IsAlive() and tick() < settleUntil do
+                    _G.State:TouchAction(token)
+                    task.wait(0.08)
+                end
+                return _G.State:IsActionValid(token) and IsAlive()
+            end
         end
-        task.wait(0.25)
+
+        if attempt <= retryCount then
+            if _G.State.IsTraveling and _G.State.MovementOwner == owner then
+                TravelManager:Stop("TravelAndWaitRetry")
+            end
+            local root = HRP()
+            if root then
+                pcall(function()
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+            _G.State:TouchAction(token)
+            task.wait(math.min(0.45, 0.12 + attempt * 0.08))
+        end
     end
-    if not arrived then return false end
-    _G.State:TouchAction(token)
-    local settleUntil = tick() + (opts.settle or 1)
-    while _G.State:IsActionValid(token) and IsAlive() and tick() < settleUntil do
-        _G.State:TouchAction(token)
-        task.wait(0.10)
-    end
-    return _G.State:IsActionValid(token) and IsAlive()
+    return false
 end
 -- ══════════════════════════════════════════════════════════════════
 --         [FIX-13] ANTI-FALL SAFETY NET (chỉ khi KHÔNG có travel)
@@ -7884,193 +7956,476 @@ function ItemProgression:CheckSaber()
     if not _G.Settings.AutoItems or not _G.Settings.AutoSaber then return false end
     if InventoryHas("Saber") or Level() < 200 or GetSea() ~= 1 then return false end
     if not self:OptionalReady("Saber") then return false end
+
     local myToken = _G.State:ClaimAction("Saber")
     if myToken == 0 then return false end
     PrepareClaimedAction("Saber")
-    self.NextOptional.Saber = tick() + 5
+    self.NextOptional.Saber = tick() + 4
     _G.State:SetMode("GettingItem")
-    _G.BobonStatus = "Saber 1/8 • Jungle plates"
+    _G.BobonStatus = "Saber • checking saved puzzle stage"
 
     task.spawn(function()
         local ok, err = xpcall(function()
-            local function TouchAction() _G.State:TouchAction(myToken) end
+            local function TouchAction()
+                return _G.State:TouchAction(myToken)
+            end
+
+            local function Invoke(...)
+                local args = {...}
+                local success, result = pcall(function()
+                    return CommF_:InvokeServer(table.unpack(args))
+                end)
+                TouchAction()
+                return success, result
+            end
+
+            local function HasSaber()
+                InventoryCache.At = 0
+                WeaponInventoryCache.At = 0
+                return FindOwnedTool("Saber") ~= nil or InventoryHas("Saber")
+            end
+
             local function EquipNamed(name)
-                local c = Char(); local hum = c and c:FindFirstChildOfClass("Humanoid")
+                local c = Char()
+                local hum = c and c:FindFirstChildOfClass("Humanoid")
                 local tool = FindOwnedTool(name)
                 if not tool or not hum then return false end
-                if tool.Parent ~= c then pcall(function() hum:EquipTool(tool) end); task.wait(0.15) end
+                if tool.Parent ~= c then
+                    pcall(function() hum:EquipTool(tool) end)
+                    task.wait(0.18)
+                end
+                TouchAction()
                 return tool.Parent == c
             end
+
             local function WaitTool(name, seconds)
-                local deadline=tick()+(seconds or 5)
-                while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
-                    TouchAction(); local tool=FindOwnedTool(name); if tool then return tool end; task.wait(0.15)
+                local deadline = tick() + (seconds or 6)
+                while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+                    TouchAction()
+                    local tool = FindOwnedTool(name)
+                    if tool then return tool end
+                    InventoryCache.At = 0
+                    WeaponInventoryCache.At = 0
+                    task.wait(0.15)
                 end
                 return nil
             end
-            local function TouchPart(part)
-                if not part or not part:IsA("BasePart") then return false end
-                local root=HRP(); if not root then return false end
-                TouchAction()
-                local fired=false
-                if type(firetouchinterest)=="function" then
-                    fired=pcall(function() firetouchinterest(root,part,0); task.wait(0.08); firetouchinterest(root,part,1) end)
-                end
-                pcall(function() root.CFrame=part.CFrame end)
-                task.wait(0.18)
-                return fired or true
+
+            local function MapState()
+                local map = workspace:FindFirstChild("Map")
+                local jungle = map and map:FindFirstChild("Jungle")
+                local plates = jungle and jungle:FindFirstChild("QuestPlates")
+                local door = plates and plates:FindFirstChild("Door")
+                local final = jungle and jungle:FindFirstChild("Final")
+                local finalPart = final and final:FindFirstChild("Part", true)
+                local desert = map and map:FindFirstChild("Desert")
+                local burn = desert and desert:FindFirstChild("Burn")
+                local burnPart = burn and burn:FindFirstChild("Part", true)
+                return map, jungle, plates, door, finalPart, burnPart
             end
 
-            -- Public kaitun sources use Plate1 -> Plate5 in order. Stream the Jungle
-            -- first, then touch the real button instance; fixed CFrames are only fallback
-            -- if one plate is temporarily absent from the streamed hierarchy.
-            if not TravelAndWait("Saber",myToken,CFrame.new(-1612.56,36.98,148.72),{timeout=90,arrivalThreshold=20,settle=0.25}) then return end
-            local plateFallback={
+            local function DoorIsOpen()
+                local _, _, _, door = MapState()
+                return door ~= nil and door.Transparency ~= 0
+            end
+
+            local function FinalIsOpen()
+                local _, _, _, _, finalPart = MapState()
+                return finalPart ~= nil and finalPart.Transparency ~= 0
+            end
+
+            local function BurnIsDone()
+                local _, _, _, _, _, burnPart = MapState()
+                return burnPart ~= nil and burnPart.Transparency ~= 0
+            end
+
+            -- Pulse a touch target without ever leaving the character embedded in it.
+            -- This is especially important for Jungle button #2, which is mounted on a tree.
+            local function StableTouch(targetCF, part, hold)
+                if not _G.State:IsActionValid(myToken) or not IsAlive() then return false end
+                if typeof(targetCF) ~= "CFrame" then return false end
+
+                if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
+                    TravelManager:Stop("SaberTouchPulse")
+                    task.wait()
+                end
+                if not MovementManager:Acquire("Saber") then
+                    TravelManager:Stop("SaberTouchTakeover")
+                    task.wait()
+                    if not MovementManager:Acquire("Saber") then return false end
+                end
+
+                local c = Char()
+                local root = HRP()
+                if not c or not root then
+                    MovementManager:Release("Saber")
+                    return false
+                end
+
+                local collision = {}
+                for _, obj in ipairs(c:GetDescendants()) do
+                    if obj:IsA("BasePart") then
+                        collision[obj] = obj.CanCollide
+                        obj.CanCollide = false
+                    end
+                end
+
+                local success = xpcall(function()
+                    TouchAction()
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = targetCF
+                    task.wait(0.16)
+
+                    if part and part.Parent and type(firetouchinterest) == "function" then
+                        pcall(function()
+                            firetouchinterest(root, part, 0)
+                            task.wait(0.06)
+                            firetouchinterest(root, part, 1)
+                        end)
+                    end
+
+                    -- Keep a real overlap briefly for environments without firetouchinterest.
+                    local untilAt = tick() + (hold or 0.62)
+                    while _G.State:IsActionValid(myToken) and IsAlive() and tick() < untilAt do
+                        TouchAction()
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        task.wait(0.08)
+                    end
+
+                    if part and part.Parent and type(firetouchinterest) == "function" then
+                        pcall(function()
+                            firetouchinterest(root, part, 0)
+                            firetouchinterest(root, part, 1)
+                        end)
+                    end
+
+                    -- Escape upward/outward BEFORE collision is restored. Never leave
+                    -- HRP inside a tree, wall, plate, relic slot or curtain.
+                    local escape = targetCF.Position + Vector3.new(0, 6, 0)
+                    if part and part.Parent then
+                        escape = escape + part.CFrame.LookVector * 3
+                    end
+                    root.CFrame = CFrame.new(escape) * root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    task.wait(0.10)
+                end, debug.traceback)
+
+                for obj, original in pairs(collision) do
+                    if obj and obj.Parent then
+                        pcall(function() obj.CanCollide = original end)
+                    end
+                end
+                MovementManager:Release("Saber")
+                if not success then
+                    warn("[BobonHub] Saber stable-touch failed")
+                end
+                return success == true
+            end
+
+            local function Go(cf, opts)
+                opts = opts or {}
+                opts.timeout = opts.timeout or 90
+                opts.retries = opts.retries == nil and 2 or opts.retries
+                return TravelAndWait("Saber", myToken, cf, opts)
+            end
+
+            local plateFallback = {
                 CFrame.new(-1421.87,55.47,21.78),
                 CFrame.new(-1647.20,29.15,438.30),
                 CFrame.new(-1324.10,31.46,-461.40),
                 CFrame.new(-1152.38,9.75,-700.31),
                 CFrame.new(-1180.90,21.00,187.86),
             }
-            local map=workspace:FindFirstChild("Map")
-            local jungle=map and map:FindFirstChild("Jungle")
-            local plates=jungle and jungle:FindFirstChild("QuestPlates")
-            local door=plates and plates:FindFirstChild("Door")
-            for cycle=1,3 do
-                if door and door.Transparency ~= 0 then break end
-                for i=1,5 do
-                    if not _G.State:IsActionValid(myToken) then return end
-                    TouchAction(); _G.BobonStatus=("Saber 1/8 • Plate %d/5"):format(i)
-                    map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
-                    plates=jungle and jungle:FindFirstChild("QuestPlates")
-                    door=plates and plates:FindFirstChild("Door")
-                    local plate=plates and (plates:FindFirstChild("Plate"..i) or plates:FindFirstChild(tostring(i)))
-                    local button=plate and (plate:FindFirstChild("Button") or plate:FindFirstChildWhichIsA("BasePart",true))
-                    if button and button:IsA("BasePart") then
-                        TravelAndWait("Saber",myToken,button.CFrame,{timeout=35,arrivalThreshold=4,settle=0.05})
-                        TouchPart(button)
-                    else
-                        TravelAndWait("Saber",myToken,plateFallback[i],{timeout=35,arrivalThreshold=3,settle=0.20})
+
+            local function ResolvePlateButton(index)
+                local _, _, plates = MapState()
+                if not plates then return nil end
+                local plate = plates:FindFirstChild("Plate" .. index)
+                    or plates:FindFirstChild(tostring(index))
+                if not plate then return nil end
+                local button = plate:FindFirstChild("Button", true)
+                return button and button:IsA("BasePart") and button or nil
+            end
+
+            local function RunPlates()
+                _G.BobonStatus = "Saber 1/8 • streaming Jungle buttons"
+                if not Go(CFrame.new(-1612.56,36.98,148.72), {
+                    timeout=90, arrivalThreshold=22, settle=0.20, retries=3,
+                }) then
+                    return false
+                end
+
+                -- Do not infer "door open" from missing streamed objects.
+                local streamDeadline = tick() + 8
+                while _G.State:IsActionValid(myToken) and tick() < streamDeadline do
+                    local _, _, plates, door = MapState()
+                    if plates and door then break end
+                    TouchAction()
+                    task.wait(0.15)
+                end
+
+                for cycle = 1, 6 do
+                    if DoorIsOpen() then return true end
+                    for i = 1, 5 do
+                        if not _G.State:IsActionValid(myToken) or not IsAlive() then return false end
+                        if DoorIsOpen() then return true end
+
+                        _G.BobonStatus = ("Saber 1/8 • button %d/5 • pass %d/6"):format(i, cycle)
+                        local button = ResolvePlateButton(i)
+                        local cf = button and button.CFrame or plateFallback[i]
+                        StableTouch(cf, button, 0.72)
+                        task.wait(0.28)
                     end
-                    task.wait(0.12)
+                    task.wait(0.45)
                 end
-                map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
-                plates=jungle and jungle:FindFirstChild("QuestPlates"); door=plates and plates:FindFirstChild("Door")
-                task.wait(0.3)
-            end
-            if door and door.Transparency == 0 then
-                _G.BobonStatus="Saber • plate door still closed; retrying"
-                self.NextOptional.Saber=tick()+2
-                return
+                return DoorIsOpen()
             end
 
-            -- Torch + Desert burn.
-            _G.BobonStatus="Saber 2/8 • Torch"
-            if not FindOwnedTool("Torch") then
-                TravelAndWait("Saber",myToken,CFrame.new(-1610.01,11.50,164.00),{timeout=90,arrivalThreshold=4,settle=0.4})
-                local final=jungle and jungle:FindFirstChild("Final")
-                if final then
-                    local torchPart=final:FindFirstChildWhichIsA("BasePart",true)
-                    if torchPart then TouchPart(torchPart) end
+            local function GetTorchAndBurn()
+                local _, _, _, _, _, burnPart = MapState()
+                if BurnIsDone() then return true end
+
+                _G.BobonStatus = "Saber 2/8 • Torch"
+                local torch = FindOwnedTool("Torch")
+                if not torch then
+                    if not Go(CFrame.new(-1610.01,11.50,164.00), {
+                        timeout=75, arrivalThreshold=8, settle=0.15, retries=3,
+                    }) then return false end
+                    -- The public flow obtains the Torch by standing on its fixed pickup.
+                    -- Do not select an arbitrary BasePart from Jungle.Final.
+                    StableTouch(CFrame.new(-1610.01,11.50,164.00), nil, 0.85)
+                    torch = WaitTool("Torch", 7)
                 end
-            end
-            local torch=WaitTool("Torch",5)
-            if not torch then self.NextOptional.Saber=tick()+2; _G.BobonStatus="Saber • waiting Torch"; return end
-            EquipNamed("Torch")
-            _G.BobonStatus="Saber 3/8 • Burn desert wall"
-            TravelAndWait("Saber",myToken,CFrame.new(1114.61,5.05,4350.23),{timeout=90,arrivalThreshold=4,settle=5.6})
-            map=workspace:FindFirstChild("Map")
-            local desert=map and map:FindFirstChild("Desert")
-            local burn=desert and desert:FindFirstChild("Burn")
-            local burnPart=burn and burn:FindFirstChild("Part")
-            if burnPart and burnPart:IsA("BasePart") then TouchPart(burnPart); task.wait(0.5) end
+                if not torch or not EquipNamed("Torch") then return false end
 
-            -- Cup -> fill at Frozen Village -> Sick Man.
-            _G.BobonStatus="Saber 4/8 • Cup + Sick Man"
-            pcall(function() CommF_:InvokeServer("ProQuestProgress","GetCup") end)
-            if not FindOwnedTool("Cup") then
-                TravelAndWait("Saber",myToken,CFrame.new(1114.27,4.17,4366.15),{timeout=40,arrivalThreshold=4,settle=0.3})
-                pcall(function() CommF_:InvokeServer("ProQuestProgress","GetCup") end)
-            end
-            local cup=WaitTool("Cup",5)
-            if not cup then self.NextOptional.Saber=tick()+2; _G.BobonStatus="Saber • waiting Cup"; return end
-            EquipNamed("Cup")
-            TravelAndWait("Saber",myToken,CFrame.new(1397.06,37.35,-1321.04),{timeout=90,arrivalThreshold=7,settle=0.4})
-            cup=Char() and Char():FindFirstChild("Cup") or FindOwnedTool("Cup")
-            if cup then pcall(function() CommF_:InvokeServer("ProQuestProgress","FillCup",cup) end) end
-            TravelAndWait("Saber",myToken,CFrame.new(1457.88,88.25,-1390.40),{timeout=50,arrivalThreshold=9,settle=0.3})
-            pcall(function() CommF_:InvokeServer("ProQuestProgress","SickMan") end)
-            task.wait(0.3); TouchAction()
+                _G.BobonStatus = "Saber 3/8 • burning Desert curtain"
+                if not Go(CFrame.new(1114.61,5.05,4350.23), {
+                    timeout=120, arrivalThreshold=8, settle=0.15, retries=3,
+                }) then return false end
 
-            -- Rich Man -> Mob Leader -> Relic. Re-read progress after each server step.
-            _G.BobonStatus="Saber 5/8 • Rich Man"
-            TravelAndWait("Saber",myToken,CFrame.new(-909.11,13.75,4077.35),{timeout=90,arrivalThreshold=10,settle=0.3})
-            local richProgress
-            pcall(function() richProgress=CommF_:InvokeServer("ProQuestProgress","RichSon") end)
-            if richProgress == 0 and not FindOwnedTool("Relic") then
-                _G.BobonStatus="Saber 6/8 • Mob Leader"
-                TravelAndWait("Saber",myToken,CFrame.new(-2852.90,7.56,5367.72),{timeout=90,arrivalThreshold=20,settle=0.2})
-                local waitBoss=tick()+45
-                local boss=FindBoss("Mob Leader")
-                while not boss and _G.State:IsActionValid(myToken) and tick()<waitBoss do TouchAction(); boss=FindBoss("Mob Leader"); task.wait(0.25) end
-                if boss then
-                    local deadline=tick()+150
-                    while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
-                        TouchAction(); boss=FindBoss("Mob Leader")
-                        if not boss then break end
-                        local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
-                        if not bh or bh.Health<=0 or not br then break end
-                        PrepareCombatTarget(boss); EquipCombatTool()
-                        TravelManager:Request(br,"Saber",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
-                        if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Mob Leader") end
-                        task.wait(0.08)
+                for _ = 1, 4 do
+                    local _, _, _, _, _, currentBurn = MapState()
+                    StableTouch(CFrame.new(1114.61,5.05,4350.23), currentBurn, 0.95)
+                    local verifyUntil = tick() + 2.5
+                    while _G.State:IsActionValid(myToken) and tick() < verifyUntil do
+                        if BurnIsDone() then return true end
+                        TouchAction()
+                        task.wait(0.15)
+                    end
+                    EquipNamed("Torch")
+                end
+                return BurnIsDone()
+            end
+
+            local function HealSickMan()
+                _G.BobonStatus = "Saber 4/8 • Cup + Sick Man"
+                local _, sick = Invoke("ProQuestProgress", "SickMan")
+                if sick == 0 then return true end
+
+                Invoke("ProQuestProgress", "GetCup")
+                local cup = WaitTool("Cup", 5)
+                if not cup then
+                    -- Fallback to the Desert cup room only if the direct server step
+                    -- did not materialize the Cup.
+                    Go(CFrame.new(1114.27,4.17,4366.15), {
+                        timeout=50, arrivalThreshold=7, settle=0.15, retries=2,
+                    })
+                    StableTouch(CFrame.new(1114.27,4.17,4366.15), nil, 0.55)
+                    Invoke("ProQuestProgress", "GetCup")
+                    cup = WaitTool("Cup", 5)
+                end
+                if not cup or not EquipNamed("Cup") then return false end
+
+                -- Public implementations call FillCup directly. Try that first.
+                local liveCup = Char() and Char():FindFirstChild("Cup") or FindOwnedTool("Cup")
+                if liveCup then Invoke("ProQuestProgress", "FillCup", liveCup) end
+                task.wait(0.35)
+                Invoke("ProQuestProgress", "SickMan")
+                task.wait(0.45)
+                local _, after = Invoke("ProQuestProgress", "SickMan")
+                if after == 0 then return true end
+
+                -- Proximity fallback for server builds that validate the physical leak/NPC.
+                if Go(CFrame.new(1397.06,37.35,-1321.04), {
+                    timeout=120, arrivalThreshold=9, settle=0.20, retries=3,
+                }) then
+                    EquipNamed("Cup")
+                    liveCup = Char() and Char():FindFirstChild("Cup") or FindOwnedTool("Cup")
+                    if liveCup then Invoke("ProQuestProgress", "FillCup", liveCup) end
+                end
+                Go(CFrame.new(1457.88,88.25,-1390.40), {
+                    timeout=60, arrivalThreshold=12, settle=0.20, retries=2,
+                })
+                Invoke("ProQuestProgress", "SickMan")
+                task.wait(0.45)
+                local _, verified = Invoke("ProQuestProgress", "SickMan")
+                return verified == 0
+            end
+
+            local function FightBoss(name, spawnCF, waitSeconds)
+                local boss = FindBoss(name)
+                if not boss and spawnCF then
+                    Go(spawnCF, {timeout=120,arrivalThreshold=20,settle=0.15,retries=3})
+                end
+                local waitUntil = tick() + (waitSeconds or 60)
+                while not boss and _G.State:IsActionValid(myToken)
+                    and IsAlive() and tick() < waitUntil do
+                    TouchAction()
+                    boss = FindBoss(name)
+                    task.wait(0.20)
+                end
+                if not boss then return false end
+
+                local deadline = tick() + 210
+                while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+                    TouchAction()
+                    boss = FindBoss(name)
+                    if not boss then return true end
+                    local bh = boss:FindFirstChildOfClass("Humanoid")
+                    local br = boss:FindFirstChild("HumanoidRootPart")
+                    if not bh or bh.Health <= 0 or not br then return true end
+                    PrepareCombatTarget(boss)
+                    EquipCombatTool()
+                    TravelManager:Request(br, "Saber", {
+                        arrivalThreshold=_G.Settings.FarmArrivalThreshold,
+                        combatHover=true,
+                    })
+                    if TravelManager:IsAtCombatAnchor(br) then
+                        Attack(boss, name)
+                    end
+                    task.wait(0.08)
+                end
+                return FindBoss(name) == nil
+            end
+
+            local function RunRichMan()
+                _G.BobonStatus = "Saber 5/8 • Rich Man"
+                local okRich, rich = Invoke("ProQuestProgress", "RichSon")
+                if not okRich then return false end
+
+                if rich == nil then
+                    -- First dialogue starts the Mob Leader stage.
+                    Invoke("ProQuestProgress", "RichSon")
+                    task.wait(0.55)
+                    return false
+                end
+
+                if tonumber(rich) == 0 then
+                    _G.BobonStatus = "Saber 6/8 • Mob Leader"
+                    if not FightBoss("Mob Leader", CFrame.new(-2967.60,15.0,5328.71), 75) then
+                        _G.BobonStatus = "Saber • waiting Mob Leader respawn"
+                        return false
+                    end
+                    Invoke("ProQuestProgress", "RichSon")
+                    task.wait(0.55)
+                    return false
+                end
+
+                if tonumber(rich) == 1 or FindOwnedTool("Relic") then
+                    if not FindOwnedTool("Relic") then
+                        Invoke("ProQuestProgress", "RichSon")
+                    end
+                    local relic = WaitTool("Relic", 6)
+                    if not relic then
+                        -- Some builds validate the Rich Man proximity when rewarding.
+                        Go(CFrame.new(-909.11,13.75,4077.35), {
+                            timeout=90,arrivalThreshold=14,settle=0.20,retries=3,
+                        })
+                        Invoke("ProQuestProgress", "RichSon")
+                        relic = WaitTool("Relic", 5)
+                    end
+                    if not relic or not EquipNamed("Relic") then return false end
+
+                    _G.BobonStatus = "Saber 7/8 • Ancient Relic"
+                    if not Go(CFrame.new(-1404.92,29.98,3.81), {
+                        timeout=120,arrivalThreshold=10,settle=0.15,retries=3,
+                    }) then return false end
+                    StableTouch(CFrame.new(-1404.92,29.98,3.81), nil, 0.85)
+                    Invoke("ProQuestProgress", "PlaceRelic")
+                    task.wait(0.75)
+                    return FinalIsOpen() or FindBoss("Saber Expert") ~= nil
+                end
+
+                -- Unknown server state: re-open the dialogue and re-evaluate instead
+                -- of assuming the next stage or ending the whole action.
+                Invoke("ProQuestProgress", "RichSon")
+                task.wait(0.45)
+                return false
+            end
+
+            local wholeDeadline = tick() + 900
+            while _G.State:IsActionValid(myToken) and IsAlive()
+                and tick() < wholeDeadline and not HasSaber() do
+                TouchAction()
+
+                local saberBoss = FindBoss("Saber Expert")
+                if saberBoss or FinalIsOpen() then
+                    _G.BobonStatus = "Saber 8/8 • Saber Expert"
+                    if FightBoss("Saber Expert", CFrame.new(-1401.85,35.98,8.82), 80) then
+                        InventoryCache.At = 0
+                        WeaponInventoryCache.At = 0
+                        task.wait(0.5)
+                    else
+                        _G.BobonStatus = "Saber • waiting Saber Expert"
+                        task.wait(0.7)
+                    end
+                    continue
+                end
+
+                local _, sick = Invoke("ProQuestProgress", "SickMan")
+                if sick == 0 then
+                    RunRichMan()
+                    task.wait(0.35)
+                    continue
+                end
+
+                -- Before Sick Man is complete, server/map checkpoints decide the stage.
+                -- Never advance because a streamed object is simply missing.
+                if FindOwnedTool("Cup") then
+                    HealSickMan()
+                elseif BurnIsDone() then
+                    HealSickMan()
+                elseif FindOwnedTool("Torch") or DoorIsOpen() then
+                    if GetTorchAndBurn() then
+                        HealSickMan()
                     end
                 else
-                    self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • Mob Leader respawn"; return
+                    if not RunPlates() then
+                        _G.BobonStatus = "Saber • buttons not verified; retrying same stage"
+                        self.NextOptional.Saber = tick() + 2
+                        task.wait(0.7)
+                    end
                 end
-                TravelAndWait("Saber",myToken,CFrame.new(-909.11,13.75,4077.35),{timeout=90,arrivalThreshold=10,settle=0.3})
-                pcall(function() CommF_:InvokeServer("ProQuestProgress","RichSon") end)
-                pcall(function() CommF_:InvokeServer("ProQuestProgress") end)
+                task.wait(0.25)
             end
-            if not WaitTool("Relic",5) then
-                pcall(function() CommF_:InvokeServer("ProQuestProgress","RichSon") end)
-                pcall(function() CommF_:InvokeServer("ProQuestProgress") end)
-            end
-            if not WaitTool("Relic",4) then self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • waiting Relic"; return end
 
-            _G.BobonStatus="Saber 7/8 • Place Relic"
-            EquipNamed("Relic")
-            TravelAndWait("Saber",myToken,CFrame.new(-1405.84,29.85,5.05),{timeout=90,arrivalThreshold=6,settle=0.3})
-            pcall(function() CommF_:InvokeServer("ProQuestProgress","PlaceRelic") end)
-            map=workspace:FindFirstChild("Map"); jungle=map and map:FindFirstChild("Jungle")
-            local final=jungle and jungle:FindFirstChild("Final")
-            if final then local part=final:FindFirstChildWhichIsA("BasePart",true); if part then TouchPart(part) end end
-
-            _G.BobonStatus="Saber 8/8 • Saber Expert"
-            local boss=FindBoss("Saber Expert"); local waitBoss=tick()+50
-            while not boss and _G.State:IsActionValid(myToken) and tick()<waitBoss do
-                TouchAction(); boss=FindBoss("Saber Expert"); task.wait(0.25)
+            InventoryCache.At = 0
+            WeaponInventoryCache.At = 0
+            if HasSaber() then
+                _G.BobonStatus = "Saber • COMPLETE"
+            elseif _G.State:IsActionValid(myToken) and IsAlive() then
+                _G.BobonStatus = "Saber • checkpoint timeout; retrying"
+                self.NextOptional.Saber = tick() + 2
             end
-            if not boss then self.NextOptional.Saber=tick()+3; _G.BobonStatus="Saber • Saber Expert respawn"; return end
-            local timeout=tick()+210
-            while _G.State:IsActionValid(myToken) and IsAlive() and tick()<timeout and not InventoryHas("Saber") do
-                TouchAction(); boss=FindBoss("Saber Expert"); if not boss then break end
-                local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
-                if not bh or bh.Health<=0 or not br then break end
-                PrepareCombatTarget(boss); EquipCombatTool()
-                TravelManager:Request(br,"Saber",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
-                if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Saber Expert") end
-                task.wait(0.08)
-            end
-            InventoryCache.At=0; WeaponInventoryCache.At=0
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Saber: "..tostring(err)) end
-        if _G.State.IsTraveling and _G.State.MovementOwner=="Saber" then TravelManager:Stop("SaberComplete") end
+
+        if not ok then
+            warn("[BobonHub] Module Error: Saber: " .. tostring(err))
+            self.NextOptional.Saber = tick() + 2
+        end
+        if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
+            TravelManager:Stop("SaberComplete")
+        end
+        MovementManager:Release("Saber")
         _G.State:ReleaseAction(myToken)
-        if _G.State.Mode=="GettingItem" then _G.State:SetMode("Idle") end
+        if _G.State.Mode == "GettingItem" then _G.State:SetMode("Idle") end
     end)
     return true
 end
+
 
 function ItemProgression:CheckPoleV1()
     if not _G.Settings.AutoItems then return false end
@@ -9598,7 +9953,7 @@ end
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
 
-    -- v21.26: permanent purchases are cheapest/fastest and must never wait behind a
+    -- v21.27: permanent purchases are cheapest/fastest and must never wait behind a
     -- long puzzle. This is what makes 150k Dark Step happen immediately at 200k Beli.
     if allowOptional and FightingStyleController:PurchaseTick() then return true end
 
@@ -9637,7 +9992,7 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     return false
 end
 
--- v21.26 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
+-- v21.27 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
 -- instead of adding statements/locals to the already-large MainController function.
 -- Once Saber/Sea/item work claims ActionToken, PrepareClaimedAction stops Farm travel
 -- and the main loop's existing ActiveActionToken gate yields control immediately.
@@ -10271,7 +10626,7 @@ function KatakuriController:TryRun()
 end
 
 -- ══════════════════════════════════════════════════════════════════
---              FRUIT MANAGER v21.26 — ANYWHERE GACHA + SAFE STORE
+--              FRUIT MANAGER v21.27 — ANYWHERE GACHA + SAFE STORE
 --   Internal server endpoint remains CommF_("Cousin","Buy") in current public hubs.
 --   No CFrame/NPC proximity/MovementOwner is required by this client path: the server
 --   validates level, money and the real gacha cooldown.  This manager therefore works
@@ -12151,10 +12506,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.26] Full Script Loaded Successfully!")
-print("[BobonHub v21.26] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.26] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.26] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.26] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.26] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.26] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.27] Full Script Loaded Successfully!")
+print("[BobonHub v21.27] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.27] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.27] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.27] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.27] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.27] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
