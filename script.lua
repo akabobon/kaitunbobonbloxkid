@@ -1,7 +1,14 @@
 -- =================================================================
---         BOBON HUB v22.1 | SAFE SOFT-BRING | GOAL-DRIVEN KAITUN CORE | BOBON UI
+--         BOBON HUB v22.2 | MULTI-FRUIT SNIPE | SAFE SOFT-BRING | GOAL-DRIVEN KAITUN CORE | BOBON UI
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.0 GOAL-DRIVEN CORE | Version: v22.1
+--         Base: v22.1 SAFE SOFT-BRING | Version: v22.2
+--
+--
+--  v22.2 MULTI-FRUIT SNIPE:
+--  [S22.2-1] External ["Snipe Fruit"] accepts either one string or an ordered list.
+--  [S22.2-2] Priority order is preserved; the sniper checks live GetFruits stock when available.
+--  [S22.2-3] Purchase success is verified by Beli/tool change before stopping the list, avoiding
+--             a pcall-success false positive that previously prevented fallback to the next fruit.
 --
 --
 --  v22.1 SAFE SOFT-BRING / STATUE ROOT FIX:
@@ -1443,7 +1450,7 @@ _G.Settings = {
     LockFragment         = 0,
     RainbowHaki          = false,
     Shutdown             = false,
-    SnipeFruit           = "",
+    SnipeFruit           = {},
     SwitchMelee          = true,
 }
 
@@ -1471,7 +1478,18 @@ do
         _G.Settings.FruitEnabled = _G.Settings.GetFruits
         _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
         _G.Settings.Shutdown = bool(cfg["Shutdown"], _G.Settings.Shutdown)
-        _G.Settings.SnipeFruit = str(cfg["Snipe Fruit"], _G.Settings.SnipeFruit)
+        do
+            local snipe = cfg["Snipe Fruit"]
+            if type(snipe) == "string" then
+                _G.Settings.SnipeFruit = snipe ~= "" and {snipe} or {}
+            elseif type(snipe) == "table" then
+                local out = {}
+                for _, name in ipairs(snipe) do
+                    if type(name) == "string" and name ~= "" then out[#out + 1] = name end
+                end
+                _G.Settings.SnipeFruit = out
+            end
+        end
         _G.Settings.SwitchMelee = bool(cfg["Switch Melee"], _G.Settings.SwitchMelee)
         _G.Settings.LockFragment = math.max(0, num(cfg["Lock Fragment"], _G.Settings.LockFragment))
         _G.Settings.HopPlayerNear = bool(cfg["Hop Player Near"], _G.Settings.HopPlayerNear)
@@ -14450,14 +14468,86 @@ function IndraController:TryRun()
 end
 
 local FruitSniper = { LastTry = 0 }
+
+function FruitSniper:NormalizeList(value)
+    if type(value) == "string" then
+        return value ~= "" and {value} or {}
+    end
+    if type(value) ~= "table" then return {} end
+    local out = {}
+    for _, name in ipairs(value) do
+        if type(name) == "string" and name ~= "" then out[#out + 1] = name end
+    end
+    return out
+end
+
+function FruitSniper:SnapshotFruitTools()
+    local out = {}
+    for _, container in ipairs({Char(), LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")}) do
+        if container then
+            for _, obj in ipairs(container:GetChildren()) do
+                if obj:IsA("Tool") then out[obj] = true end
+            end
+        end
+    end
+    return out
+end
+
+function FruitSniper:HasNewFruitTool(before)
+    for _, container in ipairs({Char(), LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")}) do
+        if container then
+            for _, obj in ipairs(container:GetChildren()) do
+                if obj:IsA("Tool") and not before[obj] then
+                    local tip = tostring(obj.ToolTip or "")
+                    local name = tostring(obj.Name or "")
+                    if tip == "Blox Fruit" or string.find(string.lower(name), "fruit", 1, true) then
+                        return true
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
 function FruitSniper:Tick()
-    local wanted = tostring(_G.Settings.SnipeFruit or "")
-    if wanted == "" or tick() - self.LastTry < 5 or not IsAlive() then return false end
+    local wanted = self:NormalizeList(_G.Settings.SnipeFruit)
+    if #wanted == 0 or tick() - self.LastTry < 5 or not IsAlive() then return false end
     self.LastTry = tick()
-    pcall(function() CommF_:InvokeServer("GetFruits") end)
-    local ok = pcall(function() CommF_:InvokeServer("PurchaseRawFruit", wanted, false) end)
-    if ok then pcall(function() FruitManager:StoreBackpackFruits() end) end
-    return ok
+
+    local stock = nil
+    local okStock, rows = pcall(function() return CommF_:InvokeServer("GetFruits") end)
+    if okStock and type(rows) == "table" then
+        stock = {}
+        for _, row in pairs(rows) do
+            if type(row) == "table" and type(row.Name) == "string" then
+                local onSale = row.OnSale
+                if onSale == nil then onSale = row.OnStock end
+                if onSale == nil then onSale = row.Stock end
+                if onSale == nil or onSale == true or (type(onSale) == "number" and onSale > 0) then
+                    stock[string.lower(row.Name)] = true
+                end
+            end
+        end
+    end
+
+    for _, name in ipairs(wanted) do
+        if not stock or stock[string.lower(name)] then
+            local beforeBeli = Beli()
+            local beforeTools = self:SnapshotFruitTools()
+            local okCall = pcall(function() CommF_:InvokeServer("PurchaseRawFruit", name, false) end)
+            if okCall then
+                task.wait(0.15)
+                local bought = Beli() < beforeBeli or self:HasNewFruitTool(beforeTools)
+                if bought then
+                    _G.BobonStatus = "Fruit Snipe: " .. tostring(name) .. " ✓"
+                    pcall(function() FruitManager:StoreBackpackFruits() end)
+                    return true
+                end
+            end
+        end
+    end
+    return false
 end
 task.spawn(function() while SessionAlive() and task.wait(2) do pcall(function() FruitSniper:Tick() end) end end)
 
