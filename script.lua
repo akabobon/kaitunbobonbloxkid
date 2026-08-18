@@ -1,7 +1,21 @@
 -- =================================================================
---         BOBON HUB v21.36 VIDEO7837 FIX | FARM/GATHER/COMBAT RECOVERY + FULL PROGRESSION
+--         BOBON HUB v21.37 ROOT FIX | SINGLE FARM STATE OWNER + FIXED-PILE + FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.35 PRIORITY HARDENED | Version: v21.36
+--         Base: v21.36 VIDEO7837 RECOVERY | Version: v21.37
+--
+--  v21.37 ROOT-CAUSE REWORK (VIDEO Roblox(13)):
+--  [ROOT37-1] Cluster phase/target state now has ONE active writer. Removed the 30ms background Tick
+--             and ChildAdded phase reset that could flip KILL back to ACQUIRE behind MainController.
+--  [ROOT37-2] Heartbeat may only re-stack ALREADY VERIFIED roots; it cannot start ownership proofs,
+--             select targets, revoke mobs, or mutate ACQUIRE/STACK/KILL phase.
+--  [ROOT37-3] Failed direct melee purchase probes no longer extend EconomyPause and cancel Farm travel.
+--             Unverified purchases use a bounded retry backoff instead of retrying before the old pause ends.
+--  [ROOT37-4] ACQUIRE uses a hard wave epoch. Streaming/ChildAdded cannot restart the 4s budget forever;
+--             KILL fallback must get a real attack window before another acquisition sweep.
+--  [ROOT37-5] One bad PERSIST victim no longer resets the whole wave instantly; it is revoked locally and
+--             the normal KILL slice finishes before the controller schedules another acquisition pass.
+--  [ROOT37-6] TravelManager enforces action preemption: Farm cannot request movement while a progression
+--             ActionToken is active, and a claimed non-Farm action may atomically stop stale Farm travel.
 --
 --  v21.36 VIDEO 1000007837 ROOT-CAUSE FIX:
 --  [V36-1] ACQUIRE no longer resets its budget every time another streamed mob appears.
@@ -5758,8 +5772,12 @@ function ClusterFarmController:UpdatePhase()
         state.ClusterPhase = "ACQUIRE"
         state.ClusterPhaseStartedAt = now
     elseif state.ClusterPhase == "ACQUIRE" then
-        if now - (state.ClusterPhaseStartedAt or now)
-            >= (_G.Settings.ClusterAcquirePhaseBudget or 4.0) then
+        local acquireEpoch = tonumber(state.ClusterWaveStartedAt) or 0
+        if acquireEpoch <= 0 then
+            acquireEpoch = tonumber(state.ClusterPhaseStartedAt) or now
+            state.ClusterWaveStartedAt = acquireEpoch
+        end
+        if now - acquireEpoch >= (_G.Settings.ClusterAcquirePhaseBudget or 4.0) then
             state.ClusterPhase = "KILL"
             state.ClusterPhaseStartedAt = now
         end
@@ -5771,6 +5789,7 @@ function ClusterFarmController:UpdatePhase()
             >= killSlice then
             state.ClusterPhase = "ACQUIRE"
             state.ClusterPhaseStartedAt = now
+            state.ClusterWaveStartedAt = now
         end
     end
     return state.ClusterPhase, verified, total
@@ -5822,8 +5841,9 @@ function ClusterFarmController:AuditVictimLiveness()
                         root.CFrame = CFrame.new(original) * rot
                     end)
                 end
-                state.ClusterPhase = "ACQUIRE"
-                state.ClusterPhaseStartedAt = now
+                -- v21.37: revoke only this ghost. Do NOT reset the entire wave
+                -- here; UpdatePhase will schedule the next ACQUIRE after the current
+                -- KILL slice, allowing healthy victims to keep taking damage.
                 if state.ClusterPrimary == model then state.ClusterPrimary = nil end
                 if state.FarmTarget == model then state.FarmTarget = nil end
                 if state.CurrentTarget == model then state.CurrentTarget = nil end
@@ -6331,6 +6351,44 @@ function ClusterFarmController:Tick()
     return stacked
 end
 
+-- v21.37 HEARTBEAT-SAFE RESTACK. This function is deliberately read/hold-only:
+-- it never discovers candidates, starts persistence proofs, changes phase, selects
+-- targets, or revokes the whole cluster. Main/active Raid controller owns state.
+function ClusterFarmController:RestackVerifiedOnly()
+    if not self:PolicyValid() then return 0 end
+    local state = _G.State
+    local anchor = self:GetPileAnchorPosition()
+    if not state or not anchor then return 0 end
+    local now, count = tick(), 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, root, hum = entry.Model, entry.Root, entry.Humanoid
+        if model and model.Parent and root and root.Parent and hum and hum.Health > 0
+            and self:IsModelAllowed(model) then
+            local authority = GatherAuthorityClass[root]
+            local at = VerifiedGatherRoots[root]
+            if at and now - at <= (_G.Settings.GatherVerifiedTTL or 2.5)
+                and (authority == "OWNED" or authority == "PERSIST"
+                    or authority == "DAMAGE-LEASE") then
+                local stillValid = true
+                if authority == "OWNED" and ClientOwnsMob(root) ~= true then
+                    stillValid = false
+                    VerifiedGatherRoots[root] = nil
+                    GatherAuthorityClass[root] = nil
+                end
+                if stillValid then
+                    local ok = pcall(function()
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        root.CFrame = CFrame.new(anchor)
+                    end)
+                    if ok then count = count + 1 end
+                end
+            end
+        end
+    end
+    return count
+end
+
 -- Compatibility wrapper for old callers. Quest mode now persists at the
 -- current state anchor instead of using the primary mob as the cluster center.
 function FarmPositionController:GatherMobCluster(mobName, primary)
@@ -6342,14 +6400,15 @@ function FarmPositionController:GatherMobCluster(mobName, primary)
     return ClusterFarmController:Tick()
 end
 
--- TRUE ALL-MOB magnet: Heartbeat keeps every member of the latest full-spawn
--- snapshot pinned to one anchor while a light rescan discovers new respawns.
+-- v21.37 SINGLE CLUSTER STATE OWNER.
+-- Heartbeat only holds roots that the active controller already verified.
+-- Candidate discovery + phase mutation happen from the active Main/Raid tick only.
 local ClusterHeartbeatConnection
 pcall(function()
     ClusterHeartbeatConnection = RunService.Heartbeat:Connect(function()
         if not SessionAlive() then return end
         if _G.State and _G.State.ClusterMode ~= "OFF" then
-            pcall(function() ClusterFarmController:RestackBatch() end)
+            pcall(function() ClusterFarmController:RestackVerifiedOnly() end)
         end
     end)
 end)
@@ -6358,20 +6417,11 @@ pcall(function()
     if enemies then
         ClusterFarmController.EnemyAddedConnection = enemies.ChildAdded:Connect(function(mob)
             if not SessionAlive() or not _G.State or _G.State.ClusterMode == "OFF" then return end
-            task.delay(0.03, function()
-                if not SessionAlive() or not mob or not mob.Parent then return end
-                if ClusterFarmController:IsModelAllowed(mob) then
-                    _G.State.ClusterPhase = "ACQUIRE"
-                    _G.State.ClusterPhaseStartedAt = tick()
-                end
-            end)
+            -- Observation only. Do not mutate ClusterPhase/PhaseStartedAt here.
+            if mob and ClusterFarmController:IsModelAllowed(mob) then
+                _G.State.ClusterLastSeen = tick()
+            end
         end)
-    end
-end)
-task.spawn(function()
-    while SessionAlive() and task.wait(0.03) do
-        local ok, err = pcall(function() ClusterFarmController:Tick() end)
-        if not ok and _G.Settings.DEBUG then warn("[BobonHub] Cluster Error: " .. tostring(err)) end
     end
 end)
 
@@ -6550,6 +6600,15 @@ function TravelManager:Request(targetCF, owner, options)
 
     if not _G.State:CanRequestTravel() then
         return false, "CannotTravel:" .. _G.State.Mode
+    end
+    -- v21.37 action/movement arbitration. A progression action that claimed the
+    -- ActionToken is authoritative; a stale Farm tick may not start/retarget travel.
+    if owner == "Farm" and _G.State.ActiveActionToken ~= 0 then
+        return false, "ActionBusy:" .. tostring(_G.State.ActionOwner)
+    end
+    if owner ~= "Farm" and _G.State.ActiveActionToken ~= 0
+        and _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+        self:Stop("ActionPreemptFarm")
     end
 
 
@@ -8439,6 +8498,7 @@ local FightingStyleController = {
     LastStatus = "idle",
     SanguineKnownOwned = false,
     KnownPurchased = {},
+    PurchaseFailStreak = 0,
 }
 
 local function InvokeStyle(remote, ...)
@@ -8572,7 +8632,8 @@ function FightingStyleController:PurchaseTick()
         self.LastPurchaseProbe = tick()
         _G.BobonEconomy.LastMeleeAttempt = self.LastPurchaseProbe
         if _G.BobonEconomy then
-            _G.BobonEconomy:PauseFarm("MELEE • " .. tostring(label), _G.Settings.EconomyPauseDuration or 2.10)
+            -- v21.37: direct purchase remotes own NO movement. A rejected/ambiguous
+            -- BuyBlackLeg/BuyElectro/etc. must never stop an active Farm travel.
             _G.BobonEconomy:Notice("MELEE → " .. tostring(label), 2.2)
         end
     end
@@ -8581,14 +8642,22 @@ function FightingStyleController:PurchaseTick()
         local verified = self:VerifyPurchase(value, beforeBeli, beforeFragments, 1.10)
         self:RestoreHeldTool(heldName)
         if verified then
+            self.PurchaseFailStreak = 0
             self:MarkKnown(value)
             _G.BobonStatus = "Melee: Bought/claimed " .. tostring(label)
             _G.BobonEconomy:Notice("MELEE ✓ " .. tostring(label), 3.0)
             DLog("STYLE", "Verified purchase: " .. tostring(label))
             return true
         end
-        _G.BobonEconomy:Notice("MELEE → retry " .. tostring(label), 2.0)
-        DLog("STYLE", "Purchase probe not verified: " .. tostring(label))
+        self.PurchaseFailStreak = (tonumber(self.PurchaseFailStreak) or 0) + 1
+        local backoff = math.min(20, 3 + self.PurchaseFailStreak * 2)
+        -- LastPurchaseProbe may intentionally be in the future. PurchaseTick's
+        -- existing interval guard then becomes a zero-extra-local retry gate.
+        self.LastPurchaseProbe = tick() + backoff
+        _G.BobonEconomy:Notice(("MELEE → retry %s in %ds")
+            :format(tostring(label), backoff), math.min(backoff, 4))
+        DLog("STYLE", "Purchase probe not verified: " .. tostring(label)
+            .. " | backoff=" .. tostring(backoff))
         return false
     end
 
@@ -13903,8 +13972,8 @@ task.spawn(function()
             -- A mob death no longer destroys the cluster or forces player travel.
             local questAnchor = ResolveQuestClusterAnchor(q, questMobName) or q.MC
             ClusterFarmController:Activate("QUEST", {questMobName}, questAnchor, "Farm")
+            -- Tick owns candidate scan + exactly one phase transition.
             ClusterFarmController:Tick()
-            ClusterFarmController:UpdatePhase()
 
             local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
@@ -14095,6 +14164,7 @@ task.spawn(function()
                     end
                     _G.State.ClusterPhase = "ACQUIRE"
                     _G.State.ClusterPhaseStartedAt = tick()
+                    _G.State.ClusterWaveStartedAt = _G.State.ClusterPhaseStartedAt
                     _G.BobonStatus = "Farm: Reacquiring " .. tostring(questMobName)
                     ResetFarmDamageWatch(target)
                     return
@@ -14343,10 +14413,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.36] Full Script Loaded Successfully!")
-print("[BobonHub v21.35] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.35] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.35] Modules: QuestFarm | Fixed-Pile Acquire/Stack/Kill | All-Victim Air Combat | Smart Raid/Fragments | Fruit Reserve | Factory | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.35] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.35] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.35] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.37] Full Script Loaded Successfully!")
+print("[BobonHub v21.37] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.37] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.37] Modules: QuestFarm | Fixed-Pile Acquire/Stack/Kill | All-Victim Air Combat | Smart Raid/Fragments | Fruit Reserve | Factory | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.37] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.37] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.37] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
