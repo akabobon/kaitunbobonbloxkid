@@ -845,7 +845,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v22.3 DAMAGE CONTINUITY] Loading...")
+print("[BobonHub v22.4 AUTO REJOIN] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -14997,6 +14997,205 @@ task.spawn(function()
     end
 end)
 
+-- ══════════════════════════════════════════════════════════════════
+-- v22.4 CORE AUTO-REJOIN — KICK / DISCONNECT → JOIN GAME AGAIN
+--   * Core behavior: no Config toggle.
+--   * Roblox ErrorPrompt / GuiService disconnect message triggers one debounced rejoin owner.
+--   * First attempts use Teleport(placeId); repeated failures fall back to another public server.
+--   * Shutdown=true is intentionally excluded so an intentional shutdown never reconnects itself.
+--   * If the executor supports queue_on_teleport, preserve Configs and reload this GitHub loader.
+-- ══════════════════════════════════════════════════════════════════
+pcall(function()
+    if _G.BobonAutoRejoin and type(_G.BobonAutoRejoin.Destroy) == "function" then
+        _G.BobonAutoRejoin:Destroy()
+    end
+end)
+
+_G.BobonAutoRejoin = {
+    Busy = false,
+    Attempts = 0,
+    LastTrigger = 0,
+    Queued = false,
+    Connections = {},
+    Reason = nil,
+}
+
+function _G.BobonAutoRejoin:Destroy()
+    self.Busy = false
+    for _, connection in ipairs(self.Connections or {}) do
+        pcall(function() connection:Disconnect() end)
+    end
+    self.Connections = {}
+end
+
+function _G.BobonAutoRejoin:QueueResume()
+    if self.Queued then return end
+    local queueFn = nil
+    pcall(function()
+        if type(queue_on_teleport) == "function" then
+            queueFn = queue_on_teleport
+        elseif type(queueonteleport) == "function" then
+            queueFn = queueonteleport
+        elseif type(syn) == "table" and type(syn.queue_on_teleport) == "function" then
+            queueFn = syn.queue_on_teleport
+        elseif type(fluxus) == "table" and type(fluxus.queue_on_teleport) == "function" then
+            queueFn = fluxus.queue_on_teleport
+        end
+    end)
+    if type(queueFn) ~= "function" then return end
+
+    local configJson = "{}"
+    pcall(function()
+        local env = (type(getgenv) == "function" and getgenv()) or _G
+        if env and type(env.Configs) == "table" then
+            configJson = HttpService:JSONEncode(env.Configs)
+        end
+    end)
+
+    local resumeCode = string.format([[
+repeat task.wait() until game:IsLoaded()
+local __hs = game:GetService("HttpService")
+pcall(function()
+    getgenv().Configs = __hs:JSONDecode(%q)
+end)
+loadstring(game:HttpGet("https://raw.githubusercontent.com/akabobon/kaitunbobonbloxkid/main/script.lua"))()
+]], configJson)
+
+    local ok = pcall(queueFn, resumeCode)
+    if ok then self.Queued = true end
+end
+
+function _G.BobonAutoRejoin:TeleportNow(reason)
+    if not SessionAlive() or (_G.Settings and _G.Settings.Shutdown) then
+        self.Busy = false
+        return false
+    end
+
+    self.Attempts = (self.Attempts or 0) + 1
+    self.Reason = tostring(reason or self.Reason or "disconnect")
+    self:QueueResume()
+
+    pcall(function()
+        if _G.State then
+            _G.State.PriorityStage = "REJOIN"
+            _G.State.PriorityDetail = self.Reason
+            _G.State:SetMode("ServerHop")
+        end
+        _G.BobonStatus = "Rejoin: " .. self.Reason .. " • attempt " .. tostring(self.Attempts)
+        TravelManager:Stop("AutoRejoin")
+    end)
+
+    local ok = false
+    if self.Attempts >= 3 and HopManager and type(HopManager.FindServer) == "function" then
+        local serverId = nil
+        pcall(function() serverId = HopManager:FindServer() end)
+        if serverId and serverId ~= game.JobId then
+            ok = pcall(function()
+                TeleportSvc:TeleportToPlaceInstance(game.PlaceId, serverId, LP)
+            end)
+        end
+    end
+    if not ok then
+        ok = pcall(function()
+            TeleportSvc:Teleport(game.PlaceId, LP)
+        end)
+    end
+
+    if not ok then
+        self.Busy = false
+        local waitTime = math.min(8, 1.5 + self.Attempts * 0.75)
+        task.delay(waitTime, function()
+            if SessionAlive() and _G.BobonAutoRejoin == self then
+                self:Trigger("teleport-call-failed")
+            end
+        end)
+        return false
+    end
+
+    -- Teleport() may return before the client actually leaves. If Roblox leaves us
+    -- on the same disconnected prompt, retry with bounded backoff and eventually
+    -- use HopManager's different-server fallback.
+    local jobBefore = game.JobId
+    task.delay(12, function()
+        if not SessionAlive() or _G.BobonAutoRejoin ~= self then return end
+        if (_G.Settings and _G.Settings.Shutdown) then return end
+        if game.JobId == jobBefore then
+            self.Busy = false
+            self:Trigger("teleport-timeout")
+        end
+    end)
+    return true
+end
+
+function _G.BobonAutoRejoin:Trigger(reason)
+    if not SessionAlive() or (_G.Settings and _G.Settings.Shutdown) then return false end
+    local now = tick()
+    if self.Busy and now - (self.LastTrigger or 0) < 10 then return false end
+    self.LastTrigger = now
+    self.Busy = true
+    self.Reason = tostring(reason or "disconnected")
+
+    task.delay(math.min(3, 0.65 + (self.Attempts or 0) * 0.35), function()
+        if SessionAlive() and _G.BobonAutoRejoin == self then
+            self:TeleportNow(self.Reason)
+        end
+    end)
+    return true
+end
+
+function _G.BobonAutoRejoin:Bind()
+    local function addConnection(connection)
+        if connection then self.Connections[#self.Connections + 1] = connection end
+    end
+
+    -- Most Roblox kicks/disconnects surface here as ErrorPrompt. Triggering on
+    -- ErrorPrompt itself is localization-independent (English/Vietnamese/etc.).
+    pcall(function()
+        local promptGui = CoreGui:FindFirstChild("RobloxPromptGui") or CoreGui:WaitForChild("RobloxPromptGui", 10)
+        local overlay = promptGui and (promptGui:FindFirstChild("promptOverlay") or promptGui:WaitForChild("promptOverlay", 10))
+        if not overlay then return end
+
+        local function inspect(child)
+            if child and child.Name == "ErrorPrompt" then
+                task.defer(function()
+                    if SessionAlive() and _G.BobonAutoRejoin == self then
+                        self:Trigger("Roblox kick/disconnect")
+                    end
+                end)
+            end
+        end
+
+        for _, child in ipairs(overlay:GetChildren()) do inspect(child) end
+        addConnection(overlay.ChildAdded:Connect(inspect))
+    end)
+
+    -- Secondary signal for clients/executors where CoreGui prompt inspection is restricted.
+    pcall(function()
+        local guiService = game:GetService("GuiService")
+        addConnection(guiService.ErrorMessageChanged:Connect(function(message)
+            if not SessionAlive() or _G.BobonAutoRejoin ~= self then return end
+            message = tostring(message or "")
+            if message ~= "" then self:Trigger("Roblox error: " .. message) end
+        end))
+    end)
+
+    -- Only retry teleport failures that belong to this auto-rejoin owner; normal
+    -- progression/server-hop behavior keeps its existing HopManager policy.
+    pcall(function()
+        addConnection(TeleportSvc.TeleportInitFailed:Connect(function(player, _, errorMessage)
+            if player ~= LP or _G.BobonAutoRejoin ~= self or not self.Busy then return end
+            self.Busy = false
+            task.delay(math.min(8, 1.5 + (self.Attempts or 0) * 0.75), function()
+                if SessionAlive() and _G.BobonAutoRejoin == self then
+                    self:Trigger("teleport failed: " .. tostring(errorMessage or "unknown"))
+                end
+            end)
+        end))
+    end)
+end
+
+_G.BobonAutoRejoin:Bind()
+
 if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function() LP:Kick("BobonHub Shutdown=true") end) end) end
 
 -- ══════════════════════════════════════════════════════════════════
@@ -15937,6 +16136,12 @@ _G.BobonUnload = function()
     end)
     pcall(function() BindPlayerDamage(nil, nil) end)
     pcall(function()
+        if _G.BobonAutoRejoin and type(_G.BobonAutoRejoin.Destroy) == "function" then
+            _G.BobonAutoRejoin:Destroy()
+        end
+        _G.BobonAutoRejoin = nil
+    end)
+    pcall(function()
         for _, conn in ipairs(BobonUIConnections or {}) do
             if conn then conn:Disconnect() end
         end
@@ -15947,10 +16152,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v22.3] Full Script Loaded Successfully!")
-print("[BobonHub v22.3] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
-print("[BobonHub v22.3] Core: GoalPlanner | PriorityScheduler | TravelManager | CombatController | EconomyMutex")
-print("[BobonHub v22.3] Modules: Combat-First QuestFarm | Optional Bring | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
-print("[BobonHub v22.3] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
-print("[BobonHub v22.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v22.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v22.4] Full Script Loaded Successfully!")
+print("[BobonHub v22.4] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
+print("[BobonHub v22.4] Core: GoalPlanner | PriorityScheduler | TravelManager | CombatController | EconomyMutex")
+print("[BobonHub v22.4] Modules: Combat-First QuestFarm | Optional Bring | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
+print("[BobonHub v22.4] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
+print("[BobonHub v22.4] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v22.4] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
