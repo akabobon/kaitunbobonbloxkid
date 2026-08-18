@@ -1,8 +1,24 @@
 -- =================================================================
---         BOBON HUB v21.28 SMART SKILL DODGE | FULL PROGRESSION V2 | ALL MELEE | ALL-MOB PILE
+--         BOBON HUB v21.30 STABLE INTENT + TARGET-LOCK DODGE | FULL PROGRESSION V2
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.27 CHECKPOINT-STABLE | Version: v21.28
+--         Base: v21.29 IMMEDIATE MELEE + GACHA | Version: v21.30
 --
+--  v21.30 STABILITY AUDIT (VIDEO Roblox(10)):
+--  [SI-1] Sticky mandatory progression intent: Saber/Sea gates cannot fall back to level
+--         farm for a few frames between retries. This removes Farm <-> progression ping-pong.
+--  [SI-2] Quest UI close is debounced/leased before optional boss/item work may start.
+--         A one-frame Quest wrapper disappearance can no longer launch a boss and redirect travel.
+--  [SI-3] BossManager may start below max level only after a confirmed stable quest-closed window.
+--  [SI-4] SetMode no longer overwrites the detailed status text every 0.15s; HUD renders the
+--         authoritative owner/FState instead of stale background notices.
+--  [D30-1] Dodge locks to the ACTIVE combat target only. Nearby unrelated NPCs no longer trigger it.
+--  [D30-2] Removed generic Action-priority animation detection and broad elemental-effect matching;
+--          dodge requires named attack/cast evidence, a real charge, target hitbox, or a high-confidence
+--          spawned hazard near both player and the active target.
+--  [D30-3] Threat must persist across multiple samples; one evade direction is frozen per cast.
+--          No 0.16s left/right replanning loop, so the player does not zig-zag across the island.
+--  [D30-4] Evade distance/speed/TTL are bounded. After a continuously safe window the exact old
+--          target is resumed without releasing ActionToken, quest, cluster, or MovementOwner.
 --
 --  v21.24.3 STARTUP ROOT-CAUSE FIX:
 --  [BOOT-1] v21.23 added two long-lived top-level locals (damage lease + move trial).
@@ -641,7 +657,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.28 SMART SKILL DODGE + ANYWHERE GACHA + FULL PROGRESSION] Loading...")
+print("[BobonHub v21.29 IMMEDIATE MELEE + GACHA + SMART DODGE] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -917,10 +933,14 @@ _G.Settings = {
     TravelTimeoutMargin = 20,
     -- v21.27: Blox Fruit Gacha is available from Lv50 in every sea.
     -- The server owns the real level-scaled price/cooldown; do not hard-code Sea2/3 prices.
-    RandomFruitInterval = 30,      -- retry only when a roll was NOT confirmed
-    RandomFruitSuccessCooldown = 7200, -- confirmed roll: 2-hour server cooldown
+    RandomFruitInterval = 5,       -- rejected attempt fallback; Beli increases wake it immediately
+    RandomFruitSuccessCooldown = 7200, -- confirmed roll: respect the server cooldown
     RandomFruitMinLevel = 50,
-    RandomFruitResultWait = 4.0,
+    RandomFruitResultWait = 8.0,
+    RandomFruitMoneyRetry = 0.50,
+    RandomFruitAttemptMinGap = 0.75,
+    RandomFruitCooldownRejectDelay = 30,
+    MeleePurchaseInterval = 0.20,
     FruitStoreInterval  = 8,
     AttackDelay         = 0.08,
     QuestDelay          = 1.5,
@@ -1026,19 +1046,25 @@ _G.Settings = {
     DodgeAttacks        = true,
     -- v21.28 SMART SKILL DODGE: detect cast/charge/transient AoE, pause attacks,
     -- evade with the SAME TravelManager owner, confirm clear, then resume target.
-    DodgeCooldown       = 0.35,
-    DodgeDistance       = 30,
-    DodgeHeight         = 9,
-    DodgeRadius         = 55,
-    DodgeEmergencySpeed = 520,
-    DodgeMinHold        = 0.35,
-    DodgeSafeConfirm    = 0.55,
-    DodgeMaxHold        = 3.50,
-    DodgeReplanInterval = 0.16,
+    -- v21.30 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
+    DodgeCooldown       = 0.30,
+    DodgeDistance       = 20,
+    DodgeHeight         = 4,
+    DodgeRadius         = 42,
+    DodgeEmergencySpeed = 320,
+    DodgeMinHold        = 0.30,
+    DodgeSafeConfirm    = 0.50,
+    DodgeMaxHold        = 2.20,
+    DodgeReplanInterval = 0.55,
     DodgeMonitorInterval= 0.05,
-    DodgeHazardTTL      = 2.40,
-    DodgeHazardMargin   = 9,
-    DodgeHazardTrackRadius = 150,
+    DodgeHazardTTL      = 1.20,
+    DodgeHazardMargin   = 6,
+    DodgeHazardTrackRadius = 65,
+    DodgeConfirmSamples = 2,
+    DodgeGlobalHazardRadius = 18,
+    DodgeTargetHazardRadius = 70,
+    QuestUILease        = 1.25,
+    QuestCloseConfirm   = 0.80,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
     SkipRouteFallbackTimeout = 90,
@@ -1307,6 +1333,11 @@ _G.State = {
     LastIncomingDamage = 0,
     DodgeActive       = false,
     DodgeThreatName   = nil,
+    QuestLastSeenAt   = 0,
+    QuestClosedSince  = 0,
+    QuestClosedStable = false,
+    ProgressionLock   = nil,
+    WorkIntent        = "LEVEL_FARM",
     FarmSafetyUntil   = 0,
     FarmSafetyActive  = false,
     LastTargetContested = 0,
@@ -1318,8 +1349,10 @@ _G.State = {
 
 
 function _G.State:SetMode(mode)
+    -- v21.30: Mode is state, not a status message.  The old assignment below made
+    -- every 0.15s farm tick overwrite detailed Saber/Boss/Farm text and created
+    -- misleading HUD flicker even when the movement owner had not changed.
     self.Mode = mode
-    _G.BobonStatus = mode
 end
 
 
@@ -1601,7 +1634,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.28", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.29", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -1753,7 +1786,33 @@ do
                     KillL.Text = Fmt(state.KillCount or 0)
                     local mode = tostring(state.Mode or "Idle")
                     ModeL.Text = string.upper(mode)
-                    StatusL.Text = tostring(_G.BobonStatus or "Idle")
+                    local displayStatus = tostring(_G.BobonStatus or "Idle")
+                    local owner = tostring(state.ActionOwner or "")
+                    if state.DodgeActive then
+                        local mob = tostring(state.ActiveQuestMob
+                            or (state.CurrentTarget and state.CurrentTarget.Name) or "target")
+                        displayStatus = "Dodge: " .. tostring(state.DodgeThreatName or mob)
+                            .. " • resume " .. mob
+                    elseif state.ActiveActionToken ~= 0 and owner ~= "" then
+                        -- Claimed action is authoritative; its detailed status is valid.
+                        displayStatus = tostring(_G.BobonStatus or owner)
+                    elseif mode == "Farming" then
+                        local mob = tostring(state.ActiveQuestMob or "quest mob")
+                        local fs = tostring(state.FState or "")
+                        if fs == "GATHER_AND_ATTACK" or fs == "ATTACK_WHILE_GATHERING" then
+                            displayStatus = "Farm: gather + attack " .. mob
+                        elseif fs:find("ATTACK",1,true) then
+                            displayStatus = "Farm: attacking " .. mob
+                        elseif fs:find("MOVE",1,true) or fs:find("ACQUIRE",1,true) then
+                            displayStatus = "Farm: moving to " .. mob
+                        else
+                            displayStatus = "Farm: " .. mob
+                        end
+                    elseif mode == "Bossing" and owner == "" then
+                        -- A stale background write must never masquerade as a live boss job.
+                        displayStatus = "Idle: waiting"
+                    end
+                    StatusL.Text = displayStatus
                     if mode == "Farming" or mode == "Raiding" then
                         StatusDot.BackgroundColor3 = READY_GREEN
                     elseif mode == "Recovering" or mode == "Dead" then
@@ -1778,7 +1837,11 @@ do
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
-                    if state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
+                    if state.ProgressionLock then
+                        FlagL.Text = "LOCK • " .. string.upper(tostring(state.ProgressionLock))
+                    elseif state.DodgeActive then
+                        FlagL.Text = "DODGE • TARGET LOCK"
+                    elseif state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
                         FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
                         FlagL.Text = "CONTESTED"
@@ -6869,39 +6932,41 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
---    v21.28 SMART SKILL DODGE — CAST/AOE/CHARGE → EVADE → CONFIRM → RESUME
---   * No second movement owner/coroutine: only TravelManager.DodgeOffset.
---   * Detects attack animations (including Action priority), charge velocity,
---     and short-lived skill/AoE/projectile parts spawned near active combat.
---   * Attack() is paused only while DodgeActive=true; current target/action token
---     is never cleared. After the danger is absent for DodgeSafeConfirm seconds,
---     the offset is cleared and TravelManager returns to the exact old target.
---   * Dodge helpers live in a narrow lexical scope to protect Luau local limits.
+--    v21.30 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
+--   * Never scans unrelated nearby NPCs as threats; only the TravelManager active target.
+--   * No generic Action-priority fallback: ordinary combat/idle animations cannot trigger dodge.
+--   * A threat must be seen in consecutive monitor samples before movement changes.
+--   * One evade vector is frozen for the cast. Replan only if the chosen evade pocket itself
+--     becomes hazardous, preventing the left/right/behind zig-zag seen in Roblox(10).
+--   * Attack pauses while DodgeActive; ActionToken/quest/cluster/target remain untouched.
 -- ══════════════════════════════════════════════════════════════════
 do
 local DodgeController = {
-    LastDodge = 0,
     Active = false,
     StartedAt = 0,
     LastThreatAt = 0,
-    LastReplan = 0,
+    LastDodgeAt = 0,
+    LastReplanAt = 0,
     Threat = nil,
     ThreatRoot = nil,
     ThreatReason = nil,
+    EvadeOffset = Vector3.zero,
+    PendingKey = nil,
+    PendingCount = 0,
+    PendingAt = 0,
     HazardParts = setmetatable({}, {__mode="k"}),
 }
 
 local ATTACK_WORDS = {
-    "attack","combo","kick","punch","slash","swing","hit","strike",
-    "beat","smash","bite","claw","fist","spin","haki","skill","cast",
-    "blast","beam","wave","shot","charge","roar","stomp","slam","burst",
+    "attack","combo","kick","punch","slash","swing","strike","smash",
+    "bite","claw","fist","spin","skill","cast","blast","beam","wave",
+    "shot","charge","roar","stomp","slam","burst",
 }
-local SAFE_ANIM_WORDS = {"idle","walk","run","swim","jump","fall","climb"}
-local HAZARD_WORDS = {
-    "hitbox","damage","skill","attack","projectile","bullet","beam","blast",
-    "explosion","shockwave","slash","wave","aoe","area","vortex","tornado",
-    "flame","fire","magma","ice","snow","lightning","thunder","venom",
-    "poison","smoke","bomb","quake","spike","puddle","eruption","laser",
+-- High-confidence world hazards only.  Generic "fire/ice/snow/lightning/effect"
+-- names were removed because player VFX and map decorations caused constant false dodges.
+local HARD_HAZARD_WORDS = {
+    "hitbox","damage","projectile","bullet","beam","blast","explosion",
+    "shockwave","aoe","vortex","tornado","laser","eruption",
 }
 
 local function WordMatch(text, words)
@@ -6912,14 +6977,20 @@ local function WordMatch(text, words)
     return false
 end
 
-local function FlatUnit(v, fallback)
-    local flat = Vector3.new(v.X, 0, v.Z)
-    if flat.Magnitude > 0.05 then return flat.Unit end
-    if fallback then
-        local f = Vector3.new(fallback.X, 0, fallback.Z)
-        if f.Magnitude > 0.05 then return f.Unit end
+local function ActiveCombatModel()
+    if not _G.State.IsTraveling or not TravelManager.CurrentOptions
+        or not TravelManager.CurrentOptions.combatHover then
+        return nil
     end
-    return Vector3.new(1,0,0)
+    local ref = TravelManager.TargetRef
+    if typeof(ref) ~= "Instance" then return nil end
+    local model = ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")
+    local enemies = workspace:FindFirstChild("Enemies")
+    if not model or not enemies or model.Parent ~= enemies then return nil end
+    local hum = model:FindFirstChildOfClass("Humanoid")
+    local root = model:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root then return nil end
+    return model, root, hum
 end
 
 local function IsOurCharacterDescendant(obj)
@@ -6927,62 +6998,45 @@ local function IsOurCharacterDescendant(obj)
     return c and obj and obj:IsDescendantOf(c) or false
 end
 
-local function LooksLikeEffectContainer(obj)
-    local cur = obj
-    for _=1,4 do
-        if not cur then break end
-        local n = string.lower(tostring(cur.Name or ""))
-        if n == "_worldorigin" or n == "worldorigin"
-            or string.find(n,"effect",1,true)
-            or string.find(n,"projectile",1,true)
-            or string.find(n,"skill",1,true) then
-            return true
-        end
-        cur = cur.Parent
+local function FlatUnit(v, fallback)
+    local flat = Vector3.new(v.X,0,v.Z)
+    if flat.Magnitude > 0.05 then return flat.Unit end
+    if fallback then
+        local f = Vector3.new(fallback.X,0,fallback.Z)
+        if f.Magnitude > 0.05 then return f.Unit end
     end
-    return false
+    return Vector3.new(1,0,0)
 end
 
 local function TrackHazard(obj)
     if not obj or not obj:IsA("BasePart") or IsOurCharacterDescendant(obj) then return end
+    local target, targetRoot = ActiveCombatModel()
     local me = HRP()
-    if not me then return end
-    local ok, pos = pcall(function() return obj.Position end)
+    if not target or not targetRoot or not me then return end
+
+    local ok, pos, size = pcall(function() return obj.Position, obj.Size end)
     if not ok or not IsValidPos(pos) then return end
-    if (pos-me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 150) then return end
+    if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 65) then return end
+    if (pos - targetRoot.Position).Magnitude > (_G.Settings.DodgeTargetHazardRadius or 70) then return end
+
     local label = tostring(obj.Name or "") .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
-    local named = WordMatch(label, HAZARD_WORDS)
-    local effectContainer = LooksLikeEffectContainer(obj.Parent)
-    local size = obj.Size
-    local largeTransient = math.max(size.X,size.Y,size.Z) >= 5
-    if named or (effectContainer and largeTransient) then
-        DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 2.4)
-    end
+    if not WordMatch(label, HARD_HAZARD_WORDS) then return end
+    if math.max(size.X,size.Y,size.Z) < 2 then return end
+    DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 1.2)
 end
 
 local hazardConn = workspace.DescendantAdded:Connect(function(obj)
-    if not SessionAlive() then return end
-    if obj:IsA("BasePart") then pcall(TrackHazard,obj) end
+    if SessionAlive() and obj:IsA("BasePart") then pcall(TrackHazard,obj) end
 end)
 BobonUIConnections[#BobonUIConnections+1] = hazardConn
 
-local function AttackTrackPlaying(hum)
+local function NamedAttackAnimation(hum)
     local ok, tracks = pcall(function() return hum:GetPlayingAnimationTracks() end)
     if not ok or not tracks then return false,nil end
     for _, track in ipairs(tracks) do
         if track.IsPlaying then
             local name = tostring(track.Name or "")
-            if WordMatch(name, ATTACK_WORDS) then return true,"animation:"..name end
-            local safe = WordMatch(name, SAFE_ANIM_WORDS)
-            local actionPriority = false
-            pcall(function()
-                actionPriority = track.Priority.Value >= Enum.AnimationPriority.Action.Value
-            end)
-            if actionPriority and not safe then
-                local weight = 1
-                pcall(function() weight = tonumber(track.WeightCurrent) or 1 end)
-                if weight > 0.05 then return true,"action-animation" end
-            end
+            if WordMatch(name,ATTACK_WORDS) then return true,"animation:"..name end
         end
     end
     return false,nil
@@ -6990,103 +7044,71 @@ end
 
 local function HazardTouchesPoint(part, point)
     if not part or not part.Parent then return false end
-    local ok, pos, size = pcall(function() return part.Position,part.Size end)
+    local ok,pos,size=pcall(function() return part.Position,part.Size end)
     if not ok or not IsValidPos(pos) then return false end
-    local radius = math.max(size.X,size.Y,size.Z)*0.5 + (_G.Settings.DodgeHazardMargin or 9)
-    return (point-pos).Magnitude <= radius
+    local radius=math.max(size.X,size.Y,size.Z)*0.5+(_G.Settings.DodgeHazardMargin or 6)
+    return (point-pos).Magnitude<=radius
 end
 
-local function HazardNearPlayer(me)
+local function ActiveHazardNear(me, targetRoot)
+    if not me or not targetRoot then return nil end
     local now=tick()
-    local best,bestDist
+    local best
     for part,expires in pairs(DodgeController.HazardParts) do
         if not part.Parent or now>expires then
             DodgeController.HazardParts[part]=nil
         else
             local ok,pos=pcall(function() return part.Position end)
-            if ok and IsValidPos(pos) then
-                local d=(me.Position-pos).Magnitude
-                if HazardTouchesPoint(part,me.Position) and (not bestDist or d<bestDist) then
-                    best,bestDist=part,d
-                end
+            if ok and IsValidPos(pos)
+                and (pos-me.Position).Magnitude <= (_G.Settings.DodgeGlobalHazardRadius or 18)
+                and (pos-targetRoot.Position).Magnitude <= (_G.Settings.DodgeTargetHazardRadius or 70)
+                and HazardTouchesPoint(part,me.Position) then
+                best=part
+                break
             end
         end
     end
-    return best,bestDist
+    return best
 end
 
-local function EnemyThreat(enemy,me)
-    if not enemy or Players:GetPlayerFromCharacter(enemy) then return false,nil end
-    local hum=enemy:FindFirstChildOfClass("Humanoid")
-    local root=enemy:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health<=0 or not root then return false,nil end
+local function TargetThreat()
+    local target,root,hum=ActiveCombatModel()
+    local me=HRP()
+    if not target or not root or not hum or not me then return nil,nil,nil end
     local dist=(root.Position-me.Position).Magnitude
-    if dist>(_G.Settings.DodgeRadius or 55) then return false,nil end
-    local anim,why=AttackTrackPlaying(hum)
-    if anim then return true,why end
+    if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
+
+    local anim,why=NamedAttackAnimation(hum)
+    if anim then return target,root,why end
+
     local okVel,vel=pcall(function() return root.AssemblyLinearVelocity end)
     if okVel and typeof(vel)=="Vector3" and dist>0.5 then
         local toMe=me.Position-root.Position
         local closing=toMe.Unit:Dot(vel)
-        if closing>32 then return true,"charge" end
+        if closing>45 then return target,root,"charge" end
     end
-    for _,obj in ipairs(enemy:GetDescendants()) do
-        if obj:IsA("BasePart") and WordMatch(obj.Name,HAZARD_WORDS)
-            and HazardTouchesPoint(obj,me.Position) then
-            return true,"enemy-hitbox"
-        end
-    end
-    return false,nil
-end
 
-local function FindThreat()
-    local me=HRP(); if not me then return nil,nil,nil end
-    local folder=workspace:FindFirstChild("Enemies"); if not folder then return nil,nil,nil end
-    -- Active combat target first so a boss cast wins over unrelated nearby mobs.
-    local ref=TravelManager.TargetRef
-    local activeModel=typeof(ref)=="Instance" and (ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")) or nil
-    if activeModel and activeModel.Parent==folder then
-        local yes,why=EnemyThreat(activeModel,me)
-        if yes then return activeModel,activeModel:FindFirstChild("HumanoidRootPart"),why end
-    end
-    local best,bestRoot,bestDist,bestWhy
-    for _,enemy in ipairs(folder:GetChildren()) do
-        local root=enemy:FindFirstChild("HumanoidRootPart")
-        if root then
-            local d=(root.Position-me.Position).Magnitude
-            if d<=(_G.Settings.DodgeRadius or 55) then
-                local yes,why=EnemyThreat(enemy,me)
-                if yes and (not bestDist or d<bestDist) then
-                    best,bestRoot,bestDist,bestWhy=enemy,root,d,why
-                end
-            end
+    for _,obj in ipairs(target:GetDescendants()) do
+        if obj:IsA("BasePart") and WordMatch(obj.Name,HARD_HAZARD_WORDS)
+            and HazardTouchesPoint(obj,me.Position) then
+            return target,root,"target-hitbox"
         end
     end
-    if best then return best,bestRoot,bestWhy end
-    local hazard=HazardNearPlayer(me)
-    if hazard then
-        return activeModel,activeModel and activeModel:FindFirstChild("HumanoidRootPart") or nil,"spawned-hazard"
+
+    if ActiveHazardNear(me,root) then
+        return target,root,"spawned-hazard"
     end
     return nil,nil,nil
 end
 
-local function CandidateDangerScore(worldPos)
-    local score=9999
-    local folder=workspace:FindFirstChild("Enemies")
-    if folder then
-        for _,enemy in ipairs(folder:GetChildren()) do
-            local hum=enemy:FindFirstChildOfClass("Humanoid")
-            local root=enemy:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health>0 and root then
-                score=math.min(score,(worldPos-root.Position).Magnitude)
-            end
-        end
-    end
+local function CandidateScore(worldPos,targetRoot)
+    local score=(worldPos-targetRoot.Position).Magnitude
+    local now=tick()
     for part,expires in pairs(DodgeController.HazardParts) do
-        if part.Parent and tick()<=expires then
+        if part.Parent and now<=expires then
             local ok,pos,size=pcall(function() return part.Position,part.Size end)
             if ok and IsValidPos(pos) then
-                local r=math.max(size.X,size.Y,size.Z)*0.5+(_G.Settings.DodgeHazardMargin or 9)
+                local r=math.max(size.X,size.Y,size.Z)*0.5+(_G.Settings.DodgeHazardMargin or 6)
                 score=math.min(score,(worldPos-pos).Magnitude-r)
             end
         end
@@ -7094,28 +7116,27 @@ local function CandidateDangerScore(worldPos)
     return score
 end
 
-local function ChooseOffset(dangerRoot)
-    local me=HRP(); if not me then return Vector3.zero end
-    local distance=_G.Settings.DodgeDistance or 30
-    local up=_G.Settings.DodgeHeight or 9
-    local look=dangerRoot and FlatUnit(dangerRoot.CFrame.LookVector,Vector3.new(0,0,-1)) or Vector3.new(0,0,-1)
-    local away=dangerRoot and FlatUnit(me.Position-dangerRoot.Position,-look) or -look
+local function ChooseOffset(targetRoot)
+    local me=HRP()
+    if not me or not targetRoot then return Vector3.zero end
+    local distance=math.clamp(tonumber(_G.Settings.DodgeDistance) or 20,12,26)
+    local up=math.clamp(tonumber(_G.Settings.DodgeHeight) or 4,0,8)
+    local away=FlatUnit(me.Position-targetRoot.Position,-targetRoot.CFrame.LookVector)
     local side=Vector3.new(-away.Z,0,away.X)
-    -- Include "behind the caster" as requested, but score it against every live
-    -- enemy/hazard so we do not blindly cross through a larger AoE.
+    local look=FlatUnit(targetRoot.CFrame.LookVector,-away)
     local candidates={
         away*distance+Vector3.new(0,up,0),
         side*distance+Vector3.new(0,up,0),
         -side*distance+Vector3.new(0,up,0),
-        -look*distance+Vector3.new(0,up,0),
-        away*(distance*1.35)+Vector3.new(0,up*1.25,0),
+        -look*(distance*0.90)+Vector3.new(0,up,0),
     }
-    local base=me.Position
+    local hoverBase=FarmPositionController:GetFarmPos(targetRoot.Parent,_G.Settings.FarmHeight or 22)
+        or me.Position
     local best,bestScore=candidates[1],-math.huge
     for _,off in ipairs(candidates) do
-        local p=base+off
+        local p=hoverBase+off
         if IsAllowedWorldPosition(p) then
-            local sc=CandidateDangerScore(p)
+            local sc=CandidateScore(p,targetRoot)
             if sc>bestScore then best,bestScore=off,sc end
         end
     end
@@ -7124,36 +7145,39 @@ end
 
 function DodgeController:Finish(reason)
     self.Active=false
-    self.Threat=nil; self.ThreatRoot=nil; self.ThreatReason=nil
+    self.Threat=nil
+    self.ThreatRoot=nil
+    self.ThreatReason=nil
+    self.EvadeOffset=Vector3.zero
+    self.PendingKey=nil
+    self.PendingCount=0
     _G.State.DodgeActive=false
     _G.State.DodgeThreatName=nil
     TravelManager:ClearDodgeOffset()
     _G.BobonDiagnostics.Dodge="CLEAR:"..tostring(reason or "safe")
-    DLog("DODGE","safe → resume exact target")
+    DLog("DODGE","confirmed safe → resume exact active target")
 end
 
-function DodgeController:StartOrReplan(enemy,root,why,now)
-    if not self.Active then
-        self.Active=true
-        self.StartedAt=now
-        self.LastDodge=now
-        _G.State.DodgeActive=true
-    end
+function DodgeController:Begin(enemy,root,why,now)
+    if now-(self.LastDodgeAt or 0)<(_G.Settings.DodgeCooldown or 0.30) then return false end
+    self.Active=true
+    self.StartedAt=now
     self.LastThreatAt=now
-    self.Threat=enemy or self.Threat
-    self.ThreatRoot=root or self.ThreatRoot
-    self.ThreatReason=why or self.ThreatReason
-    if now-(self.LastReplan or 0)<(_G.Settings.DodgeReplanInterval or 0.16) then return true end
-    self.LastReplan=now
-    local offset=ChooseOffset(self.ThreatRoot)
-    local hold=math.max((_G.Settings.DodgeSafeConfirm or 0.55)+0.20,0.75)
-    if TravelManager:ApplyDodgeOffset(offset,hold,_G.Settings.DodgeEmergencySpeed or 520) then
-        _G.State.DodgeThreatName=self.Threat and self.Threat.Name or tostring(why or "skill")
-        _G.BobonDiagnostics.Dodge=("EVADE:%s"):format(tostring(why or "skill"))
-        DLog("DODGE","evade "..tostring(_G.State.DodgeThreatName).." • "..tostring(why))
-        return true
-    end
-    return false
+    self.LastDodgeAt=now
+    self.LastReplanAt=now
+    self.Threat=enemy
+    self.ThreatRoot=root
+    self.ThreatReason=why
+    self.EvadeOffset=ChooseOffset(root)
+    self.PendingKey=nil
+    self.PendingCount=0
+    _G.State.DodgeActive=true
+    _G.State.DodgeThreatName=enemy and enemy.Name or tostring(why or "skill")
+    _G.BobonDiagnostics.Dodge=("EVADE:%s"):format(tostring(why or "skill"))
+    return TravelManager:ApplyDodgeOffset(
+        self.EvadeOffset,
+        math.max((_G.Settings.DodgeSafeConfirm or 0.50)+0.25,0.75),
+        _G.Settings.DodgeEmergencySpeed or 320)
 end
 
 function DodgeController:TryDodge()
@@ -7166,24 +7190,36 @@ function DodgeController:TryDodge()
         if self.Active then self:Finish("state-change") end
         return false
     end
-    -- Dodge only while TravelManager is actually handling a combat-hover target.
-    -- This prevents Saber plates, NPC dialogue, sea travel, etc. from being diverted.
-    if not _G.State.IsTraveling or not TravelManager.CurrentOptions
-        or not TravelManager.CurrentOptions.combatHover then
-        if self.Active then self:Finish("combat-ended") end
-        return false
-    end
 
+    local target,targetRoot,why=TargetThreat()
     local now=tick()
-    local enemy,root,why=FindThreat()
-    if enemy or why=="spawned-hazard" then
-        return self:StartOrReplan(enemy,root,why,now)
-    end
 
     if self.Active then
-        local minHold=_G.Settings.DodgeMinHold or 0.35
-        local safeConfirm=_G.Settings.DodgeSafeConfirm or 0.55
-        local maxHold=_G.Settings.DodgeMaxHold or 3.5
+        -- Only the original active target may keep the dodge alive. A farm retarget ends it.
+        local current=ActiveCombatModel()
+        if current~=self.Threat then
+            self:Finish("target-changed")
+            return false
+        end
+
+        if target and target==self.Threat then
+            self.LastThreatAt=now
+            self.ThreatReason=why or self.ThreatReason
+            -- Replan rarely, and only if the current evade pocket itself became hazardous.
+            local me=HRP()
+            local evadeBase=self.ThreatRoot and FarmPositionController:GetFarmPos(
+                self.ThreatRoot.Parent,_G.Settings.FarmHeight or 22) or nil
+            local evadeWorld=evadeBase and (evadeBase+self.EvadeOffset) or nil
+            if evadeWorld and ActiveHazardNear(me,self.ThreatRoot)
+                and now-(self.LastReplanAt or 0)>=(_G.Settings.DodgeReplanInterval or 0.55) then
+                self.LastReplanAt=now
+                self.EvadeOffset=ChooseOffset(self.ThreatRoot)
+            end
+        end
+
+        local maxHold=_G.Settings.DodgeMaxHold or 2.20
+        local minHold=_G.Settings.DodgeMinHold or 0.30
+        local safeConfirm=_G.Settings.DodgeSafeConfirm or 0.50
         if now-self.StartedAt>=maxHold then
             self:Finish("max-hold")
             return true
@@ -7192,12 +7228,27 @@ function DodgeController:TryDodge()
             self:Finish("confirmed-safe")
             return true
         end
-        -- Keep the current evade anchor alive while waiting for a clear window.
-        TravelManager:ApplyDodgeOffset(TravelManager.DodgeOffset,0.25,_G.Settings.DodgeEmergencySpeed or 520)
+        TravelManager:ApplyDodgeOffset(
+            self.EvadeOffset,0.22,_G.Settings.DodgeEmergencySpeed or 320)
         return true
     end
 
-    return false
+    if not target then
+        self.PendingKey=nil
+        self.PendingCount=0
+        return false
+    end
+
+    local key=tostring(target).."|"..tostring(why)
+    if self.PendingKey==key and now-(self.PendingAt or 0)<=0.20 then
+        self.PendingCount=(self.PendingCount or 0)+1
+    else
+        self.PendingKey=key
+        self.PendingCount=1
+    end
+    self.PendingAt=now
+    if self.PendingCount < (_G.Settings.DodgeConfirmSamples or 2) then return false end
+    return self:Begin(target,targetRoot,why,now)
 end
 
 task.spawn(function()
@@ -7206,7 +7257,7 @@ task.spawn(function()
         pcall(function() DodgeController:TryDodge() end)
     end
 end)
-end -- v21.28 smart dodge lexical scope
+end -- v21.30 target-lock dodge lexical scope
 -- ══════════════════════════════════════════════════════════════════
 --         RECOVERY MANAGER v7 (Fix #2,#6)
 --   State machine: STOP → CLEANUP → RESET → WAIT → CHECK → IDLE
@@ -7846,6 +7897,47 @@ function FightingStyleController:MarkKnown(value)
     WeaponInventoryCache.At = 0
 end
 
+
+-- v21.29: never treat a successful RemoteFunction invocation as proof that a style
+-- was purchased.  The server can return normally while refusing for money/mastery/key.
+-- Only a live tool, authoritative inventory/mastery, or a real currency decrease proves it.
+function FightingStyleController:ActualOwned(value, forceRefresh)
+    local names = type(value) == "table" and value or {value}
+    if forceRefresh then
+        InventoryCache.At = 0
+        WeaponInventoryCache.At = 0
+    end
+    for _, name in ipairs(names) do
+        if FindOwnedTool(name) then return true, name end
+        if InventoryHas(name) then return true, name end
+        if EffectiveMastery(name) > 0 then return true, name end
+    end
+    return false, nil
+end
+
+function FightingStyleController:RestoreHeldTool(name)
+    if type(name) ~= "string" or name == "" then return end
+    local c = Char()
+    local hum = c and c:FindFirstChildOfClass("Humanoid")
+    local tool = FindOwnedTool(name)
+    if not c or not hum or not tool or tool.Parent == c then return end
+    pcall(function() hum:EquipTool(tool) end)
+end
+
+function FightingStyleController:VerifyPurchase(value, beforeBeli, beforeFragments, seconds)
+    local deadline = tick() + (seconds or 1.50)
+    repeat
+        InventoryCache.At = 0
+        WeaponInventoryCache.At = 0
+        local owned, ownedName = self:ActualOwned(value, false)
+        if owned then return true, ownedName end
+        if beforeBeli ~= nil and Beli() < beforeBeli then return true, nil end
+        if beforeFragments ~= nil and Fragments() < beforeFragments then return true, nil end
+        task.wait(0.10)
+    until tick() >= deadline or not SessionAlive() or not IsAlive()
+    return false, nil
+end
+
 function FightingStyleController:Reequip(value, remote)
     local names = type(value) == "table" and value or {value}
     local live, liveName = self:Live(names)
@@ -7876,82 +7968,123 @@ end
 -- by their normal server endpoint without paying again.
 function FightingStyleController:PurchaseTick()
     if not _G.Settings.AutoFightingStyles or not _G.Settings.AutoBuyMelee or not IsAlive() then return false end
-    if _G.State.ActiveActionToken ~= 0 then return false end
-    if tick() - (self.LastPurchaseProbe or 0) < 0.65 then return false end
+    -- Pure purchase probes own no movement and are allowed during Saber/quest actions.
+    -- Preserve any quest tool (Torch/Cup/Relic/Key) and put it back after a purchase.
+    if tick() - (self.LastPurchaseProbe or 0) < (_G.Settings.MeleePurchaseInterval or 0.20) then return false end
 
-    local function buySimple(names, money, remote, label)
-        local known = self:Known(names)
-        if known then return false end
-        if Beli() < money then return false end
-        self.LastPurchaseProbe = tick()
-        local ok = InvokeStyle(remote)
-        if ok then
-            self:MarkKnown(names)
-            _G.BobonStatus = "Melee: Bought/claimed " .. label
+    local c = Char()
+    local held = c and c:FindFirstChildOfClass("Tool")
+    local heldName = held and held.Name or nil
+
+    local function finishPurchase(value, label, beforeBeli, beforeFragments)
+        local verified = self:VerifyPurchase(value, beforeBeli, beforeFragments, 1.60)
+        self:RestoreHeldTool(heldName)
+        if verified then
+            self:MarkKnown(value)
+            _G.BobonStatus = "Melee: Bought/claimed " .. tostring(label)
+            DLog("STYLE", "Verified purchase: " .. tostring(label))
             return true
         end
+        DLog("STYLE", "Purchase probe not verified: " .. tostring(label))
         return false
     end
 
+    local function buySimple(names, money, remote, label)
+        if self:ActualOwned(names, false) then return false end
+        if Beli() < money then return false end
+        self.LastPurchaseProbe = tick()
+        local before = Beli()
+        InvokeStyle(remote)
+        return finishPurchase(names, label, before, nil)
+    end
+
+    -- V1 styles: buy the instant Beli reaches the real fixed purchase requirement.
     if buySimple({"Dark Step","Black Leg"},150000,"BuyBlackLeg","Dark Step") then return true end
     if buySimple({"Electric","Electro"},500000,"BuyElectro","Electric") then return true end
     if buySimple({"Water Kung Fu","Fishman Karate"},750000,"BuyFishmanKarate","Water Kung Fu") then return true end
 
-    if not self:Known({"Dragon Breath","Dragon Claw"}) and GetSea() >= 2
+    -- Dragon Breath uses fragments, not Beli.  Do not mark it owned from pcall alone.
+    if not self:ActualOwned({"Dragon Breath","Dragon Claw"}, false) and GetSea() >= 2
         and CanSpendFragments(1500,"Full Melee: Dragon Breath",100) then
         self.LastPurchaseProbe = tick()
+        local beforeFrag = Fragments()
         pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
-        local ok = pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
-        if ok then self:MarkKnown({"Dragon Breath","Dragon Claw"}); _G.BobonStatus="Melee: Bought/claimed Dragon Breath"; return true end
+        pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
+        if finishPurchase({"Dragon Breath","Dragon Claw"}, "Dragon Breath", nil, beforeFrag) then return true end
     end
 
     local darkM = self:Mastery({"Dark Step","Black Leg"})
     local electroM = self:Mastery({"Electric","Electro"})
     local waterM = self:Mastery({"Water Kung Fu","Fishman Karate"})
     local dragonM = self:Mastery({"Dragon Breath","Dragon Claw"})
-    if not self:Known("Superhuman") and darkM >= 300 and electroM >= 300 and waterM >= 300 and dragonM >= 300
-        and Beli() >= 3000000 then
-        self.LastPurchaseProbe=tick(); local ok=InvokeStyle("BuySuperhuman")
-        if ok then self:MarkKnown("Superhuman"); _G.BobonStatus="Melee: Bought/claimed Superhuman"; return true end
+
+    if not self:ActualOwned("Superhuman", false) and darkM >= 300 and electroM >= 300
+        and waterM >= 300 and dragonM >= 300 and Beli() >= 3000000 then
+        self.LastPurchaseProbe = tick()
+        local before = Beli()
+        InvokeStyle("BuySuperhuman")
+        if finishPurchase("Superhuman", "Superhuman", before, nil) then return true end
     end
 
-    -- Direct probes for V2 styles are harmless when their key/quest is not ready;
-    -- the dedicated unlock controller below performs the actual key/Previous-Hero work.
-    if GetSea() >= 2 and darkM >= 400 and not self:Known("Death Step")
+    -- V2 styles: query/probe immediately when their currency/mastery requirement is met.
+    -- If a first-time key/quest is still required, verification fails harmlessly and the
+    -- dedicated unlock controller performs that prerequisite later.
+    if GetSea() >= 2 and darkM >= 400 and not self:ActualOwned("Death Step", false)
         and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Death Step",100) then
-        self.LastPurchaseProbe=tick(); InvokeStyle("BuyDeathStep",true); local ok=InvokeStyle("BuyDeathStep")
-        if ok and (FindOwnedTool("Death Step") or InventoryHas("Death Step") or EffectiveMastery("Death Step")>0) then self:MarkKnown("Death Step"); return true end
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        InvokeStyle("BuyDeathStep",true); InvokeStyle("BuyDeathStep")
+        if finishPurchase("Death Step", "Death Step", before, beforeFrag) then return true end
     end
-    if GetSea() >= 2 and waterM >= 400 and not self:Known("Sharkman Karate")
+
+    if GetSea() >= 2 and waterM >= 400 and not self:ActualOwned("Sharkman Karate", false)
         and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Sharkman Karate",100) then
-        self.LastPurchaseProbe=tick(); InvokeStyle("BuySharkmanKarate",true); local ok=InvokeStyle("BuySharkmanKarate")
-        if ok and (FindOwnedTool("Sharkman Karate") or InventoryHas("Sharkman Karate") or EffectiveMastery("Sharkman Karate")>0) then self:MarkKnown("Sharkman Karate"); return true end
-    end
-    if GetSea() == 3 and dragonM >= 400 and (FindOwnedTool("Fire Essence") or InventoryHas("Fire Essence")) and not self:Known("Dragon Talon")
-        and Beli() >= 3000000 and CanSpendFragments(5000,"Full Melee: Dragon Talon",100) then
-        self.LastPurchaseProbe=tick(); InvokeStyle("BuyDragonTalon",true); local ok=InvokeStyle("BuyDragonTalon")
-        if ok and (FindOwnedTool("Dragon Talon") or InventoryHas("Dragon Talon") or EffectiveMastery("Dragon Talon")>0) then self:MarkKnown("Dragon Talon"); return true end
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        InvokeStyle("BuySharkmanKarate",true); InvokeStyle("BuySharkmanKarate")
+        if finishPurchase("Sharkman Karate", "Sharkman Karate", before, beforeFrag) then return true end
     end
 
-    local superM=self:Mastery("Superhuman")
-    local deathM=self:Mastery("Death Step")
-    local sharkM=self:Mastery("Sharkman Karate")
-    local clawM=self:Mastery("Electric Claw")
-    local talonM=self:Mastery("Dragon Talon")
-    if GetSea()==3 and not self:Known("Godhuman") and superM>=400 and deathM>=400 and sharkM>=400 and clawM>=400 and talonM>=400
-        and Beli()>=5000000 and CanSpendFragments(5000,"Full Melee: Godhuman",110)
-        and MaterialCount("Fish Tail")>=20 and MaterialCount("Magma Ore")>=20
-        and MaterialCount("Mystic Droplet")>=10 and MaterialCount("Dragon Scale")>=10 then
-        self.LastPurchaseProbe=tick(); InvokeStyle("BuyGodhuman",true); local ok=InvokeStyle("BuyGodhuman")
-        if ok then self:MarkKnown("Godhuman"); _G.BobonStatus="Melee: Bought/claimed Godhuman"; return true end
+    if GetSea() == 3 and electricM >= 400 and not self:ActualOwned("Electric Claw", false)
+        and Beli() >= 3000000 and CanSpendFragments(5000,"Full Melee: Electric Claw",100) then
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        local _, state = InvokeStyle("BuyElectricClaw", true)
+        -- state==4 means Previous Hero quest is still required; do not fake success.
+        if state ~= 4 then InvokeStyle("BuyElectricClaw") end
+        if finishPurchase("Electric Claw", "Electric Claw", before, beforeFrag) then return true end
     end
 
-    if GetSea()==3 and not self:Known("Sanguine Art") and Beli()>=5000000
+    if GetSea() == 3 and dragonM >= 400 and (FindOwnedTool("Fire Essence") or InventoryHas("Fire Essence"))
+        and not self:ActualOwned("Dragon Talon", false) and Beli() >= 3000000
+        and CanSpendFragments(5000,"Full Melee: Dragon Talon",100) then
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        InvokeStyle("BuyDragonTalon",true); InvokeStyle("BuyDragonTalon")
+        if finishPurchase("Dragon Talon", "Dragon Talon", before, beforeFrag) then return true end
+    end
+
+    local superM = self:Mastery("Superhuman")
+    local deathM = self:Mastery("Death Step")
+    local sharkM = self:Mastery("Sharkman Karate")
+    local clawM = self:Mastery("Electric Claw")
+    local talonM = self:Mastery("Dragon Talon")
+    if GetSea() == 3 and not self:ActualOwned("Godhuman", false)
+        and superM >= 400 and deathM >= 400 and sharkM >= 400 and clawM >= 400 and talonM >= 400
+        and Beli() >= 5000000 and CanSpendFragments(5000,"Full Melee: Godhuman",110)
+        and MaterialCount("Fish Tail") >= 20 and MaterialCount("Magma Ore") >= 20
+        and MaterialCount("Mystic Droplet") >= 10 and MaterialCount("Dragon Scale") >= 10 then
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        InvokeStyle("BuyGodhuman",true); InvokeStyle("BuyGodhuman")
+        if finishPurchase("Godhuman", "Godhuman", before, beforeFrag) then return true end
+    end
+
+    if GetSea() == 3 and not self:ActualOwned("Sanguine Art", false) and Beli() >= 5000000
         and CanSpendFragments(5000,"Full Melee: Sanguine Art",105)
-        and MaterialCount("Leviathan Heart")>=1 and MaterialCount("Dark Fragment")>=2
-        and MaterialCount("Demonic Wisp")>=20 and MaterialCount("Vampire Fang")>=20 then
-        self.LastPurchaseProbe=tick(); InvokeStyle("BuySanguineArt",true); local ok=InvokeStyle("BuySanguineArt")
-        if ok then self:MarkKnown("Sanguine Art"); self.SanguineKnownOwned=true; _G.BobonStatus="Melee: Bought/claimed Sanguine Art"; return true end
+        and MaterialCount("Leviathan Heart") >= 1 and MaterialCount("Dark Fragment") >= 2
+        and MaterialCount("Demonic Wisp") >= 20 and MaterialCount("Vampire Fang") >= 20 then
+        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        InvokeStyle("BuySanguineArt",true); InvokeStyle("BuySanguineArt")
+        if finishPurchase("Sanguine Art", "Sanguine Art", before, beforeFrag) then
+            self.SanguineKnownOwned = true
+            return true
+        end
     end
     return false
 end
@@ -8139,6 +8272,19 @@ task.spawn(function()
             if not meleeTraining and _G.Settings.AutoBuySwords then
                 pcall(function() SwordProgressionController:Tick() end)
             end
+        end
+    end
+end)
+
+
+-- v21.29 IMMEDIATE MELEE ECONOMY WORKER.
+-- Purchase remotes do not own movement, so they must not wait for Saber/Bartilo/quest
+-- ActionTokens.  A newly reached Beli threshold is observed within ~0.2s.
+task.spawn(function()
+    while SessionAlive() and task.wait(_G.Settings.MeleePurchaseInterval or 0.20) do
+        if IsAlive() and _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
+            local ok, err = pcall(function() FightingStyleController:PurchaseTick() end)
+            if not ok then DLog("STYLE", "Immediate purchase worker: " .. tostring(err)) end
         end
     end
 end)
@@ -10215,6 +10361,38 @@ end
 -- only after the current quest is finished (or before the first quest).
 -- `allowSea` also accepts a wrong quest so the level-700/1500 sea gate cannot
 -- accidentally send the player to a next-sea quest before unlocking it.
+-- v21.30 sticky hard-progression intent.  These milestones must finish before
+-- ordinary level farming is allowed to resume; retry cooldowns only delay the next
+-- attempt, they no longer create a 0.15s window where Farm/Boss steals movement.
+function ItemProgression:GetBlockingReason()
+    local now=tick()
+    if now-(self.BlockingCheckedAt or 0)<0.50 then
+        return self.BlockingReason
+    end
+    self.BlockingCheckedAt=now
+
+    local reason=nil
+    local sea,lv=GetSea(),Level()
+    if _G.Settings.AutoItems and _G.Settings.AutoSaber
+        and sea==1 and lv>=200 and not InventoryHas("Saber") then
+        reason="Saber"
+    elseif sea==1 and lv>=700 then
+        reason="Second Sea"
+    elseif sea==2 and lv>=850 then
+        local bartilo
+        pcall(function() bartilo=CommF_:InvokeServer("BartiloQuestProgress","Bartilo") end)
+        if type(bartilo)=="number" and bartilo<3 then
+            reason="Bartilo"
+        elseif lv>=1500 then
+            reason="Third Sea"
+        end
+    end
+
+    self.BlockingReason=reason
+    _G.State.ProgressionLock=reason
+    return reason
+end
+
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
 
@@ -10507,6 +10685,14 @@ end
 
 function BossManager:TryFightBoss()
     if not _G.Settings.BossEnabled or self.Active or not _G.State:CanAct() then return false end
+    -- v21.30: below max level, a boss may start only after the Quest wrapper has
+    -- stayed CLOSED for a confirmed window. A one-frame UI rebuild must never
+    -- turn a normal level quest into an unrelated boss trip.
+    if Level() < MAX_LEVEL then
+        if _G.State.ProgressionLock then return false end
+        if _G.State.QuestClosedStable ~= true then return false end
+        if _G.State.ActiveQuestMob ~= nil then return false end
+    end
     if not CombatController:IsDamageReady() then return false end
     local boss, entry = self:FindLiveBoss()
     if not boss or not entry then return false end
@@ -10903,6 +11089,8 @@ local FruitManager = {
     NextRollAt = 0,
     LastAttemptAt = 0,
     LastSuccessAt = 0,
+    LastObservedBeli = Beli(),
+    SuppressMoneyWakeUntil = 0,
     LastResult = "idle",
 }
 
@@ -10965,6 +11153,30 @@ function FruitManager:CountPhysicalFruits()
     return count
 end
 
+
+function FruitManager:CountStoredFruits()
+    local ok, rows = pcall(function() return CommF_:InvokeServer("getInventoryFruits") end)
+    if not ok or type(rows) ~= "table" then return nil end
+    local total = 0
+    for _, row in pairs(rows) do
+        if type(row) == "table" then
+            total = total + math.max(1, tonumber(row.Count or row.count or row.Amount or row.amount or 1) or 1)
+        end
+    end
+    return total
+end
+
+function FruitManager:LooksLikeCooldownResult(result)
+    if type(result) ~= "string" then return false end
+    local text = string.lower(result)
+    return text:find("cooldown",1,true) ~= nil
+        or text:find("come back",1,true) ~= nil
+        or text:find("wait",1,true) ~= nil
+        or text:find("hour",1,true) ~= nil
+        or text:find("minute",1,true) ~= nil
+        or text:find("not ready",1,true) ~= nil
+end
+
 function FruitManager:StoreBackpackFruits(force)
     if not _G.Settings.FruitEnabled then return false end
     if _G.State and _G.State.ActionOwner == "Raid" then return false end
@@ -10993,7 +11205,7 @@ function FruitManager:StoreBackpackFruits(force)
     return storedAny
 end
 
-function FruitManager:TryRandomFruit()
+function FruitManager:TryRandomFruit(forceWake)
     if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or self.Busy or not IsAlive() then return false end
     if Level() < (_G.Settings.RandomFruitMinLevel or 50) then
         self.LastResult = "level<50"
@@ -11001,37 +11213,51 @@ function FruitManager:TryRandomFruit()
     end
 
     local now = tick()
-    if now < (self.NextRollAt or 0) then return false end
+    local confirmedCooldownUntil = (self.LastSuccessAt or 0) + (_G.Settings.RandomFruitSuccessCooldown or 7200)
+    if (self.LastSuccessAt or 0) > 0 and now < confirmedCooldownUntil then return false end
+    if now - (self.LastAttemptAt or 0) < (_G.Settings.RandomFruitAttemptMinGap or 0.75) then return false end
+    if not forceWake and now < (self.NextRollAt or 0) then return false end
+    if forceWake and now < (self.SuppressMoneyWakeUntil or 0) then return false end
 
     self.Busy = true
     self.LastAttemptAt = now
     _G.State.LastRandomFruit = now
 
-    -- Do NOT travel to Jungle/Cafe/Mansion. Current public implementations invoke
-    -- the same server endpoint directly from any position and let the server validate it.
+    -- No NPC travel: current public implementations invoke Cousin/Buy directly.
+    -- Verify by server-observable state, not merely by pcall returning successfully.
     local beforeBeli = Beli()
     local beforeFruitCount = self:CountPhysicalFruits()
+    local beforeStoredCount = self:CountStoredFruits()
     local ok, result = pcall(function()
         return CommF_:InvokeServer("Cousin", "Buy")
     end)
 
     if not ok then
         self.LastResult = "invoke-error:" .. tostring(result)
-        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 30)
+        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 5)
         DLog("FRUIT", "Gacha invoke failed: " .. tostring(result))
         self.Busy = false
         return false
     end
 
-    -- Update 27 added a roll animation, so do not assume InvokeServer returning means
-    -- a purchase succeeded. Confirm through an actual money decrease or a new fruit tool.
     local confirmed = false
-    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 4.0)
+    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 8.0)
     repeat
-        task.wait(0.20)
-        if Beli() < beforeBeli or self:CountPhysicalFruits() > beforeFruitCount then
+        task.wait(0.15)
+        local physicalNow = self:CountPhysicalFruits()
+        local moneySpent = Beli() < beforeBeli
+        if moneySpent or physicalNow > beforeFruitCount then
             confirmed = true
             break
+        end
+        -- Some builds/store paths can move the fruit into server inventory before the
+        -- local Tool is visible.  Check authoritative fruit inventory as an extra proof.
+        if beforeStoredCount ~= nil then
+            local storedNow = self:CountStoredFruits()
+            if storedNow ~= nil and storedNow > beforeStoredCount then
+                confirmed = true
+                break
+            end
         end
     until tick() >= deadline or not SessionAlive()
 
@@ -11040,33 +11266,67 @@ function FruitManager:TryRandomFruit()
         self.LastResult = "rolled"
         _G.State.LastRandomFruit = self.LastSuccessAt
         self.NextRollAt = self.LastSuccessAt + (_G.Settings.RandomFruitSuccessCooldown or 7200)
-        DLog("FRUIT", "Random fruit confirmed from anywhere; server cooldown started")
-        -- Force a store pass after the animation; also scans Character, not Backpack only.
+        self.SuppressMoneyWakeUntil = self.NextRollAt
+        DLog("FRUIT", "Random fruit VERIFIED from anywhere")
         pcall(function() self:StoreBackpackFruits(true) end)
     else
-        -- Most commonly: server's 2h cooldown, insufficient level-scaled Beli, or another
-        -- server-side restriction. Retry periodically without moving the player or spamming.
-        self.LastResult = "server-rejected-or-cooldown:" .. tostring(result)
-        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 30)
-        DLog("FRUIT", "Gacha not confirmed; retry scheduled | " .. tostring(result))
+        self.LastResult = "server-rejected:" .. tostring(result)
+        local delay = _G.Settings.RandomFruitInterval or 5
+        if self:LooksLikeCooldownResult(result) then
+            delay = math.max(delay, _G.Settings.RandomFruitCooldownRejectDelay or 30)
+            self.SuppressMoneyWakeUntil = tick() + delay
+        else
+            -- Likely money/level-side rejection: allow a Beli increase to wake the buyer
+            -- immediately instead of waiting out the fallback timer.
+            self.SuppressMoneyWakeUntil = 0
+        end
+        self.NextRollAt = tick() + delay
+        DLog("FRUIT", "Gacha not verified; result=" .. tostring(result) .. " retry=" .. tostring(delay))
     end
 
     self.Busy = false
     return confirmed
 end
 
--- Background economy worker: completely movement-independent.  It can roll while farming,
--- doing Saber, travelling between islands, or standing anywhere in Sea 1/2/3.
+-- Background worker stays movement-independent.
 task.spawn(function()
-    while SessionAlive() and task.wait(1) do
+    while SessionAlive() and task.wait(0.50) do
         if _G.Settings.GetFruits and _G.Settings.FruitEnabled then
             pcall(function()
                 FruitManager:StoreBackpackFruits()
-                FruitManager:TryRandomFruit()
+                FruitManager:TryRandomFruit(false)
             end)
         end
     end
 end)
+
+-- Wake the gacha immediately when Beli increases.  This removes the old 30-second
+-- blind window where the player could already have enough money but the buyer slept.
+do
+    local data = LP:FindFirstChild("Data")
+    local beliValue = data and data:FindFirstChild("Beli")
+    if beliValue then
+        FruitManager.LastObservedBeli = tonumber(beliValue.Value) or Beli()
+        beliValue:GetPropertyChangedSignal("Value"):Connect(function()
+            if not SessionAlive() then return end
+            local current = tonumber(beliValue.Value) or Beli()
+            local previous = tonumber(FruitManager.LastObservedBeli) or 0
+            FruitManager.LastObservedBeli = current
+            if current <= previous then return end
+            if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or not IsAlive() then return end
+            local now = tick()
+            local cooldownUntil = (FruitManager.LastSuccessAt or 0)
+                + (_G.Settings.RandomFruitSuccessCooldown or 7200)
+            if (FruitManager.LastSuccessAt or 0) > 0 and now < cooldownUntil then return end
+            if now < (FruitManager.SuppressMoneyWakeUntil or 0) then return end
+            if now - (FruitManager.LastAttemptAt or 0) < (_G.Settings.RandomFruitMoneyRetry or 0.50) then return end
+            FruitManager.NextRollAt = 0
+            task.defer(function()
+                pcall(function() FruitManager:TryRandomFruit(true) end)
+            end)
+        end)
+    end
+end
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -12061,6 +12321,48 @@ task.spawn(function()
             -- the small watcher outside this large closure to keep compile pressure low.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
+            local questNow = tick()
+            if questState == true then
+                _G.State.QuestLastSeenAt = questNow
+                _G.State.QuestClosedSince = 0
+                _G.State.QuestClosedStable = false
+            elseif questState == false then
+                if (_G.State.QuestClosedSince or 0) <= 0 then
+                    _G.State.QuestClosedSince = questNow
+                end
+                _G.State.QuestClosedStable =
+                    questNow - (_G.State.QuestClosedSince or questNow)
+                        >= (_G.Settings.QuestCloseConfirm or 0.80)
+            else
+                -- unreadable/rebuilding UI is never evidence that the quest closed
+                _G.State.QuestClosedStable = false
+            end
+
+            -- Sticky mandatory progression wins over level farm until it is actually
+            -- complete.  This is the architectural fix for Saber -> Farm -> Boss ->
+            -- Saber ping-pong seen in the supplied video.
+            local progressionLock = ItemProgression:GetBlockingReason()
+            _G.State.ProgressionLock = progressionLock
+            if progressionLock then
+                _G.State.WorkIntent = "PROGRESSION:" .. tostring(progressionLock)
+                if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+                    TravelManager:Stop("MandatoryProgressionLock")
+                end
+                FarmPositionController:ReleaseCluster()
+                _G.State:ClearTargets()
+                local okProgress, startedProgress = pcall(function()
+                    return ItemProgression:RunChecks(true,true)
+                end)
+                if not okProgress then
+                    warn("[BobonHub] Module Error: MandatoryProgression: " .. tostring(startedProgress))
+                elseif not startedProgress and _G.State.ActiveActionToken == 0 then
+                    _G.BobonStatus = "Progression: " .. tostring(progressionLock) .. " • retrying"
+                end
+                return
+            else
+                _G.State.WorkIntent = "LEVEL_FARM"
+            end
+
             if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
                 and not SubmergedAccessController:IsInside() then
                 local canAttemptEntrance = SubmergedAccessController.Confirmed
@@ -12143,7 +12445,7 @@ task.spawn(function()
             -- contains an exact QDB mob name. A localized/unreadable wrapper
             -- is still safe to farm by level, but bring stays disabled until
             -- this session accepts the next quest and knows its exact mob.
-            if questState == false then
+            if questState == false and _G.State.QuestClosedStable == true then
                 FarmPositionController:ReleaseCluster()
                 _G.State.ActiveQuestMob = nil
             elseif questState == true then
@@ -12194,6 +12496,15 @@ task.spawn(function()
             -- title). Bản cũ đòi match == true nên nil khiến bot kẹt
             -- re-request quest vô hạn → không farm, không gom, không đánh.
             local hasQuest = questState == true and questMatch ~= false
+            -- v21.30: retain the canonical active quest across a brief wrapper blink.
+            -- Without this lease the controller cleared Farm, opened a "safe item window",
+            -- and could launch BossManager before the Quest UI rebuilt.
+            if not hasQuest and questState == false and questMatch ~= false
+                and _G.State.ActiveQuestMob
+                and questNow - (_G.State.QuestLastSeenAt or 0)
+                    <= (_G.Settings.QuestUILease or 1.25) then
+                hasQuest = true
+            end
             -- Right after StartQuest, some UI builds briefly hide/rebuild the
             -- Quest wrapper. Do not cancel the accepted quest and fly back to
             -- the giver during that short transition.
@@ -12229,6 +12540,8 @@ task.spawn(function()
                 -- leave stale title text behind, so questMatch may still be
                 -- true even though there is no active quest.
                 local safeItemWindow = questState == false
+                    and _G.State.QuestClosedStable == true
+                    and _G.State.ActiveQuestMob == nil
                 if safeItemWindow then
                     local okIndra, indraResult = pcall(function() return IndraController:TryRun() end)
                     if okIndra and indraResult then return end
@@ -12771,10 +13084,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.28] Full Script Loaded Successfully!")
-print("[BobonHub v21.28] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.28] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.28] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.28] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.28] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.28] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.30] Full Script Loaded Successfully!")
+print("[BobonHub v21.30] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.30] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.30] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Immediate Melee/Gacha | CDK/Skull | Fire HUD")
+print("[BobonHub v21.30] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.30] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.30] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
