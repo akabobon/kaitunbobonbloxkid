@@ -1,9 +1,21 @@
 -- =================================================================
---         BOBON HUB v21.30 STABLE INTENT + TARGET-LOCK DODGE | FULL PROGRESSION V2
+--         BOBON HUB v21.32 ACTIVE FIELD SWEEP + GACHA-FIRST + ALL-MELEE PREEMPT | FULL PROGRESSION V2
 --         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.29 IMMEDIATE MELEE + GACHA | Version: v21.30
+--         Base: v21.32 ECONOMY SERIAL | Version: v21.32
 --
---  v21.30 STABILITY AUDIT (VIDEO Roblox(10)):
+--  v21.32 ACTIVE FARM / ECONOMY FIX:
+--  [AF-1] Quest scanning no longer reuses the authority-only radius when authority mode is OFF.
+--         Current quest mobs get a wider live-search field instead of disappearing from LastBatch.
+--  [AF-2] Empty wave / stale anchor no longer means stand still: visit live matching mob roots first,
+--         then patrol compact spawn-field points until a new wave is streamed.
+--  [AF-3] One-pile anchor follows the player during the sweep; acquired mobs are restacked underfoot.
+--  [EC-1] Gacha gets FIRST refusal every economy cycle. If it can roll, it spends before melee.
+--         A cooldown/insufficient-money rejection immediately falls through to melee in the same cycle.
+--  [EC-2] EVERY fighting-style purchase branch pauses ordinary Farm before the purchase/verification.
+--         V1, Dragon Breath, Superhuman, V2 styles, Godhuman and Sanguine all use the same rule.
+--  [EC-3] Ready fighting-style unlock quests/keys preempt ordinary farm instead of waiting for a farm window.
+--
+--  v21.32 STABILITY AUDIT (VIDEO Roblox(10)):
 --  [SI-1] Sticky mandatory progression intent: Saber/Sea gates cannot fall back to level
 --         farm for a few frames between retries. This removes Farm <-> progression ping-pong.
 --  [SI-2] Quest UI close is debounced/leased before optional boss/item work may start.
@@ -869,7 +881,7 @@ _G.Settings = {
     ClusterAuthorityProbeMissCooldown = 1.60,
     ClusterAuthorityMaxProbeAttempts = 3,
     ClusterAuthorityHardMissCooldown = 5.0,
-    ClusterAuthorityFieldRadius = 650,
+    ClusterAuthorityFieldRadius = 1200,
     ClusterQuestPhysicalFallback = true,
     ClusterSkipPhysicalFallback = true,
     ClusterStrictOwnership = true,
@@ -933,14 +945,18 @@ _G.Settings = {
     TravelTimeoutMargin = 20,
     -- v21.27: Blox Fruit Gacha is available from Lv50 in every sea.
     -- The server owns the real level-scaled price/cooldown; do not hard-code Sea2/3 prices.
-    RandomFruitInterval = 5,       -- rejected attempt fallback; Beli increases wake it immediately
+    RandomFruitInterval = 2,       -- rejected attempt fallback; unified economy worker retries conservatively
     RandomFruitSuccessCooldown = 7200, -- confirmed roll: respect the server cooldown
     RandomFruitMinLevel = 50,
-    RandomFruitResultWait = 8.0,
+    RandomFruitResultWait = 4.0,
     RandomFruitMoneyRetry = 0.50,
     RandomFruitAttemptMinGap = 0.75,
     RandomFruitCooldownRejectDelay = 30,
-    MeleePurchaseInterval = 0.20,
+    MeleePurchaseInterval = 0.35,
+    EconomyTick          = 0.25,
+    EconomyMeleePriorityHold = 0.00, -- compatibility only; v21.32 is Gacha-first
+    EconomyPauseDuration = 2.10,
+    EconomyGachaFirst = true,
     FruitStoreInterval  = 8,
     AttackDelay         = 0.08,
     QuestDelay          = 1.5,
@@ -972,7 +988,16 @@ _G.Settings = {
     ClusterAcquireGrace = 0.35,
     -- A quest uses only its current spawn field. GatherMaxDistance remains the
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
-    ClusterQuestRadius  = 650,
+    ClusterQuestRadius  = 1200,
+    ClusterQuestSearchRadius = 2400,
+    ClusterFieldPatrolEnabled = true,
+    ClusterFieldPatrolRadius = 165,
+    ClusterFieldPatrolOuterRadius = 310,
+    ClusterFieldPatrolHold = 0.90,
+    ClusterFieldPatrolArrival = 14,
+    ClusterFieldPatrolSpeed = 420,
+    ClusterFieldPatrolHeight = 18,
+
     ClusterAcquireSweep = true,
     ClusterAcquireTimeout = 2.00,
     ClusterAcquireMaxTimeout = 6.00,
@@ -981,16 +1006,16 @@ _G.Settings = {
     ClusterAcquireMaxAttempts = 6,
     ClusterAcquireCycleRetry = 0.35,
     ClusterAcquireArrivalThreshold = 3.25,
-    ClusterAcquireTravelSpeed = 360,
+    ClusterAcquireTravelSpeed = 420,
     ClusterAcquireHoverHeight = 6,
-    ClusterAcquireGroupRadius = 140,
+    ClusterAcquireGroupRadius = 180,
     ClusterOwnershipSettle = 0.18,
     ClusterAcquirePreferCoverage = true,
     -- v21.23: fallback ONLY for environments where ownership cannot be queried.
     -- It requires real HP damage at the mob's real position + close physical approach,
     -- then a one-shot movement persistence test before the mob may join the pile.
     ClusterDamageLeaseEnabled = true,
-    ClusterDamageLeaseAcquireRadius = 18,
+    ClusterDamageLeaseAcquireRadius = 28,
     ClusterDamageLeaseProofWindow = 0.28,
     ClusterDamageLeaseProofChecks = 5,
     ClusterDamageLeaseProofRadius = 7,
@@ -999,7 +1024,7 @@ _G.Settings = {
     -- v21.22: a single exact pile stays horizontally under the player during sweep.
     ClusterOnePileUnderfoot = true,
     ClusterPileFollowDuringSweep = true,
-    ClusterPileSettleRadius = 20,
+    ClusterPileSettleRadius = 12,
     ClusterPileUseAcquireGroundY = true,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
@@ -1046,7 +1071,7 @@ _G.Settings = {
     DodgeAttacks        = true,
     -- v21.28 SMART SKILL DODGE: detect cast/charge/transient AoE, pause attacks,
     -- evade with the SAME TravelManager owner, confirm clear, then resume target.
-    -- v21.30 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
+    -- v21.32 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
     DodgeCooldown       = 0.30,
     DodgeDistance       = 20,
     DodgeHeight         = 4,
@@ -1338,6 +1363,8 @@ _G.State = {
     QuestClosedStable = false,
     ProgressionLock   = nil,
     WorkIntent        = "LEVEL_FARM",
+    EconomyPauseUntil = 0,
+    EconomyPauseReason= nil,
     FarmSafetyUntil   = 0,
     FarmSafetyActive  = false,
     LastTargetContested = 0,
@@ -1347,9 +1374,37 @@ _G.State = {
     Sea              = 1,
 }
 
+-- v21.32 SINGLE ECONOMY OWNER.  Melee and Gacha are both Beli spenders; running
+-- them in independent workers created a race where Gacha could spend the exact
+-- 150k/500k/750k threshold before the style buyer, or a style/core purchase
+-- could be mistaken for Gacha success merely because Beli dropped.
+_G.BobonEconomy = {
+    Busy = false,
+    Owner = nil,
+    Wake = true,
+    MeleeBlockFruitUntil = 0,
+    LastMeleeAttempt = 0,
+    LastGachaAttempt = 0,
+}
+function _G.BobonEconomy:Notice(text, ttl)
+    if not _G.BobonDiagnostics then return end
+    _G.BobonDiagnostics.Economy = tostring(text or "ECON")
+    _G.BobonDiagnostics.EconomyUntil = tick() + (ttl or 2.5)
+end
+
+function _G.BobonEconomy:PauseFarm(reason, duration)
+    local state = _G.State
+    if not state then return end
+    local hold = math.max(0.35, tonumber(duration) or (_G.Settings.EconomyPauseDuration or 2.10))
+    state.EconomyPauseUntil = math.max(tonumber(state.EconomyPauseUntil) or 0, tick() + hold)
+    state.EconomyPauseReason = tostring(reason or "ECONOMY")
+    -- TravelManager is a later local; the main controller owns the actual Stop on
+    -- the next tick. Keeping this helper state-only also preserves single movement ownership.
+    self:Notice(state.EconomyPauseReason, hold)
+end
 
 function _G.State:SetMode(mode)
-    -- v21.30: Mode is state, not a status message.  The old assignment below made
+    -- v21.32: Mode is state, not a status message.  The old assignment below made
     -- every 0.15s farm tick overwrite detailed Saber/Boss/Farm text and created
     -- misleading HUD flicker even when the movement owner had not changed.
     self.Mode = mode
@@ -1837,7 +1892,9 @@ do
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
-                    if state.ProgressionLock then
+                    if diag.EconomyUntil and tick() < diag.EconomyUntil and diag.Economy then
+                        FlagL.Text = tostring(diag.Economy)
+                    elseif state.ProgressionLock then
                         FlagL.Text = "LOCK • " .. string.upper(tostring(state.ProgressionLock))
                     elseif state.DodgeActive then
                         FlagL.Text = "DODGE • TARGET LOCK"
@@ -4801,6 +4858,9 @@ ClusterFarmController = {
     PositionProof = setmetatable({}, { __mode = "k" }),
     -- v21.13: bounded remote-pull retries; weak keys avoid retaining dead NPC roots.
     RemotePullRetryAt = setmetatable({}, { __mode = "k" }),
+    PatrolIndex = 1,
+    PatrolLastSwitch = 0,
+    PatrolLastPoint = nil,
 }
 
 local function NormalizeClusterNames(names)
@@ -4900,6 +4960,9 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
         self.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
+        self.PatrolIndex = 1
+        self.PatrolLastSwitch = 0
+        self.PatrolLastPoint = nil
         state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
         state.ClusterActivatedAt = tick()
         state.ClusterPrimary = nil
@@ -5481,6 +5544,71 @@ function ClusterFarmController:GetAcquireTarget()
     return best
 end
 
+-- v21.32 ACTIVE FIELD SWEEP. No verified target no longer means park forever.
+-- Prefer a real live quest root; if none is currently streamed, patrol a compact
+-- ring around the active quest field until the next wave becomes visible.
+function ClusterFarmController:GetFieldSweepGoal(fallbackCF)
+    local state = _G.State
+    if not state or state.ClusterMode ~= "QUEST"
+        or _G.Settings.ClusterFieldPatrolEnabled == false or not self:PolicyValid() then
+        return nil, nil
+    end
+    local me = HRP()
+    local folder = workspace:FindFirstChild("Enemies")
+    local anchorCF = state.ClusterAnchor or fallbackCF
+    if not anchorCF then return nil, nil end
+    local anchor = typeof(anchorCF) == "CFrame" and anchorCF.Position or anchorCF
+    local searchRadius = math.max(250, tonumber(_G.Settings.ClusterQuestSearchRadius) or 2400)
+
+    local bestRoot, bestDist
+    if folder then
+        for _, mob in ipairs(folder:GetChildren()) do
+            if self:IsModelAllowed(mob) and not self:IsVerified(mob) then
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                local root = mob:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health > 0 and root and root.Parent then
+                    local ok, pos = pcall(function() return root.Position end)
+                    if ok and IsAllowedWorldPosition(pos) and (pos - anchor).Magnitude <= searchRadius then
+                        local d = me and (pos - me.Position).Magnitude or 0
+                        if not bestDist or d < bestDist then bestRoot, bestDist = root, d end
+                    end
+                end
+            end
+        end
+    end
+    if bestRoot then
+        self.PatrolLastPoint = nil
+        return bestRoot, "LIVE"
+    end
+
+    local r1 = tonumber(_G.Settings.ClusterFieldPatrolRadius) or 165
+    local r2 = tonumber(_G.Settings.ClusterFieldPatrolOuterRadius) or 310
+    local offsets = {
+        Vector3.new(0,0,0),
+        Vector3.new(r1,0,0), Vector3.new(0,0,r1), Vector3.new(-r1,0,0), Vector3.new(0,0,-r1),
+        Vector3.new(r2,0,r2*0.35), Vector3.new(-r2*0.35,0,r2),
+        Vector3.new(-r2,0,-r2*0.35), Vector3.new(r2*0.35,0,-r2),
+    }
+    local now = tick()
+    local idx = math.clamp(tonumber(self.PatrolIndex) or 1, 1, #offsets)
+    local function pointFor(i)
+        local p = anchor + offsets[i]
+        local h = math.max(10, tonumber(_G.Settings.ClusterFieldPatrolHeight) or 18)
+        return Vector3.new(p.X, math.max(p.Y + h, _G.Settings.MinY + 2), p.Z)
+    end
+    local point = pointFor(idx)
+    local arrived = me and (Vector3.new(me.Position.X,0,me.Position.Z)
+        - Vector3.new(point.X,0,point.Z)).Magnitude <= (_G.Settings.ClusterFieldPatrolArrival or 14)
+    if arrived or now - (self.PatrolLastSwitch or 0) >= (_G.Settings.ClusterFieldPatrolHold or 0.90) then
+        idx = idx % #offsets + 1
+        self.PatrolIndex = idx
+        self.PatrolLastSwitch = now
+        point = pointFor(idx)
+    end
+    self.PatrolLastPoint = point
+    return CFrame.new(point), "PATROL"
+end
+
 function ClusterFarmController:SelectPrimary()
     local state = _G.State
     local folder = workspace:FindFirstChild("Enemies")
@@ -5692,12 +5820,18 @@ function ClusterFarmController:Tick()
     end
 
     local candidates = {}
-    local questFieldRadius = tonumber(_G.Settings.ClusterAuthorityFieldRadius)
-        or tonumber(_G.Settings.ClusterQuestRadius) or 180
+    -- v21.32: when authority mode is OFF, do not let its smaller radius hide quest mobs.
+    local questFieldRadius
+    if _G.Settings.ClusterAuthorityEnabled ~= false then
+        questFieldRadius = tonumber(_G.Settings.ClusterAuthorityFieldRadius)
+            or tonumber(_G.Settings.ClusterQuestRadius) or 1200
+    else
+        questFieldRadius = tonumber(_G.Settings.ClusterQuestRadius) or 1200
+    end
     local maxDistance = state.ClusterMode == "RAID"
         and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
         or (state.ClusterMode == "QUEST"
-            and math.max(80, questFieldRadius)
+            and math.max(120, tonumber(_G.Settings.ClusterQuestSearchRadius) or questFieldRadius)
             or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000))
 
     for _, mob in ipairs(folder:GetChildren()) do
@@ -6685,6 +6819,7 @@ end
 local CoreAbilityPurchaseController = { LastTry = 0 }
 function CoreAbilityPurchaseController:Tick()
     if not _G.Settings.AutoCoreAbilities or not IsAlive() then return false end
+    if _G.BobonEconomy and _G.BobonEconomy.Busy then return false end
     local now = tick()
     if now - (self.LastTry or 0) < (_G.Settings.CoreAbilityRetry or 45) then return false end
     self.LastTry = now
@@ -6932,7 +7067,7 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
---    v21.30 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
+--    v21.32 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
 --   * Never scans unrelated nearby NPCs as threats; only the TravelManager active target.
 --   * No generic Action-priority fallback: ordinary combat/idle animations cannot trigger dodge.
 --   * A threat must be seen in consecutive monitor samples before movement changes.
@@ -7257,7 +7392,7 @@ task.spawn(function()
         pcall(function() DodgeController:TryDodge() end)
     end
 end)
-end -- v21.30 target-lock dodge lexical scope
+end -- v21.32 target-lock dodge lexical scope
 -- ══════════════════════════════════════════════════════════════════
 --         RECOVERY MANAGER v7 (Fix #2,#6)
 --   State machine: STOP → CLEANUP → RESET → WAIT → CHECK → IDLE
@@ -7882,8 +8017,7 @@ end
 function FightingStyleController:Known(value)
     local names = type(value) == "table" and value or {value}
     for _, name in ipairs(names) do
-        if FindOwnedTool(name) or InventoryHas(name) or EffectiveMastery(name) > 0
-            or self.KnownPurchased[name] then
+        if FindOwnedTool(name) or EffectiveMastery(name) > 0 or self.KnownPurchased[name] then
             return true, name
         end
     end
@@ -7904,13 +8038,15 @@ end
 function FightingStyleController:ActualOwned(value, forceRefresh)
     local names = type(value) == "table" and value or {value}
     if forceRefresh then
-        InventoryCache.At = 0
         WeaponInventoryCache.At = 0
     end
     for _, name in ipairs(names) do
+        -- Do NOT use generic getInventory here.  Public current kaitun implementations
+        -- verify fighting styles from the live Tool/mastery path; treating an inventory
+        -- catalog row as ownership can make BuyBlackLeg/BuyElectro never fire.
         if FindOwnedTool(name) then return true, name end
-        if InventoryHas(name) then return true, name end
         if EffectiveMastery(name) > 0 then return true, name end
+        if self.KnownPurchased[name] then return true, name end
     end
     return false, nil
 end
@@ -7925,14 +8061,11 @@ function FightingStyleController:RestoreHeldTool(name)
 end
 
 function FightingStyleController:VerifyPurchase(value, beforeBeli, beforeFragments, seconds)
-    local deadline = tick() + (seconds or 1.50)
+    local deadline = tick() + (seconds or 1.10)
     repeat
-        InventoryCache.At = 0
         WeaponInventoryCache.At = 0
         local owned, ownedName = self:ActualOwned(value, false)
         if owned then return true, ownedName end
-        if beforeBeli ~= nil and Beli() < beforeBeli then return true, nil end
-        if beforeFragments ~= nil and Fragments() < beforeFragments then return true, nil end
         task.wait(0.10)
     until tick() >= deadline or not SessionAlive() or not IsAlive()
     return false, nil
@@ -7976,15 +8109,26 @@ function FightingStyleController:PurchaseTick()
     local held = c and c:FindFirstChildOfClass("Tool")
     local heldName = held and held.Name or nil
 
+    local function beginPurchase(label)
+        self.LastPurchaseProbe = tick()
+        _G.BobonEconomy.LastMeleeAttempt = self.LastPurchaseProbe
+        if _G.BobonEconomy then
+            _G.BobonEconomy:PauseFarm("MELEE • " .. tostring(label), _G.Settings.EconomyPauseDuration or 2.10)
+            _G.BobonEconomy:Notice("MELEE → " .. tostring(label), 2.2)
+        end
+    end
+
     local function finishPurchase(value, label, beforeBeli, beforeFragments)
-        local verified = self:VerifyPurchase(value, beforeBeli, beforeFragments, 1.60)
+        local verified = self:VerifyPurchase(value, beforeBeli, beforeFragments, 1.10)
         self:RestoreHeldTool(heldName)
         if verified then
             self:MarkKnown(value)
             _G.BobonStatus = "Melee: Bought/claimed " .. tostring(label)
+            _G.BobonEconomy:Notice("MELEE ✓ " .. tostring(label), 3.0)
             DLog("STYLE", "Verified purchase: " .. tostring(label))
             return true
         end
+        _G.BobonEconomy:Notice("MELEE → retry " .. tostring(label), 2.0)
         DLog("STYLE", "Purchase probe not verified: " .. tostring(label))
         return false
     end
@@ -7992,9 +8136,11 @@ function FightingStyleController:PurchaseTick()
     local function buySimple(names, money, remote, label)
         if self:ActualOwned(names, false) then return false end
         if Beli() < money then return false end
-        self.LastPurchaseProbe = tick()
+        beginPurchase(label)
         local before = Beli()
-        InvokeStyle(remote)
+        local callOk, callResult = InvokeStyle(remote)
+        _G.BobonEconomy:Notice(("MELEE %s • remote=%s • result=%s")
+            :format(tostring(label), tostring(callOk), tostring(callResult)), 2.0)
         return finishPurchase(names, label, before, nil)
     end
 
@@ -8006,7 +8152,7 @@ function FightingStyleController:PurchaseTick()
     -- Dragon Breath uses fragments, not Beli.  Do not mark it owned from pcall alone.
     if not self:ActualOwned({"Dragon Breath","Dragon Claw"}, false) and GetSea() >= 2
         and CanSpendFragments(1500,"Full Melee: Dragon Breath",100) then
-        self.LastPurchaseProbe = tick()
+        beginPurchase("Dragon Breath")
         local beforeFrag = Fragments()
         pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","1") end)
         pcall(function() CommF_:InvokeServer("BlackbeardReward","DragonClaw","2") end)
@@ -8020,7 +8166,7 @@ function FightingStyleController:PurchaseTick()
 
     if not self:ActualOwned("Superhuman", false) and darkM >= 300 and electroM >= 300
         and waterM >= 300 and dragonM >= 300 and Beli() >= 3000000 then
-        self.LastPurchaseProbe = tick()
+        beginPurchase("Superhuman")
         local before = Beli()
         InvokeStyle("BuySuperhuman")
         if finishPurchase("Superhuman", "Superhuman", before, nil) then return true end
@@ -8031,21 +8177,21 @@ function FightingStyleController:PurchaseTick()
     -- dedicated unlock controller performs that prerequisite later.
     if GetSea() >= 2 and darkM >= 400 and not self:ActualOwned("Death Step", false)
         and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Death Step",100) then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Death Step"); local before = Beli(); local beforeFrag = Fragments()
         InvokeStyle("BuyDeathStep",true); InvokeStyle("BuyDeathStep")
         if finishPurchase("Death Step", "Death Step", before, beforeFrag) then return true end
     end
 
     if GetSea() >= 2 and waterM >= 400 and not self:ActualOwned("Sharkman Karate", false)
         and Beli() >= 2500000 and CanSpendFragments(5000,"Full Melee: Sharkman Karate",100) then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Sharkman Karate"); local before = Beli(); local beforeFrag = Fragments()
         InvokeStyle("BuySharkmanKarate",true); InvokeStyle("BuySharkmanKarate")
         if finishPurchase("Sharkman Karate", "Sharkman Karate", before, beforeFrag) then return true end
     end
 
     if GetSea() == 3 and electricM >= 400 and not self:ActualOwned("Electric Claw", false)
         and Beli() >= 3000000 and CanSpendFragments(5000,"Full Melee: Electric Claw",100) then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Electric Claw"); local before = Beli(); local beforeFrag = Fragments()
         local _, state = InvokeStyle("BuyElectricClaw", true)
         -- state==4 means Previous Hero quest is still required; do not fake success.
         if state ~= 4 then InvokeStyle("BuyElectricClaw") end
@@ -8055,7 +8201,7 @@ function FightingStyleController:PurchaseTick()
     if GetSea() == 3 and dragonM >= 400 and (FindOwnedTool("Fire Essence") or InventoryHas("Fire Essence"))
         and not self:ActualOwned("Dragon Talon", false) and Beli() >= 3000000
         and CanSpendFragments(5000,"Full Melee: Dragon Talon",100) then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Dragon Talon"); local before = Beli(); local beforeFrag = Fragments()
         InvokeStyle("BuyDragonTalon",true); InvokeStyle("BuyDragonTalon")
         if finishPurchase("Dragon Talon", "Dragon Talon", before, beforeFrag) then return true end
     end
@@ -8070,7 +8216,7 @@ function FightingStyleController:PurchaseTick()
         and Beli() >= 5000000 and CanSpendFragments(5000,"Full Melee: Godhuman",110)
         and MaterialCount("Fish Tail") >= 20 and MaterialCount("Magma Ore") >= 20
         and MaterialCount("Mystic Droplet") >= 10 and MaterialCount("Dragon Scale") >= 10 then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Godhuman"); local before = Beli(); local beforeFrag = Fragments()
         InvokeStyle("BuyGodhuman",true); InvokeStyle("BuyGodhuman")
         if finishPurchase("Godhuman", "Godhuman", before, beforeFrag) then return true end
     end
@@ -8079,7 +8225,7 @@ function FightingStyleController:PurchaseTick()
         and CanSpendFragments(5000,"Full Melee: Sanguine Art",105)
         and MaterialCount("Leviathan Heart") >= 1 and MaterialCount("Dark Fragment") >= 2
         and MaterialCount("Demonic Wisp") >= 20 and MaterialCount("Vampire Fang") >= 20 then
-        self.LastPurchaseProbe = tick(); local before = Beli(); local beforeFrag = Fragments()
+        beginPurchase("Sanguine Art"); local before = Beli(); local beforeFrag = Fragments()
         InvokeStyle("BuySanguineArt",true); InvokeStyle("BuySanguineArt")
         if finishPurchase("Sanguine Art", "Sanguine Art", before, beforeFrag) then
             self.SanguineKnownOwned = true
@@ -8277,17 +8423,8 @@ task.spawn(function()
 end)
 
 
--- v21.29 IMMEDIATE MELEE ECONOMY WORKER.
--- Purchase remotes do not own movement, so they must not wait for Saber/Bartilo/quest
--- ActionTokens.  A newly reached Beli threshold is observed within ~0.2s.
-task.spawn(function()
-    while SessionAlive() and task.wait(_G.Settings.MeleePurchaseInterval or 0.20) do
-        if IsAlive() and _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
-            local ok, err = pcall(function() FightingStyleController:PurchaseTick() end)
-            if not ok then DLog("STYLE", "Immediate purchase worker: " .. tostring(err)) end
-        end
-    end
-end)
+-- v21.32: purchase execution moved to the SINGLE ECONOMY WORKER after FruitManager.
+-- This prevents Melee and Gacha from spending Beli concurrently.
 
 -- ══════════════════════════════════════════════════════════════════
 --     AUTO ITEMS + SEA PROGRESSION v16.1 (GIỮ NGUYÊN + FIX-P8/P9)
@@ -10361,7 +10498,7 @@ end
 -- only after the current quest is finished (or before the first quest).
 -- `allowSea` also accepts a wrong quest so the level-700/1500 sea gate cannot
 -- accidentally send the player to a next-sea quest before unlocking it.
--- v21.30 sticky hard-progression intent.  These milestones must finish before
+-- v21.32 sticky hard-progression intent.  These milestones must finish before
 -- ordinary level farming is allowed to resume; retry cooldowns only delay the next
 -- attempt, they no longer create a 0.15s window where Farm/Boss steals movement.
 function ItemProgression:GetBlockingReason()
@@ -10396,9 +10533,12 @@ end
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
 
-    -- v21.27: permanent purchases are cheapest/fastest and must never wait behind a
-    -- long puzzle. This is what makes 150k Dark Step happen immediately at 200k Beli.
-    if allowOptional and FightingStyleController:PurchaseTick() then return true end
+    -- v21.32: Melee purchases are handled by the single economy worker, not this
+    -- progression scheduler.  This avoids duplicate purchase coroutines racing Gacha.
+
+    -- v21.32: ready style-unlock work (key/Previous Hero/essence) preempts normal farm.
+    if allowOptional and FightingStyleUnlockController
+        and FightingStyleUnlockController:TryRun() then return true end
 
     -- Sea-1 permanent milestone before world exit.
     if allowOptional and self:CheckSaber() then return true end
@@ -10411,7 +10551,6 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if allowOptional and self:CheckRaceV2() then return true end
 
     if allowOptional then
-        if FightingStyleUnlockController and FightingStyleUnlockController:TryRun() then return true end
         if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
 
         local meleeBusy=false
@@ -10685,7 +10824,7 @@ end
 
 function BossManager:TryFightBoss()
     if not _G.Settings.BossEnabled or self.Active or not _G.State:CanAct() then return false end
-    -- v21.30: below max level, a boss may start only after the Quest wrapper has
+    -- v21.32: below max level, a boss may start only after the Quest wrapper has
     -- stayed CLOSED for a confirmed window. A one-frame UI rebuild must never
     -- turn a normal level quest into an unrelated boss trip.
     if Level() < MAX_LEVEL then
@@ -11205,6 +11344,20 @@ function FruitManager:StoreBackpackFruits(force)
     return storedAny
 end
 
+function FruitManager:LooksLikeSuccessResult(result)
+    if typeof(result) == "Instance" then return true end
+    if type(result) == "table" then
+        return result.Name ~= nil or result.Fruit ~= nil or result.Item ~= nil
+    end
+    if type(result) ~= "string" then return false end
+    if self:LooksLikeCooldownResult(result) then return false end
+    local text = string.lower(result)
+    return text:find("bought",1,true) ~= nil
+        or text:find("you got",1,true) ~= nil
+        or text:find("received",1,true) ~= nil
+        or text:find("rolled",1,true) ~= nil
+end
+
 function FruitManager:TryRandomFruit(forceWake)
     if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or self.Busy or not IsAlive() then return false end
     if Level() < (_G.Settings.RandomFruitMinLevel or 50) then
@@ -11228,9 +11381,12 @@ function FruitManager:TryRandomFruit(forceWake)
     local beforeBeli = Beli()
     local beforeFruitCount = self:CountPhysicalFruits()
     local beforeStoredCount = self:CountStoredFruits()
+    _G.BobonEconomy.LastGachaAttempt = now
+    _G.BobonEconomy:Notice("GACHA → request", 2.0)
     local ok, result = pcall(function()
         return CommF_:InvokeServer("Cousin", "Buy")
     end)
+    _G.BobonEconomy:Notice("GACHA • result=" .. tostring(result), 2.5)
 
     if not ok then
         self.LastResult = "invoke-error:" .. tostring(result)
@@ -11240,13 +11396,12 @@ function FruitManager:TryRandomFruit(forceWake)
         return false
     end
 
-    local confirmed = false
-    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 8.0)
+    local confirmed = self:LooksLikeSuccessResult(result)
+    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 4.0)
     repeat
         task.wait(0.15)
         local physicalNow = self:CountPhysicalFruits()
-        local moneySpent = Beli() < beforeBeli
-        if moneySpent or physicalNow > beforeFruitCount then
+        if physicalNow > beforeFruitCount then
             confirmed = true
             break
         end
@@ -11267,7 +11422,9 @@ function FruitManager:TryRandomFruit(forceWake)
         _G.State.LastRandomFruit = self.LastSuccessAt
         self.NextRollAt = self.LastSuccessAt + (_G.Settings.RandomFruitSuccessCooldown or 7200)
         self.SuppressMoneyWakeUntil = self.NextRollAt
+        _G.BobonEconomy:Notice("GACHA ✓ rolled", 4.0)
         DLog("FRUIT", "Random fruit VERIFIED from anywhere")
+        task.wait(0.35)
         pcall(function() self:StoreBackpackFruits(true) end)
     else
         self.LastResult = "server-rejected:" .. tostring(result)
@@ -11281,6 +11438,7 @@ function FruitManager:TryRandomFruit(forceWake)
             self.SuppressMoneyWakeUntil = 0
         end
         self.NextRollAt = tick() + delay
+        _G.BobonEconomy:Notice("GACHA ↻ " .. tostring(result), 3.0)
         DLog("FRUIT", "Gacha not verified; result=" .. tostring(result) .. " retry=" .. tostring(delay))
     end
 
@@ -11288,14 +11446,38 @@ function FruitManager:TryRandomFruit(forceWake)
     return confirmed
 end
 
--- Background worker stays movement-independent.
+-- v21.32 SINGLE ECONOMY WORKER — GACHA FIRST, then ALL MELEE.
+-- One serial worker remains, so Beli transactions cannot race each other.
+-- Gacha always gets first refusal when its client cooldown allows an attempt.
+-- After success OR rejection, the worker re-reads balance and immediately probes melee.
 task.spawn(function()
-    while SessionAlive() and task.wait(0.50) do
+    while SessionAlive() and task.wait(_G.Settings.EconomyTick or 0.25) do
+        if not IsAlive() then continue end
+
         if _G.Settings.GetFruits and _G.Settings.FruitEnabled then
-            pcall(function()
+            _G.BobonEconomy.Busy = true
+            _G.BobonEconomy.Owner = "GACHA"
+            local okGacha, rolled = pcall(function()
                 FruitManager:StoreBackpackFruits()
-                FruitManager:TryRandomFruit(false)
+                return FruitManager:TryRandomFruit(_G.BobonEconomy.Wake == true)
             end)
+            _G.BobonEconomy.Busy = false
+            _G.BobonEconomy.Owner = nil
+            if not okGacha then
+                _G.BobonEconomy:Notice("GACHA ERROR • " .. tostring(rolled), 4.0)
+            end
+        end
+        _G.BobonEconomy.Wake = false
+
+        if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
+            _G.BobonEconomy.Busy = true
+            _G.BobonEconomy.Owner = "MELEE"
+            local okMelee, bought = pcall(function() return FightingStyleController:PurchaseTick() end)
+            _G.BobonEconomy.Busy = false
+            _G.BobonEconomy.Owner = nil
+            if not okMelee then
+                _G.BobonEconomy:Notice("MELEE ERROR • " .. tostring(bought), 4.0)
+            end
         end
     end
 end)
@@ -11313,17 +11495,11 @@ do
             local previous = tonumber(FruitManager.LastObservedBeli) or 0
             FruitManager.LastObservedBeli = current
             if current <= previous then return end
-            if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or not IsAlive() then return end
-            local now = tick()
-            local cooldownUntil = (FruitManager.LastSuccessAt or 0)
-                + (_G.Settings.RandomFruitSuccessCooldown or 7200)
-            if (FruitManager.LastSuccessAt or 0) > 0 and now < cooldownUntil then return end
-            if now < (FruitManager.SuppressMoneyWakeUntil or 0) then return end
-            if now - (FruitManager.LastAttemptAt or 0) < (_G.Settings.RandomFruitMoneyRetry or 0.50) then return end
+            if not IsAlive() then return end
+            -- Wake the serial economy immediately. Gacha gets first refusal; if it is
+            -- cooldown-blocked, melee still sees the new balance in the same cycle.
             FruitManager.NextRollAt = 0
-            task.defer(function()
-                pcall(function() FruitManager:TryRandomFruit(true) end)
-            end)
+            _G.BobonEconomy.Wake = true
         end)
     end
 end
@@ -12210,7 +12386,10 @@ local function ResolveQuestClusterAnchor(q, mobName)
     local folder = workspace:FindFirstChild("Enemies")
     local positions = {}
     local fieldRadius = math.max(120,
-        tonumber(_G.Settings.ClusterAuthorityFieldRadius) or 180)
+        (_G.Settings.ClusterAuthorityEnabled ~= false
+            and tonumber(_G.Settings.ClusterAuthorityFieldRadius))
+        or tonumber(_G.Settings.ClusterQuestRadius)
+        or 1200)
 
     if folder then
         for _, mob in ipairs(folder:GetChildren()) do
@@ -12285,6 +12464,16 @@ task.spawn(function()
             continue
         end
         if not IsAlive() then continue end
+        if tick() < (tonumber(_G.State.EconomyPauseUntil) or 0) then
+            if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+                TravelManager:Stop("EconomyPause")
+            end
+            _G.State.FState = "ECONOMY_PAUSE"
+            _G.BobonStatus = tostring(_G.State.EconomyPauseReason or "Economy: purchasing")
+            continue
+        elseif _G.State.EconomyPauseReason then
+            _G.State.EconomyPauseReason = nil
+        end
 
 
         local okMain, mainErr = pcall(function()
@@ -12496,7 +12685,7 @@ task.spawn(function()
             -- title). Bản cũ đòi match == true nên nil khiến bot kẹt
             -- re-request quest vô hạn → không farm, không gom, không đánh.
             local hasQuest = questState == true and questMatch ~= false
-            -- v21.30: retain the canonical active quest across a brief wrapper blink.
+            -- v21.32: retain the canonical active quest across a brief wrapper blink.
             -- Without this lease the controller cleared Farm, opened a "safe item window",
             -- and could launch BossManager before the Quest UI rebuilt.
             if not hasQuest and questState == false and questMatch ~= false
@@ -12768,12 +12957,32 @@ task.spawn(function()
                     end
                 end
             else
-                -- v21.13 REMOTE-MAGNET FIRST: stay on the shared hover anchor.
-                -- GetAcquireTarget is now the ONLY physical-acquisition fallback, and
-                -- it activates only after the remote-pull grace with zero verified mobs.
-                -- This removes the second independent path that used to chase a spawn
-                -- even while the remote magnet was still trying to collapse the batch.
-                if hoverCF and _G.State:CanRequestTravel() then
+                -- v21.32 active spawn-field search: never sit on an empty anchor.
+                local sweepGoal, sweepKind = ClusterFarmController:GetFieldSweepGoal(q.MC)
+                if sweepGoal and _G.State:CanRequestTravel() then
+                    _G.State.FState = sweepKind == "LIVE" and "FIELD_SWEEP_LIVE" or "FIELD_PATROL"
+                    if sweepKind == "LIVE" then
+                        _G.BobonStatus = "Farm: sweeping live " .. tostring(questMobName) .. " spawn"
+                        TravelManager:Request(sweepGoal, "Farm", {
+                            arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
+                                or _G.Settings.FarmArrivalThreshold,
+                            fallback = hoverCF or q.MC,
+                            combatHover = true,
+                            acquireSweep = true,
+                            speed = _G.Settings.ClusterFieldPatrolSpeed
+                                or _G.Settings.ClusterAcquireTravelSpeed or 420,
+                        })
+                    else
+                        _G.BobonStatus = "Farm: patrolling " .. tostring(questMobName) .. " field"
+                        TravelManager:Request(sweepGoal, "Farm", {
+                            arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 14,
+                            fallback = q.MC,
+                            combatHover = false,
+                            persistent = false,
+                            speed = _G.Settings.ClusterFieldPatrolSpeed or 420,
+                        })
+                    end
+                elseif hoverCF and _G.State:CanRequestTravel() then
                     TravelManager:Request(hoverCF, "Farm", {
                         arrivalThreshold = _G.Settings.FarmArrivalThreshold,
                         fallback = q.MC,
@@ -12875,8 +13084,9 @@ task.spawn(function()
                 end
             else
                 ResetFarmDamageWatch(nil)
-                if not acquiring then
-                    _G.BobonStatus = "Farm: Waiting for " .. questMobName .. " spawn"
+                if not acquiring and _G.State.FState ~= "FIELD_SWEEP_LIVE"
+                    and _G.State.FState ~= "FIELD_PATROL" then
+                    _G.BobonStatus = "Farm: searching " .. questMobName .. " spawn"
                 end
             end
         end)
@@ -13084,10 +13294,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.30] Full Script Loaded Successfully!")
-print("[BobonHub v21.30] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.30] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.30] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Immediate Melee/Gacha | CDK/Skull | Fire HUD")
-print("[BobonHub v21.30] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.30] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.30] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.32] Full Script Loaded Successfully!")
+print("[BobonHub v21.32] Architecture: Persistent Travel | ActionToken | Single Owner")
+print("[BobonHub v21.32] Core: TravelManager | StateManager | RecoveryManager")
+print("[BobonHub v21.32] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Immediate Melee/Gacha | CDK/Skull | Fire HUD")
+print("[BobonHub v21.32] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.32] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.32] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
