@@ -1,7 +1,17 @@
 -- =================================================================
---         BOBON HUB v21.41 | SHARED FARM + SKID UTILITIES HARDENED + FULL PROGRESSION
+--         BOBON HUB v21.42 | FARM STABILITY REBASE + FIXED SHARED PILE + FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.40 FIXED SHARED PILE | Version: v21.41
+--         Base: v21.40 FIXED SHARED PILE + selective v21.41 quest parser | Version: v21.42
+--
+--  v21.42 FARM STABILITY REBASE (ROBLOX 14/15 ROOT FIX):
+--  [S42-1] Active quest farm is protected from optional FruitFinder/Elite utility preemption.
+--  [S42-2] Fruit Finder defaults OFF, uses strict fruit identification, short range, and safe-window only.
+--  [S42-3] Shared pile no longer drops/restores mobs because of failure blacklist by default.
+--  [S42-4] Bring failure bookkeeping resets on SharedRelease so short optional actions cannot poison later waves.
+--  [S42-5] Smart farm-stuck auto release/hop defaults OFF; base Travel watchdog remains authoritative.
+--  [S42-6] Elite wake and MasteryTool utility default OFF; permanent progression controllers remain intact.
+--  [S42-7] Restored v21.38 entrance resolver to avoid utility-era route changes.
+--  [S42-8] Keeps v21.41 Main + Main (minimal) quest parser without allowing hidden UI to flip farm goals.
 --
 --  v21.41 ROBLOX(14) QUEST-UI / TRAVEL PING-PONG FIX:
 --  [Q41-1] Quest detection reads both PlayerGui.Main and PlayerGui["Main (minimal)"], recursively.
@@ -1104,18 +1114,25 @@ _G.Settings = {
     SharedBringD         = 100,
     SharedBringMaxForce  = 1000000,
     SharedAttackMaxTargets = 32,
-    SharedBringFailureLimit = 14,
+    SharedBringFailureLimit = 50, -- diagnostic only while blacklist is disabled
     SharedBringProofDelay = 0.16,
     SharedBringSnapDistance = 55,
-    SharedBringIgnoreSeconds = 2,
-    FruitFinderEnabled = true,
+    SharedBringIgnoreSeconds = 0.5,
+    SharedBringBlacklistEnabled = false,
+    QuestFarmIsolation = true,
+    FruitFinderPreemptQuest = false,
+    FruitFinderFailedRetry = 120,
+    EliteWakeEnabled = false,
+    EliteWakePreemptQuest = false,
+    MasteryToolSchedulerEnabled = false,
+    FruitFinderEnabled = false, -- v21.42: optional; never interrupt an active quest by default
     FruitFinderScanInterval = 0.75,
     FruitFinderTimeout = 28,
-    FruitFinderMaxDistance = 30000,
-    SmartFarmStuckEnabled = true,
+    FruitFinderMaxDistance = 1200,
+    SmartFarmStuckEnabled = false, -- base Travel watchdog stays authoritative
     SmartFarmStuckTimeout = 40,
     SmartFarmStuckRetryLimit = 3,
-    SmartFarmStuckHop = true,
+    SmartFarmStuckHop = false,
     EntranceShortcutMinDistance = 3000,
     -- Sea 1 optimized skip route (Fountain, bosses, Upper Sky/Galley).
     -- Enabled only after the combat adapter confirms real fast damage.
@@ -6516,6 +6533,8 @@ function ClusterFarmController:SharedRelease(reason)
                 mob:SetAttribute("BobonBringExpectedAt", nil)
                 mob:SetAttribute("BobonBringExpectedPos", nil)
                 mob:SetAttribute("BobonBringIgnoreUntil", nil)
+                mob:SetAttribute("BobonBringFailureCount", nil)
+                mob:SetAttribute("FailureCount", nil) -- cleanup legacy v21.39 attribute only
             end)
         end
     end
@@ -6690,31 +6709,38 @@ function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF)
                         or (pos - pilePos).Magnitude <= fieldRange)
                 if inField then
                     local ignoreUntil = tonumber(mob:GetAttribute("BobonBringIgnoreUntil")) or 0
-                    local failCount = tonumber(mob:GetAttribute("FailureCount")) or 0
+                    local failCount = tonumber(mob:GetAttribute("BobonBringFailureCount")) or 0
                     local expectedAt = tonumber(mob:GetAttribute("BobonBringExpectedAt")) or 0
                     local expectedPos = mob:GetAttribute("BobonBringExpectedPos")
 
-                    if expectedAt > 0 and typeof(expectedPos) == "Vector3" and now - expectedAt >= proofDelay then
+                    if _G.Settings.SharedBringBlacklistEnabled and expectedAt > 0
+                        and typeof(expectedPos) == "Vector3" and now - expectedAt >= proofDelay then
                         local persisted = (pos - expectedPos).Magnitude <= snapDistance
                         if persisted then
-                            if failCount > 0 then mob:SetAttribute("FailureCount", math.max(0, failCount - 1)) end
+                            if failCount > 0 then mob:SetAttribute("BobonBringFailureCount", math.max(0, failCount - 1)) end
                         else
                             failCount = failCount + 1
                             failed = failed + 1
-                            mob:SetAttribute("FailureCount", failCount)
+                            mob:SetAttribute("BobonBringFailureCount", failCount)
                             if failCount >= failLimit then
                                 mob:SetAttribute("BobonBringIgnoreUntil", now + ignoreSeconds)
                                 ignoreUntil = now + ignoreSeconds
-                                local staleBP = root:FindFirstChild("BobonSharedEnemyFlyPosition")
-                                if staleBP then pcall(function() staleBP:Destroy() end) end
-                                self:SharedRestoreOne(mob)
                             end
                         end
                         mob:SetAttribute("BobonBringExpectedAt", nil)
                         mob:SetAttribute("BobonBringExpectedPos", nil)
+                    elseif not _G.Settings.SharedBringBlacklistEnabled then
+                        -- v21.42: never evict a quest mob from the fixed pile because a local
+                        -- persistence sample failed. Keep applying the shared-source magnet.
+                        ignoreUntil = 0
+                        failCount = 0
+                        mob:SetAttribute("BobonBringIgnoreUntil", nil)
+                        mob:SetAttribute("BobonBringFailureCount", nil)
+                        mob:SetAttribute("BobonBringExpectedAt", nil)
+                        mob:SetAttribute("BobonBringExpectedPos", nil)
                     end
 
-                    if ignoreUntil > now then
+                    if _G.Settings.SharedBringBlacklistEnabled and ignoreUntil > now then
                         blacklisted = blacklisted + 1
                     else
                         count = count + 1
@@ -6753,10 +6779,12 @@ function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF)
                                 root.CFrame = CFrame.new(pilePos)
                             end)
 
-                            local pendingProofAt = tonumber(mob:GetAttribute("BobonBringExpectedAt")) or 0
-                            if pendingProofAt <= 0 then
-                                mob:SetAttribute("BobonBringExpectedAt", now)
-                                mob:SetAttribute("BobonBringExpectedPos", pilePos)
+                            if _G.Settings.SharedBringBlacklistEnabled then
+                                local pendingProofAt = tonumber(mob:GetAttribute("BobonBringExpectedAt")) or 0
+                                if pendingProofAt <= 0 then
+                                    mob:SetAttribute("BobonBringExpectedAt", now)
+                                    mob:SetAttribute("BobonBringExpectedPos", pilePos)
+                                end
                             end
                         end
                     end
@@ -6942,48 +6970,29 @@ TravelManager.LastEntranceRequest = 0
 -- Dùng entrance remote cho các đảo cách nhau quá xa; nếu không, BodyVelocity
 -- phải bay xuyên toàn map và dễ lệch/đứng giữa biển ở các điểm chuyển sea.
 function TravelManager:MaybeRequestEntrance(targetPos)
-    if not IsValidPos(targetPos) then return false end
-    local me = HRP()
-    if not me then return false end
-    local distance = (targetPos - me.Position).Magnitude
-    local minDistance = tonumber(_G.Settings.EntranceShortcutMinDistance) or 3000
-    if distance < minDistance then return false end
-
+    if not IsValidPos(targetPos) then return end
     local now = tick()
-    if now - self.LastEntranceRequest < 5 then return false end
+    if now - self.LastEntranceRequest < 5 then return end
     local entrance
-
-    -- Shared-source public entrance zones. The target must actually belong near
-    -- that zone; distance gating above prevents an entrance call while already nearby.
-    local zones = {
-        Vector3.new(61163.85, 11.68, 1819.78),   -- Fishman / Underwater
-        Vector3.new(-4607.82, 872.54, -1667.56), -- Skylands lower entrance
-        Vector3.new(-7894.62, 5547.14, -380.29), -- Upper Sky
-        Vector3.new(-2953.31, 41.01, 2099.17),   -- Sea 1 transit zone
-        Vector3.new(923.21, 126.98, 32852.83),   -- Cursed Ship
-    }
-    local bestDistance = math.huge
-    for _, zonePos in ipairs(zones) do
-        local d = (zonePos - targetPos).Magnitude
-        local radius = zonePos.Z > 30000 and 5200 or 2600
-        if d <= radius and d < bestDistance then
-            entrance = zonePos
-            bestDistance = d
-        end
+    if targetPos.X > 50000 then
+        entrance = Vector3.new(61163.85, 11.68, 1819.78) -- Upper Sky/Fishman
+    elseif targetPos.Z > 30000 then
+        entrance = Vector3.new(923.21, 126.98, 32852.83) -- Cursed Ship
+    elseif targetPos.Y > 5000 and targetPos.X < -7000 then
+        entrance = Vector3.new(-7894.62, 5547.14, -380.29) -- Skylands
+    elseif targetPos.Y > 700 and targetPos.X < -4000 and targetPos.Z < -1500 then
+        entrance = Vector3.new(-4607.82, 872.54, -1667.56) -- Upper Sky
+    elseif targetPos.X > 5000 and targetPos.Z < -5000 then
+        entrance = Vector3.new(-6508.56, 5000.03, -132.84) -- Ice Castle
     end
-    if not entrance then return false end
-
+    if not entrance then return end
     local ok, err = pcall(function()
         CommF_:InvokeServer("requestEntrance", entrance)
     end)
     self.LastEntranceRequest = now
-    if ok then
-        _G.BobonStatus = "Travel: Entrance shortcut"
-        DLog("TRAVEL", ("requestEntrance shortcut • %.0f studs"):format(distance))
-        return true
+    if not ok then
+        DLog("TRAVEL", "requestEntrance failed: " .. tostring(err))
     end
-    DLog("TRAVEL", "requestEntrance failed: " .. tostring(err))
-    return false
 end
 
 function TravelManager:CleanupPhysics(char)
@@ -13448,7 +13457,7 @@ end
 
 -- v21.39 dropped-fruit finder. It is called by the one Priority Scheduler and
 -- owns movement only after ClaimAction, so it cannot race normal Farm travel.
-_G.BobonFruitFinderState = {LastScan=0, LastTool=nil}
+_G.BobonFruitFinderState = {LastScan=0, LastTool=nil, Blocked=setmetatable({}, {__mode="k"})}
 function _G.BobonFindWorldFruit()
     if _G.Settings.FruitFinderEnabled == false then return nil end
     local state = _G.BobonFruitFinderState
@@ -13462,13 +13471,17 @@ function _G.BobonFindWorldFruit()
     state.LastTool = nil
     local me = HRP()
     if not me then return nil end
-    local maxDistance = tonumber(_G.Settings.FruitFinderMaxDistance) or 30000
+    local maxDistance = tonumber(_G.Settings.FruitFinderMaxDistance) or 1200
     local best, bestDist
     for _, obj in ipairs(workspace:GetDescendants()) do
         if obj:IsA("Tool") and not obj:IsDescendantOf(LP) then
             local low = string.lower(tostring(obj.Name))
             local tip = tostring(obj.ToolTip or "")
-            if tip == "Blox Fruit" or low:find("fruit", 1, true) or tostring(obj.Name):find("-", 1, true) then
+            local originalName = obj:GetAttribute("OriginalName")
+            local isFruit = tip == "Blox Fruit"
+                or (low:find("fruit", 1, true) ~= nil and (originalName ~= nil or obj:FindFirstChild("Handle") ~= nil))
+            local blockedUntil = state.Blocked and tonumber(state.Blocked[obj]) or 0
+            if isFruit and blockedUntil <= now then
                 local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
                 if handle then
                     local d = (handle.Position - me.Position).Magnitude
@@ -13485,6 +13498,14 @@ end
 
 function _G.BobonFruitFinderTryRun()
     if _G.Settings.FruitFinderEnabled == false or not _G.State:CanAct() then return false end
+    if _G.Settings.FruitFinderPreemptQuest ~= true then
+        local hq = HasQuest()
+        if hq ~= false or _G.State.Mode == "Farming" or _G.State.FarmTarget ~= nil
+            or (_G.State.ActiveQuestMob and tostring(_G.State.ActiveQuestMob) ~= "") then
+            return false
+        end
+        if _G.State.QuestClosedStable ~= true then return false end
+    end
     local tool = _G.BobonFindWorldFruit()
     if not tool or not tool.Parent then return false end
     local token = _G.State:ClaimAction("FruitFinder")
@@ -13526,10 +13547,14 @@ function _G.BobonFruitFinderTryRun()
         if _G.State.IsTraveling and _G.State.MovementOwner == "FruitFinder" then
             TravelManager:Stop("FruitFinderComplete")
         end
+        local stillWorld = tool and tool.Parent and not tool:IsDescendantOf(LP)
+        if stillWorld and _G.BobonFruitFinderState.Blocked then
+            _G.BobonFruitFinderState.Blocked[tool] = tick() + (tonumber(_G.Settings.FruitFinderFailedRetry) or 120)
+        end
         if _G.State:IsActionValid(token) then _G.State:ReleaseAction(token) end
         if _G.State.Mode == "GettingItem" then _G.State:SetMode("Idle") end
         _G.BobonFruitFinderState.LastTool = nil
-        _G.BobonFruitFinderState.LastScan = 0
+        _G.BobonFruitFinderState.LastScan = tick()
     end)
     return true
 end
@@ -13538,6 +13563,7 @@ end
 -- remains the sole mastery engine. This mirrors the useful Yama/Tushita idea from
 -- the shared source without creating another equip or movement worker.
 function _G.BobonMasteryToolPulse()
+    if _G.Settings.MasteryToolSchedulerEnabled ~= true then return false end
     if not _G.State or _G.State.ActiveActionToken ~= 0 then return false end
     if _G.Settings.AutoCDK and GetSea() == 3 and Level() >= 2200
         and not InventoryHas("Cursed Dual Katana") then
@@ -13559,7 +13585,7 @@ end
 _G.BobonEliteWake = {Model=nil, At=0}
 pcall(function()
     local enemies = workspace:FindFirstChild("Enemies")
-    if enemies and not _G.BobonEliteWake.Connection then
+    if _G.Settings.EliteWakeEnabled == true and enemies and not _G.BobonEliteWake.Connection then
         _G.BobonEliteWake.Connection = enemies.ChildAdded:Connect(function(mob)
             local n = mob and tostring(mob.Name) or ""
             if n == "Diablo" or n == "Deandre" or n == "Urban" then
@@ -13570,6 +13596,16 @@ pcall(function()
         end)
     end
 end)
+
+function _G.BobonQuestFarmProtected()
+    if _G.Settings.QuestFarmIsolation == false or _G.Settings.SharedSourceFarmMode == false then return false end
+    local state = _G.State
+    if not state or state.ActiveActionToken ~= 0 then return false end
+    local hasQuest = HasQuest()
+    if hasQuest ~= true then return false end
+    local mobName = state.ActiveQuestMob
+    return type(mobName) == "string" and mobName ~= ""
+end
 
 function _G.BobonPriorityPulse()
     local state = _G.State
@@ -13595,10 +13631,23 @@ function _G.BobonPriorityPulse()
         return true
     end
 
+    local questFarmProtected = _G.BobonQuestFarmProtected()
+
+    -- v21.42 FARM LEASE: once a normal quest is active, no optional movement
+    -- progression may tear down the Shared pile. Hard gates above still win.
+    -- Gacha / remote-only economy remains independent and does not own movement.
+    if questFarmProtected then
+        state.PriorityStage = "LEVEL_FARM"
+        state.PriorityDetail = "QUEST_LEASE"
+        state.WorkIntent = "LEVEL_FARM"
+        return false
+    end
+
     -- Dropped world fruit is a short, bounded pickup action. Mandatory hard gates
     -- stay above it; ordinary level farm and optional progression stay below it.
     do
-        local ok, started = pcall(_G.BobonFruitFinderTryRun)
+        local ok, started = true, false
+        if not questFarmProtected then ok, started = pcall(_G.BobonFruitFinderTryRun) end
         if not ok then warn("[BobonHub] Module Error: PriorityFruitFinder: " .. tostring(started))
         elseif started then
             state.PriorityStage = "FRUIT_FINDER"
@@ -13612,7 +13661,8 @@ function _G.BobonPriorityPulse()
     do
         local wake = _G.BobonEliteWake
         local elite = wake and wake.Model
-        if elite and elite.Parent and GetSea() == 3 and Level() >= 1500
+        if not questFarmProtected and _G.Settings.EliteWakeEnabled == true
+            and elite and elite.Parent and GetSea() == 3 and Level() >= 1500
             and _G.Settings.AutoCDK and not InventoryHas("Yama") then
             local progress = 0
             pcall(function() progress = tonumber(CommF_:InvokeServer("EliteHunter", "Progress")) or 0 end)
@@ -13638,7 +13688,7 @@ function _G.BobonPriorityPulse()
         >= (_G.Settings.PriorityPassiveInterval or 1.25) then
         state.PriorityLastPassiveAt = tick()
         state.PriorityHint = ""
-        pcall(_G.BobonMasteryToolPulse)
+        if not questFarmProtected then pcall(_G.BobonMasteryToolPulse) end
         local meleeTraining = false
         if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
             local ok, result = pcall(function() return FightingStyleController:Tick() end)
@@ -15169,10 +15219,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.41] Full Script Loaded Successfully!")
-print("[BobonHub v21.41] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.41] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.41] Modules: QuestFarm | Shared BN + Failure Blacklist | Fruit Finder | Smart Stuck/Hop | Entrance Shortcuts | Elite Wake | Mastery Tool Scheduler | Raid/Fragments | Full Progression | Fire HUD")
-print("[BobonHub v21.41] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.41] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.41] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.42] Full Script Loaded Successfully!")
+print("[BobonHub v21.42] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.42] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.42] Modules: QuestFarm | Fixed Shared BN Pile | Quest-Farm Isolation | Stable Travel | Raid/Fragments | Full Progression | Fire HUD")
+print("[BobonHub v21.42] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.42] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.42] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
