@@ -1,7 +1,36 @@
 -- =================================================================
---         BOBON HUB v21.37 ROOT FIX | SINGLE FARM STATE OWNER + FIXED-PILE + FULL PROGRESSION
+--         BOBON HUB v21.39 | SHARED FARM + SKID UTILITIES HARDENED + FULL PROGRESSION
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.36 VIDEO7837 RECOVERY | Version: v21.37
+--         Base: v21.38 SHARED-SOURCE FARM + BN BRING | Version: v21.39
+--
+--  v21.39 SKID-UTILITY INTEGRATION:
+--  [U39-1] World Fruit Finder is event/scheduler-driven: detect dropped fruit, claim one action,
+--          travel/touch/store, then resume farm. No independent movement loop is added.
+--  [U39-2] Shared BN now tracks persistence failures per mob. Repeated snap-back marks that mob
+--          temporarily IgnoreGrab; farm keeps attacking the real target instead of magnet-looping forever.
+--  [U39-3] Entrance routing is distance-aware and uses the shared source's known public requestEntrance
+--          zones only when a long trip actually benefits; no near-target portal spam.
+--  [U39-4] MasteryTool pulse reuses PreferredCombatTool for CDK Yama/Tushita mastery plus existing TTK/style
+--          training; no second equip/farm worker is created.
+--  [U39-5] Elite spawn observer only wakes the Priority Scheduler. If Yama still needs Elite progress,
+--          the existing verified ItemProgression:CheckYama() claims and fights it immediately.
+--  [U39-6] Smart farm-stuck watchdog observes position + quest text + target HP. It first clears/retries
+--          shared farm; repeated verified no-progress requests a targeted server hop.
+--
+--  v21.38 SHARED-SOURCE FARM REBASE:
+--  [SF38-1] Normal quest farm bypasses Bobon ACQUIRE/STACK/KILL and follows the shared source loop:
+--           keep one live quest target -> BN-style bring -> hover +25 -> attack until that target dies.
+--  [SF38-2] BN-style gather uses SimulationRadius + BodyPosition(P=3000,D=100,MaxForce=1e6),
+--           Humanoid ChangeState(14), WalkSpeed=0 and local collision suppression.
+--  [SF38-3] Shared source caps BN near 3 mobs; Bobon intentionally removes that cap so every matching
+--           live quest mob inside SharedBringRange may join the same target-centered pile.
+--  [SF38-4] No network-owner gate, damage lease, acquire phase, fixed-pile centroid, or cluster phase
+--           is used for ordinary level farm while SharedSourceFarmMode=true. Raid/item clusters remain intact.
+--  [SF38-5] Shared bring has explicit cleanup/restoration on quest/target-mode changes so BodyPosition
+--           and locally modified Humanoid/part properties do not leak into unrelated mobs.
+--  [SF38-6] Shared farm fast-attack may fan fresh swings across all same-name nearby mobs without
+--           requiring Bobon cluster verification, matching the shared source multi-target attack rhythm.
+--
 --
 --  v21.37 ROOT-CAUSE REWORK (VIDEO Roblox(13)):
 --  [ROOT37-1] Cluster phase/target state now has ONE active writer. Removed the 30ms background Tick
@@ -1050,6 +1079,28 @@ _G.Settings = {
     RedeemCodeDelay     = 0.45,
     -- Local-only bring-mob for nearby quest enemies; no extra movement loop.
     GatherMobs          = true,
+    SharedSourceFarmMode = true,
+    SharedBringRange     = 350,
+    SharedBringMaxMobs   = 0, -- 0 = all matching mobs (shared source itself used ~3)
+    SharedBringInterval  = 0.03,
+    SharedFarmHeight     = 25,
+    SharedBringP         = 3000,
+    SharedBringD         = 100,
+    SharedBringMaxForce  = 1000000,
+    SharedAttackMaxTargets = 32,
+    SharedBringFailureLimit = 7,
+    SharedBringProofDelay = 0.16,
+    SharedBringSnapDistance = 55,
+    SharedBringIgnoreSeconds = 8,
+    FruitFinderEnabled = true,
+    FruitFinderScanInterval = 0.75,
+    FruitFinderTimeout = 28,
+    FruitFinderMaxDistance = 30000,
+    SmartFarmStuckEnabled = true,
+    SmartFarmStuckTimeout = 40,
+    SmartFarmStuckRetryLimit = 3,
+    SmartFarmStuckHop = true,
+    EntranceShortcutMinDistance = 3000,
     -- Sea 1 optimized skip route (Fountain, bosses, Upper Sky/Galley).
     -- Enabled only after the combat adapter confirms real fast damage.
     SkipLevelRoute      = true,
@@ -1384,6 +1435,8 @@ _G.BobonDiagnostics = {
     BringServerOwned = 0,
     BringProbe = 0,
     BringMoved = 0,
+    BringFailed = 0,
+    BringBlacklisted = 0,
 }
 
 -- Submerged is a bounded region, not every negative-Y point in Third Sea.
@@ -3039,9 +3092,12 @@ function CombatController:LegacyAllowed()
         return true
     end
     if _G.Settings.ClusterPreferLegacyFanout ~= false
-        and IsAirFarmCombat() and _G.State and _G.State.ClusterMode ~= "OFF"
+        and IsAirFarmCombat() and _G.State and (_G.State.ClusterMode ~= "OFF"
+            or (_G.Settings.SharedSourceFarmMode ~= false
+                and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")))
         and _G.Settings.ClusterIndependentSwingFanout == true then
-        -- This path is still provisional until exact Humanoid HP loss confirms it.
+        -- Shared-source farm deliberately allows the same direct RegisterHit path.
+        -- HP proof still decides whether the backend remains trusted.
         return true
     end
     local gameGlobal = self:GetGameGlobal()
@@ -3073,7 +3129,10 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         and string.lower(tostring(activeQuestMob)) == string.lower(tostring(mobName))
     local clusterGatherActive = ClusterFarmController
         and ClusterFarmController:IsAttackCluster(mobName) == true
-    local shadowQuest = questGatherActive and ClusterFarmController
+    local sharedFarmActive = _G.Settings.SharedSourceFarmMode ~= false
+        and _G.State and _G.State.Mode == "Farming"
+        and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+    local shadowQuest = questGatherActive and not sharedFarmActive and ClusterFarmController
         and ClusterFarmController:IsShadowCombatActive()
 
     local function add(enemy, shadowRange)
@@ -3158,7 +3217,8 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
                     add(enemy, true)
                 else
                     local allowExtra = true
-                    if (questGatherActive or clusterGatherActive) and enemy ~= preferred then
+                    if (questGatherActive or clusterGatherActive) and enemy ~= preferred
+                        and not sharedFarmActive then
                         local verified = ClusterFarmController
                             and ClusterFarmController:IsVerified(enemy)
                         local probe = ClusterFarmController
@@ -3497,8 +3557,11 @@ function CombatController:SelectBackend(now)
         and ClusterFarmController:IsShadowCombatActive()
     local stackedCount = tonumber(_G.BobonDiagnostics
         and _G.BobonDiagnostics.BringMoved) or 0
+    local sharedMulti = airFarm and _G.Settings.SharedSourceFarmMode ~= false
+        and _G.State and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+        and stackedCount >= 2
     local clusterMulti = airFarm
-        and _G.State and _G.State.ClusterMode ~= "OFF"
+        and _G.State and (_G.State.ClusterMode ~= "OFF" or sharedMulti)
         and stackedCount >= 2
 
     if self.PendingBackend then
@@ -3632,12 +3695,17 @@ end
 function CombatController:Dispatch(backend, tool, entries, preferredRoot)
     if #entries == 0 then return false end
 
+    local sharedIndependent = IsAirFarmCombat()
+        and _G.Settings.SharedSourceFarmMode ~= false
+        and _G.State and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+        and #entries >= 2
     local clusterIndependent = IsAirFarmCombat()
         and _G.Settings.ClusterIndependentSwingFanout == true
-        and _G.State and _G.State.ClusterMode ~= "OFF"
+        and _G.State and (_G.State.ClusterMode ~= "OFF" or sharedIndependent)
         and #entries >= 2
-    local maxFanout = math.max(2,
-        math.floor(tonumber(_G.Settings.ClusterIndependentSwingMaxTargets) or 8))
+    local maxFanout = math.max(2, math.floor(tonumber(sharedIndependent
+        and _G.Settings.SharedAttackMaxTargets
+        or _G.Settings.ClusterIndependentSwingMaxTargets) or 8))
     local gap = math.max(0,
         tonumber(_G.Settings.ClusterIndependentSwingGap) or 0.022)
 
@@ -4846,6 +4914,9 @@ end
 -- therefore a logical stop plus a diagnostic reset; the server keeps control
 -- of every assembly that is not currently client-owned.
 function FarmPositionController:ReleaseCluster()
+    if ClusterFarmController and ClusterFarmController.SharedMobName then
+        pcall(function() ClusterFarmController:SharedRelease("ReleaseCluster") end)
+    end
     -- If a not-yet-proven remote probe is visually staged at the anchor, undo
     -- only that temporary write before dropping the bookkeeping tables.
     local releaseState = _G.State
@@ -6391,6 +6462,342 @@ end
 
 -- Compatibility wrapper for old callers. Quest mode now persists at the
 -- current state anchor instead of using the primary mob as the cluster center.
+-- ══════════════════════════════════════════════════════════════════
+-- v21.38 SHARED-SOURCE QUEST FARM / BN-STYLE BRING
+-- Behavior basis: kaiv2 shared source BN() + unified quest loop.
+-- Normal quest farm intentionally does NOT use ClusterPhase/ownership proofs.
+-- ══════════════════════════════════════════════════════════════════
+function ClusterFarmController:SharedRelease(reason)
+    local restore = self.SharedRestore
+    if type(restore) == "table" then
+        for inst, old in pairs(restore) do
+            if inst and inst.Parent and type(old) == "table" then
+                pcall(function()
+                    if old.Kind == "Humanoid" then
+                        if old.WalkSpeed ~= nil then inst.WalkSpeed = old.WalkSpeed end
+                        if old.AutoRotate ~= nil then inst.AutoRotate = old.AutoRotate end
+                    elseif old.Kind == "Part" and inst:IsA("BasePart") then
+                        if old.CanCollide ~= nil then inst.CanCollide = old.CanCollide end
+                        if old.CanTouch ~= nil then inst.CanTouch = old.CanTouch end
+                        if old.CanQuery ~= nil then inst.CanQuery = old.CanQuery end
+                    end
+                end)
+            end
+        end
+    end
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder then
+        for _, mob in ipairs(folder:GetChildren()) do
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
+            if bp then pcall(function() bp:Destroy() end) end
+            pcall(function()
+                mob:SetAttribute("BobonBringExpectedAt", nil)
+                mob:SetAttribute("BobonBringExpectedPos", nil)
+                mob:SetAttribute("BobonBringIgnoreUntil", nil)
+            end)
+        end
+    end
+    self.SharedRestore = setmetatable({}, {__mode="k"})
+    self.SharedMobName = nil
+    self.SharedAnchorModel = nil
+    self.SharedLastBringAt = 0
+    self.SharedBringCount = 0
+    if _G.State then
+        _G.State.ClusterMode = "OFF"
+        _G.State.ClusterPrimary = nil
+        _G.State.ClusterAcquireTarget = nil
+    end
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = "SHARED-OFF"
+        _G.BobonDiagnostics.BringCandidates = 0
+        _G.BobonDiagnostics.BringMoved = 0
+        _G.BobonDiagnostics.BringFailed = 0
+        _G.BobonDiagnostics.BringBlacklisted = 0
+    end
+    if reason then DLog("SHARED-FARM", "Release: " .. tostring(reason)) end
+end
+
+function ClusterFarmController:SharedRemember(inst, kind)
+    if not inst then return end
+    self.SharedRestore = self.SharedRestore or setmetatable({}, {__mode="k"})
+    if self.SharedRestore[inst] then return end
+    if kind == "Humanoid" then
+        self.SharedRestore[inst] = {
+            Kind="Humanoid",
+            WalkSpeed=inst.WalkSpeed,
+            AutoRotate=inst.AutoRotate,
+        }
+    elseif kind == "Part" and inst:IsA("BasePart") then
+        self.SharedRestore[inst] = {
+            Kind="Part",
+            CanCollide=inst.CanCollide,
+            CanTouch=inst.CanTouch,
+            CanQuery=inst.CanQuery,
+        }
+    end
+end
+
+function ClusterFarmController:SharedRestoreOne(mob)
+    if not mob then return end
+    local restore = self.SharedRestore
+    local hum = mob:FindFirstChildOfClass("Humanoid")
+    if hum and type(restore) == "table" and restore[hum] then
+        local old = restore[hum]
+        pcall(function()
+            if old.WalkSpeed ~= nil then hum.WalkSpeed = old.WalkSpeed end
+            if old.AutoRotate ~= nil then hum.AutoRotate = old.AutoRotate end
+        end)
+        restore[hum] = nil
+    end
+    for _, part in ipairs(mob:GetDescendants()) do
+        if part:IsA("BasePart") and type(restore) == "table" and restore[part] then
+            local old = restore[part]
+            pcall(function()
+                if old.CanCollide ~= nil then part.CanCollide = old.CanCollide end
+                if old.CanTouch ~= nil then part.CanTouch = old.CanTouch end
+                if old.CanQuery ~= nil then part.CanQuery = old.CanQuery end
+            end)
+            restore[part] = nil
+        end
+    end
+    local root = mob:FindFirstChild("HumanoidRootPart")
+    local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
+    if bp then pcall(function() bp:Destroy() end) end
+end
+
+function ClusterFarmController:SharedSelectTarget(mobName)
+    local folder = workspace:FindFirstChild("Enemies")
+    if not folder then return nil end
+    local current = _G.State and _G.State.FarmTarget
+    if current and current.Parent and IsEnemyNamed(current, mobName) then
+        local hum = current:FindFirstChildOfClass("Humanoid")
+        local root = current:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and root and root.Parent and not IsSubmergedPosition(root.Position) then
+            return current
+        end
+    end
+    -- Shared source selects the first live matching model and holds it until death.
+    for _, mob in ipairs(folder:GetChildren()) do
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent
+                and IsAllowedWorldPosition(root.Position) and not IsSubmergedPosition(root.Position) then
+                return mob
+            end
+        end
+    end
+    return nil
+end
+
+function ClusterFarmController:SharedBring(mobName, anchorModel)
+    if _G.Settings.SharedSourceFarmMode == false then return 0 end
+    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return 0 end
+    if type(mobName) ~= "string" or mobName == "" then return 0 end
+    local anchorRoot = anchorModel and anchorModel:FindFirstChild("HumanoidRootPart")
+    local anchorHum = anchorModel and anchorModel:FindFirstChildOfClass("Humanoid")
+    if not anchorRoot or not anchorHum or anchorHum.Health <= 0 then return 0 end
+
+    if self.SharedMobName and string.lower(self.SharedMobName) ~= string.lower(mobName) then
+        self:SharedRelease("QuestMobChanged")
+    end
+    self.SharedMobName = mobName
+    self.SharedAnchorModel = anchorModel
+
+    local now = tick()
+    if now - (self.SharedLastBringAt or 0) < (_G.Settings.SharedBringInterval or 0.03) then
+        return self.SharedBringCount or 0
+    end
+    self.SharedLastBringAt = now
+    ExpandSimulationRadius()
+
+    local folder = workspace:FindFirstChild("Enemies")
+    local me = HRP()
+    if not folder or not me then return 0 end
+    local range = tonumber(_G.Settings.SharedBringRange) or 350
+    local maxMobs = math.floor(tonumber(_G.Settings.SharedBringMaxMobs) or 0)
+    local maxForce = tonumber(_G.Settings.SharedBringMaxForce) or 1000000
+    local pGain = tonumber(_G.Settings.SharedBringP) or 3000
+    local dGain = tonumber(_G.Settings.SharedBringD) or 100
+    local failLimit = math.max(1, math.floor(tonumber(_G.Settings.SharedBringFailureLimit) or 7))
+    local proofDelay = math.max(0.08, tonumber(_G.Settings.SharedBringProofDelay) or 0.16)
+    local snapDistance = math.max(12, tonumber(_G.Settings.SharedBringSnapDistance) or 55)
+    local ignoreSeconds = math.max(2, tonumber(_G.Settings.SharedBringIgnoreSeconds) or 8)
+    local count, failed, blacklisted = 0, 0, 0
+
+    -- Freeze the held victim itself, mirroring shared-source BN behavior, but do not
+    -- BodyPosition it to another arbitrary mob. It becomes the stable pile anchor.
+    self:SharedRemember(anchorHum, "Humanoid")
+    pcall(function()
+        anchorHum:ChangeState(14)
+        anchorHum.WalkSpeed = 0
+    end)
+
+    for _, mob in ipairs(folder:GetChildren()) do
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and (pos - me.Position).Magnitude <= range then
+                    local ignoreUntil = tonumber(mob:GetAttribute("BobonBringIgnoreUntil")) or 0
+                    local failCount = tonumber(mob:GetAttribute("FailureCount")) or 0
+                    local expectedAt = tonumber(mob:GetAttribute("BobonBringExpectedAt")) or 0
+                    local expectedPos = mob:GetAttribute("BobonBringExpectedPos")
+
+                    -- Shared-source-inspired failure blacklist: verify the previous pull on the
+                    -- next ticks. If the server snapped the root far away repeatedly, stop trying
+                    -- to magnet this mob for a short period and let normal direct combat handle it.
+                    if expectedAt > 0 and typeof(expectedPos) == "Vector3" and now - expectedAt >= proofDelay then
+                        local persisted = (pos - expectedPos).Magnitude <= snapDistance
+                        if persisted then
+                            if failCount > 0 then mob:SetAttribute("FailureCount", math.max(0, failCount - 1)) end
+                        else
+                            failCount = failCount + 1
+                            failed = failed + 1
+                            mob:SetAttribute("FailureCount", failCount)
+                            if failCount >= failLimit then
+                                mob:SetAttribute("BobonBringIgnoreUntil", now + ignoreSeconds)
+                                ignoreUntil = now + ignoreSeconds
+                                local staleBP = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+                                if staleBP then pcall(function() staleBP:Destroy() end) end
+                                self:SharedRestoreOne(mob)
+                            end
+                        end
+                        mob:SetAttribute("BobonBringExpectedAt", nil)
+                        mob:SetAttribute("BobonBringExpectedPos", nil)
+                    end
+
+                    if ignoreUntil > now then
+                        blacklisted = blacklisted + 1
+                    else
+                        count = count + 1
+                        if maxMobs > 0 and count > maxMobs then break end
+
+                    self:SharedRemember(hum, "Humanoid")
+                    pcall(function()
+                        hum:ChangeState(14)
+                        hum.WalkSpeed = 0
+                    end)
+
+                    for _, part in ipairs(mob:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            self:SharedRemember(part, "Part")
+                            pcall(function()
+                                part.CanCollide = false
+                                part.CanTouch = false
+                                part.CanQuery = false
+                            end)
+                        end
+                    end
+
+                    if mob ~= anchorModel then
+                        local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+                        if not bp then
+                            bp = Instance.new("BodyPosition")
+                            bp.Name = "BobonSharedEnemyFlyPosition"
+                            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+                            bp.P = pGain
+                            bp.D = dGain
+                            bp.Parent = root
+                        end
+                        pcall(function()
+                            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+                            bp.P = pGain
+                            bp.D = dGain
+                            bp.Position = anchorRoot.Position
+                        end)
+                    else
+                        local old = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+                        if old then pcall(function() old:Destroy() end) end
+                    end
+
+                    if mob ~= anchorModel then
+                        local pendingProofAt = tonumber(mob:GetAttribute("BobonBringExpectedAt")) or 0
+                        if pendingProofAt <= 0 then
+                            mob:SetAttribute("BobonBringExpectedAt", now)
+                            mob:SetAttribute("BobonBringExpectedPos", anchorRoot.Position)
+                        end
+                    end
+                    end -- not blacklisted
+                end
+            end
+        end
+    end
+
+    self.SharedBringCount = count
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = "SHARED-BN"
+        _G.BobonDiagnostics.BringCandidates = count
+        _G.BobonDiagnostics.BringMoved = math.max(0, count - 1)
+        _G.BobonDiagnostics.BringOwned = 0 -- ownership is intentionally not used in this mode
+        _G.BobonDiagnostics.BringUnknown = 0
+        _G.BobonDiagnostics.BringServerOwned = 0
+        _G.BobonDiagnostics.BringFailed = failed
+        _G.BobonDiagnostics.BringBlacklisted = blacklisted
+    end
+    return count
+end
+
+function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
+    if _G.Settings.SharedSourceFarmMode == false then return false end
+    local target = self:SharedSelectTarget(mobName)
+    if not target then
+        if self.SharedMobName then self:SharedRelease("NoLiveTarget") end
+        if _G.State then
+            _G.State.FarmTarget = nil
+            _G.State.CurrentTarget = nil
+            _G.State.FState = "SHARED_WAIT_SPAWN"
+        end
+        if fallbackCF and _G.State and _G.State:CanRequestTravel() then
+            TravelManager:Request(fallbackCF, "Farm", {
+                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
+                fallback = fallbackCF,
+                combatHover = false,
+                persistent = false,
+                speed = _G.Settings.ClusterFieldPatrolSpeed or 400,
+            })
+        end
+        _G.BobonStatus = "Farm: Shared • waiting " .. tostring(mobName)
+        return true
+    end
+
+    local hum = target:FindFirstChildOfClass("Humanoid")
+    local root = target:FindFirstChild("HumanoidRootPart")
+    local me = HRP()
+    if not hum or hum.Health <= 0 or not root or not me then return true end
+
+    _G.State.FarmTarget = target
+    _G.State.CurrentTarget = target
+    _G.State.ClusterMode = "OFF"
+    _G.State.FState = "SHARED_BRING_FARM"
+
+    local bringCount = self:SharedBring(mobName, target)
+    local hoverHeight = tonumber(_G.Settings.SharedFarmHeight) or 25
+    local hoverCF = root.CFrame * CFrame.new(0, hoverHeight, 0)
+    if _G.State:CanRequestTravel() then
+        TravelManager:Request(hoverCF, "Farm", {
+            arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+            fallback = fallbackCF or hoverCF,
+            combatHover = true,
+            persistent = true,
+            speed = _G.Settings.SkipTravelSpeed or _G.Settings.FlySpeed or 340,
+        })
+    end
+
+    local dist = (me.Position - root.Position).Magnitude
+    local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
+    if dist <= (_G.Settings.FastAttackRange or 100) and farmHolds then
+        PrepareCombatTarget(target)
+        EquipCombatTool()
+        Attack(target, mobName)
+        _G.State.FState = "SHARED_ATTACK"
+    end
+    _G.BobonStatus = ("Farm: Shared BN • %s • grouped %d"):format(tostring(mobName), tonumber(bringCount) or 0)
+    return true
+end
+
 function FarmPositionController:GatherMobCluster(mobName, primary)
     if not _G.State.ClusterAnchor then
         local root = primary and primary:FindFirstChild("HumanoidRootPart")
@@ -6460,31 +6867,49 @@ TravelManager.LastEntranceRequest = 0
 -- Dùng entrance remote cho các đảo cách nhau quá xa; nếu không, BodyVelocity
 -- phải bay xuyên toàn map và dễ lệch/đứng giữa biển ở các điểm chuyển sea.
 function TravelManager:MaybeRequestEntrance(targetPos)
-    if not IsValidPos(targetPos) then return end
+    if not IsValidPos(targetPos) then return false end
+    local me = HRP()
+    if not me then return false end
+    local distance = (targetPos - me.Position).Magnitude
+    local minDistance = tonumber(_G.Settings.EntranceShortcutMinDistance) or 3000
+    if distance < minDistance then return false end
+
     local now = tick()
-    if now - self.LastEntranceRequest < 5 then return end
+    if now - self.LastEntranceRequest < 5 then return false end
     local entrance
-    if targetPos.X > 50000 then
-        entrance = Vector3.new(61163.85, 11.68, 1819.78) -- Upper Sky/Fishman
-    elseif targetPos.Z > 30000 then
-        entrance = Vector3.new(923.21, 126.98, 32852.83) -- Cursed Ship
-    elseif targetPos.Y > 5000 and targetPos.X < -7000 then
-        entrance = Vector3.new(-7894.62, 5547.14, -380.29) -- Skylands
-    elseif targetPos.Y > 700 and targetPos.X < -4000 and targetPos.Z < -1500 then
-        entrance = Vector3.new(-4607.82, 872.54, -1667.56) -- Upper Sky
-    elseif targetPos.X > 5000 and targetPos.Z < -5000 then
-        entrance = Vector3.new(-6508.56, 5000.03, -132.84) -- Ice Castle
+
+    -- Shared-source public entrance zones. The target must actually belong near
+    -- that zone; distance gating above prevents an entrance call while already nearby.
+    local zones = {
+        Vector3.new(61163.85, 11.68, 1819.78),   -- Fishman / Underwater
+        Vector3.new(-4607.82, 872.54, -1667.56), -- Skylands lower entrance
+        Vector3.new(-7894.62, 5547.14, -380.29), -- Upper Sky
+        Vector3.new(-2953.31, 41.01, 2099.17),   -- Sea 1 transit zone
+        Vector3.new(923.21, 126.98, 32852.83),   -- Cursed Ship
+    }
+    local bestDistance = math.huge
+    for _, zonePos in ipairs(zones) do
+        local d = (zonePos - targetPos).Magnitude
+        local radius = zonePos.Z > 30000 and 5200 or 2600
+        if d <= radius and d < bestDistance then
+            entrance = zonePos
+            bestDistance = d
+        end
     end
-    if not entrance then return end
+    if not entrance then return false end
+
     local ok, err = pcall(function()
         CommF_:InvokeServer("requestEntrance", entrance)
     end)
     self.LastEntranceRequest = now
-    if not ok then
-        DLog("TRAVEL", "requestEntrance failed: " .. tostring(err))
+    if ok then
+        _G.BobonStatus = "Travel: Entrance shortcut"
+        DLog("TRAVEL", ("requestEntrance shortcut • %.0f studs"):format(distance))
+        return true
     end
+    DLog("TRAVEL", "requestEntrance failed: " .. tostring(err))
+    return false
 end
-
 
 function TravelManager:CleanupPhysics(char)
     if self.PhysicsBV and self.PhysicsBV.Parent then self.PhysicsBV:Destroy() end
@@ -7998,6 +8423,9 @@ end
 
 
 -- [A-7] FARMWATCHDOG — watchdog DUY NHẤT cho recovery + farm
+_G.BobonSmartFarmWatch = {
+    LastProgressAt=tick(), LastPos=nil, LastQuest="", LastTarget=nil, LastHP=nil, RetryCount=0,
+}
 -- Light fix TRƯỚC (travel không tiến → Stop + để main loop retry,
 -- đếm lightFails), chỉ Recovery nặng khi light fix không giải quyết
 -- được sau ≥3 lần. Không trigger khi Dead/Respawning (respawn tự xử lý).
@@ -8038,6 +8466,56 @@ task.spawn(function()
                     end
                 end
             end
+            -- v21.39 SMART FARM STUCK: progress is any meaningful player movement,
+            -- quest-text change, target change, or real target HP loss. First clear/retry
+            -- the shared farm; only repeated verified no-progress asks HopManager later.
+            if _G.Settings.SmartFarmStuckEnabled and _G.State.ActiveActionToken == 0 then
+                local w = _G.BobonSmartFarmWatch
+                local me = HRP()
+                local target = _G.State.FarmTarget
+                local hum = target and target:FindFirstChildOfClass("Humanoid")
+                local pos = me and me.Position or nil
+                local qtext = tostring(GetQuestText() or "")
+                local hp = hum and hum.Health or nil
+                local hardProgress = false
+                local softProgress = false
+                -- When a live target exists, merely circling around it is NOT progress.
+                -- Quest text or real HP loss resets the failure streak. Target/search movement
+                -- only gives a fresh grace window so our own retry does not instantly retrigger.
+                if qtext ~= tostring(w.LastQuest or "") then hardProgress = true end
+                if hp and w.LastHP and hp < w.LastHP - 0.01 then hardProgress = true end
+                if target ~= w.LastTarget then softProgress = true end
+                if not target and pos and w.LastPos and (pos - w.LastPos).Magnitude >= 12 then softProgress = true end
+                if hardProgress then
+                    w.LastProgressAt = tick()
+                    w.RetryCount = 0
+                elseif softProgress or not w.LastProgressAt then
+                    w.LastProgressAt = tick()
+                end
+                w.LastPos = pos
+                w.LastQuest = qtext
+                w.LastTarget = target
+                w.LastHP = hp
+
+                local stall = tick() - (tonumber(w.LastProgressAt) or tick())
+                if stall >= (tonumber(_G.Settings.SmartFarmStuckTimeout) or 40) then
+                    w.RetryCount = (tonumber(w.RetryCount) or 0) + 1
+                    w.LastProgressAt = tick()
+                    _G.BobonStatus = ("Watchdog: Farm no progress • retry %d"):format(w.RetryCount)
+                    pcall(function() ClusterFarmController:SharedRelease("SmartFarmStuck") end)
+                    if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+                        pcall(function() TravelManager:Stop("SmartFarmStuck") end)
+                    end
+                    pcall(function() _G.State:ClearTargets() end)
+                    _G.State.FState = "SMART_STUCK_RETRY"
+                    if _G.Settings.SmartFarmStuckHop
+                        and w.RetryCount >= (tonumber(_G.Settings.SmartFarmStuckRetryLimit) or 3) then
+                        _G.BobonFarmStuckHopRequested = true
+                        w.RetryCount = 0
+                    end
+                end
+            end
+
             -- LIGHT 2: verify one shared melee/sword/gun controller. Never
             -- steal an equipped sword by running a separate melee watchdog.
             if EquipCombatTool() then
@@ -12835,6 +13313,21 @@ function _G.BobonSeaTransitionCleanup(newSea)
     pcall(function() InventoryCache.At = 0 end)
     pcall(function() WeaponInventoryCache.At = 0 end)
     pcall(function()
+        if _G.BobonFruitFinderState then
+            _G.BobonFruitFinderState.LastTool = nil
+            _G.BobonFruitFinderState.LastScan = 0
+        end
+        if _G.BobonSmartFarmWatch then
+            _G.BobonSmartFarmWatch.LastProgressAt = tick()
+            _G.BobonSmartFarmWatch.LastPos = nil
+            _G.BobonSmartFarmWatch.LastQuest = ""
+            _G.BobonSmartFarmWatch.LastTarget = nil
+            _G.BobonSmartFarmWatch.LastHP = nil
+            _G.BobonSmartFarmWatch.RetryCount = 0
+        end
+        _G.BobonFarmStuckHopRequested = nil
+    end)
+    pcall(function()
         for key in pairs(ItemProgression.NextOptional or {}) do ItemProgression.NextOptional[key] = 0 end
     end)
     return true
@@ -12878,6 +13371,131 @@ function _G.BobonPriorityWatchdogTick()
     return true
 end
 
+-- v21.39 dropped-fruit finder. It is called by the one Priority Scheduler and
+-- owns movement only after ClaimAction, so it cannot race normal Farm travel.
+_G.BobonFruitFinderState = {LastScan=0, LastTool=nil}
+function _G.BobonFindWorldFruit()
+    if _G.Settings.FruitFinderEnabled == false then return nil end
+    local state = _G.BobonFruitFinderState
+    local now = tick()
+    if now - (tonumber(state.LastScan) or 0) < (_G.Settings.FruitFinderScanInterval or 0.75) then
+        local old = state.LastTool
+        if old and old.Parent then return old end
+        return nil
+    end
+    state.LastScan = now
+    state.LastTool = nil
+    local me = HRP()
+    if not me then return nil end
+    local maxDistance = tonumber(_G.Settings.FruitFinderMaxDistance) or 30000
+    local best, bestDist
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Tool") and not obj:IsDescendantOf(LP) then
+            local low = string.lower(tostring(obj.Name))
+            local tip = tostring(obj.ToolTip or "")
+            if tip == "Blox Fruit" or low:find("fruit", 1, true) or tostring(obj.Name):find("-", 1, true) then
+                local handle = obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart")
+                if handle then
+                    local d = (handle.Position - me.Position).Magnitude
+                    if d <= maxDistance and (not bestDist or d < bestDist) then
+                        best, bestDist = obj, d
+                    end
+                end
+            end
+        end
+    end
+    state.LastTool = best
+    return best
+end
+
+function _G.BobonFruitFinderTryRun()
+    if _G.Settings.FruitFinderEnabled == false or not _G.State:CanAct() then return false end
+    local tool = _G.BobonFindWorldFruit()
+    if not tool or not tool.Parent then return false end
+    local token = _G.State:ClaimAction("FruitFinder")
+    if token == 0 then return false end
+    PrepareClaimedAction("FruitFinder")
+    _G.State:SetMode("GettingItem")
+    _G.BobonStatus = "Fruit Finder: " .. tostring(tool.Name)
+    task.spawn(function()
+        local ok, err = xpcall(function()
+            local deadline = tick() + (tonumber(_G.Settings.FruitFinderTimeout) or 28)
+            while _G.State:IsActionValid(token) and tool.Parent and IsAlive() and tick() < deadline do
+                _G.State:TouchAction(token)
+                local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+                if not handle then break end
+                local me = HRP()
+                if not me then break end
+                if (me.Position - handle.Position).Magnitude > 8 then
+                    TravelManager:Request(handle.CFrame, "FruitFinder", {
+                        arrivalThreshold=5, persistent=false, combatHover=false,
+                        speed=_G.Settings.ClusterFieldPatrolSpeed or 400,
+                    })
+                else
+                    if type(firetouchinterest) == "function" then
+                        pcall(function()
+                            firetouchinterest(me, handle, 0)
+                            task.wait(0.04)
+                            firetouchinterest(me, handle, 1)
+                        end)
+                    else
+                        pcall(function() me.CFrame = handle.CFrame end)
+                    end
+                end
+                task.wait(0.08)
+            end
+            task.wait(0.2)
+            pcall(function() FruitManager:StoreBackpackFruits() end)
+        end, debug.traceback)
+        if not ok then warn("[BobonHub] Module Error: FruitFinder: " .. tostring(err)) end
+        if _G.State.IsTraveling and _G.State.MovementOwner == "FruitFinder" then
+            TravelManager:Stop("FruitFinderComplete")
+        end
+        if _G.State:IsActionValid(token) then _G.State:ReleaseAction(token) end
+        if _G.State.Mode == "GettingItem" then _G.State:SetMode("Idle") end
+        _G.BobonFruitFinderState.LastTool = nil
+        _G.BobonFruitFinderState.LastScan = 0
+    end)
+    return true
+end
+
+-- v21.39 mastery tool scheduler: set one preferred weapon only; the normal farm
+-- remains the sole mastery engine. This mirrors the useful Yama/Tushita idea from
+-- the shared source without creating another equip or movement worker.
+function _G.BobonMasteryToolPulse()
+    if not _G.State or _G.State.ActiveActionToken ~= 0 then return false end
+    if _G.Settings.AutoCDK and GetSea() == 3 and Level() >= 2200
+        and not InventoryHas("Cursed Dual Katana") then
+        if InventoryHas("Yama") and EffectiveMastery("Yama") < 350 then
+            _G.State.PreferredCombatTool = "Yama"
+            _G.State.PriorityHint = ("CDK mastery Yama %d/350"):format(EffectiveMastery("Yama"))
+            return true
+        end
+        if InventoryHas("Tushita") and EffectiveMastery("Tushita") < 350 then
+            _G.State.PreferredCombatTool = "Tushita"
+            _G.State.PriorityHint = ("CDK mastery Tushita %d/350"):format(EffectiveMastery("Tushita"))
+            return true
+        end
+    end
+    return false
+end
+
+-- Elite ChildAdded only wakes the scheduler; it never moves or attacks itself.
+_G.BobonEliteWake = {Model=nil, At=0}
+pcall(function()
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies and not _G.BobonEliteWake.Connection then
+        _G.BobonEliteWake.Connection = enemies.ChildAdded:Connect(function(mob)
+            local n = mob and tostring(mob.Name) or ""
+            if n == "Diablo" or n == "Deandre" or n == "Urban" then
+                _G.BobonEliteWake.Model = mob
+                _G.BobonEliteWake.At = tick()
+                if _G.State then _G.State.PriorityHint = "Elite spawned: " .. n end
+            end
+        end)
+    end
+end)
+
 function _G.BobonPriorityPulse()
     local state = _G.State
     if not state or not IsAlive() then return false end
@@ -12902,11 +13520,50 @@ function _G.BobonPriorityPulse()
         return true
     end
 
+    -- Dropped world fruit is a short, bounded pickup action. Mandatory hard gates
+    -- stay above it; ordinary level farm and optional progression stay below it.
+    do
+        local ok, started = pcall(_G.BobonFruitFinderTryRun)
+        if not ok then warn("[BobonHub] Module Error: PriorityFruitFinder: " .. tostring(started))
+        elseif started then
+            state.PriorityStage = "FRUIT_FINDER"
+            state.PriorityDetail = tostring(_G.BobonStatus or "Fruit")
+            return true
+        end
+    end
+
+    -- If an Elite just streamed in and Yama still needs Elite progress, wake the
+    -- existing Yama progression immediately rather than waiting for a later poll.
+    do
+        local wake = _G.BobonEliteWake
+        local elite = wake and wake.Model
+        if elite and elite.Parent and GetSea() == 3 and Level() >= 1500
+            and _G.Settings.AutoCDK and not InventoryHas("Yama") then
+            local progress = 0
+            pcall(function() progress = tonumber(CommF_:InvokeServer("EliteHunter", "Progress")) or 0 end)
+            if progress < 30 then
+                local ok, started = pcall(function() return ItemProgression:CheckYama() end)
+                if not ok then warn("[BobonHub] Module Error: PriorityEliteWake: " .. tostring(started))
+                elseif started then
+                    state.PriorityStage = "ELITE_YAMA"
+                    state.PriorityDetail = tostring(elite.Name) .. " • " .. tostring(progress) .. "/30"
+                    wake.Model = nil
+                    return true
+                end
+            else
+                wake.Model = nil
+            end
+        elseif wake and elite and (not elite.Parent or tick() - (tonumber(wake.At) or 0) > 120) then
+            wake.Model = nil
+        end
+    end
+
     -- Passive mastery/TTK pulse is throttled but belongs to this scheduler.
     if tick() - (tonumber(state.PriorityLastPassiveAt) or 0)
         >= (_G.Settings.PriorityPassiveInterval or 1.25) then
         state.PriorityLastPassiveAt = tick()
         state.PriorityHint = ""
+        pcall(_G.BobonMasteryToolPulse)
         local meleeTraining = false
         if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
             local ok, result = pcall(function() return FightingStyleController:Tick() end)
@@ -13299,6 +13956,13 @@ function HopManager:Request(reason)
     return ok
 end
 function HopManager:ShouldHop()
+    if _G.BobonFarmStuckHopRequested and _G.State.ActiveActionToken == 0
+        and _G.State.Mode ~= "Dead" and _G.State.Mode ~= "Respawning"
+        and _G.State.Mode ~= "ServerHop" then
+        _G.BobonFarmStuckHopRequested = nil
+        return "farm-no-progress"
+    end
+
     local activeQuestFight = _G.Settings.ContestSuppressPlayerHop
         and _G.State.Mode == "Farming"
         and _G.State.ActiveActionToken == 0
@@ -13968,6 +14632,17 @@ task.spawn(function()
                 return
             end
 
+            -- v21.38 NORMAL QUEST FARM: source-shared BN loop is authoritative.
+            -- It intentionally bypasses ClusterPhase / ownership / damage-lease logic.
+            if _G.Settings.SharedSourceFarmMode ~= false then
+                if _G.State.ClusterMode ~= "OFF" then
+                    FarmPositionController:ReleaseCluster()
+                end
+                if ClusterFarmController:SharedFarmTick(questMobName, q.MC) then
+                    return
+                end
+            end
+
             -- v18.7 QUEST CLUSTER: q.MC is the stable spawn-area anchor.
             -- A mob death no longer destroys the cluster or forces player travel.
             local questAnchor = ResolveQuestClusterAnchor(q, questMobName) or q.MC
@@ -14401,6 +15076,12 @@ _G.BobonUnload = function()
             FruitManager.PopupConnections = {}
         end
     end)
+    pcall(function()
+        if _G.BobonEliteWake and _G.BobonEliteWake.Connection then
+            _G.BobonEliteWake.Connection:Disconnect()
+            _G.BobonEliteWake.Connection = nil
+        end
+    end)
     pcall(function() BindPlayerDamage(nil, nil) end)
     pcall(function()
         for _, conn in ipairs(BobonUIConnections or {}) do
@@ -14413,10 +15094,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.37] Full Script Loaded Successfully!")
-print("[BobonHub v21.37] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.37] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.37] Modules: QuestFarm | Fixed-Pile Acquire/Stack/Kill | All-Victim Air Combat | Smart Raid/Fragments | Fruit Reserve | Factory | Full Melee | CDK/Skull | Fire HUD")
-print("[BobonHub v21.37] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.37] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.37] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.39] Full Script Loaded Successfully!")
+print("[BobonHub v21.39] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.39] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.39] Modules: QuestFarm | Shared BN + Failure Blacklist | Fruit Finder | Smart Stuck/Hop | Entrance Shortcuts | Elite Wake | Mastery Tool Scheduler | Raid/Fragments | Full Progression | Fire HUD")
+print("[BobonHub v21.39] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.39] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.39] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
