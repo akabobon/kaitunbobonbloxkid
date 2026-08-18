@@ -1,9 +1,53 @@
 -- =================================================================
---         BOBON HUB v21.32 ACTIVE FIELD SWEEP + GACHA-FIRST + ALL-MELEE PREEMPT | FULL PROGRESSION V2
---         Long-Run Stable | Single Movement Owner | ActionToken
---         Base: v21.32 ECONOMY SERIAL | Version: v21.32
+--         BOBON HUB v21.35 PRIORITY HARDENED ALL-IN | FARM + RAID + FULL PROGRESSION
+--         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
+--         Base: v21.34 FIXED-PILE ALL-IN | Version: v21.35
 --
---  v21.32 ACTIVE FARM / ECONOMY FIX:
+--  v21.35 PRIORITY / PROGRESSION HARDENING:
+--  [P35-1] ONE Priority Scheduler owns permanent movement work: hard gates -> ready melee/key ->
+--           required boss -> live Factory -> Fragment Raid -> optional progression -> Level Farm.
+--           MainController no longer independently starts Factory/Raid/ItemProgression.
+--  [P35-2] Sea transition cleanup clears stale travel, quest/cluster targets, spawn memory,
+--           fragment demand and inventory caches before the new sea can farm.
+--  [P35-3] Progression watchdog releases a claimed action only when status is stale AND there is
+--           no live target/movement, preventing silent permanent stalls without killing real fights.
+--  [TTK35-1] Legendary Sword Dealer probing verifies inventory after each choice, tracks missing
+--             Saddi/Shisui/Wando and only targeted-hops after repeated no-progress probes.
+--  [TTK35-2] HUD/status exposes the missing TTK sword/mastery instead of generic progression text.
+--  [K35-1] Cake/Dough progress remembers the last real counter change so stale progress is visible
+--           and bounded retries do not masquerade as forward progress.
+--  [ST35-1] Removed the old 3-second melee/sword worker and old ProgressionWatcher. Passive melee
+--           training + TTK checks now run from the same scheduler; Economy/Gacha remains serial.
+--  [ST35-2] Existing RemoteResolver/Stats/Economy remain single-owner; no ad-source duplicate loops,
+--           HRP CommF_ paths, WindUI/loadstring, destructive popup sweeps or 3-mob BN are imported.
+--  [EC35-1] TTK dealer/Mysterious Man Beli transactions now use the SAME economy mutex as
+--           Gacha/Melee, preventing simultaneous Beli spends at exact purchase thresholds.
+--
+--  v21.34 ALL-IN REWORK:
+--  [F34-1] Quest farm is phase-driven: ACQUIRE -> STACK -> KILL. New wave mobs reopen ACQUIRE.
+--  [F34-2] One pile is FIXED for the active quest/wave; it no longer follows the player during acquisition.
+--  [F34-3] Unknown ownership fallback uses short physical persistence proof, then real HP liveness revokes ghost/statue mobs.
+--  [F34-4] Cluster combat uses fresh independent swings for every eligible victim; no attack while ACQUIRE is active.
+--  [F34-4b] Real multi-mob piles prefer simple direct per-victim fanout first; HP proof rotates backend on failure.
+--  [F34-5] Raid regular mobs use the same physical acquisition/fixed-pile path. Bosses remain single-target.
+--  [R34-1] Fragment demand can preempt an active level quest immediately through the existing RaidController.
+--  [R34-2] Raid chip acquisition reserves/uses one cheap physical fruit, supports stored-fruit fallback, then Beli fallback.
+--  [R34-3] Sea-2 raid start has a bounded Lab color-puzzle fallback (Red, Blue, Green, Blue).
+--  [FR34-1] Fruit store keeps one cheap Raid reserve only while a real Fragment shortage exists.
+--  [UI34-1] Gacha popup/camera cleanup is event-driven and only active around a real gacha attempt; no destructive 0.1s sweep.
+--  [ST34-1] Existing single Stats/Economy/RemoteResolver/TTK/Yama/Cake/Factory controllers are retained; no duplicate loops added.
+--  [P34-1] Required boss/key/item spawns preempt level farm; targeted progression hop can run while generic Hop is OFF.
+--  [P34-2] Removed the duplicate melee-unlock watcher; one full ProgressionWatcher owns permanent progression.
+--
+--  v21.33 VIDEO Roblox(12) FIXES:
+--  [F33-1] Blind circular patrol removed; farm follows exact _WorldOrigin.EnemySpawns.
+--  [F33-2] Live quest positions are remembered and reused between respawns.
+--  [F33-3] Quest candidate radius uses the full active-field search radius.
+--  [D33-1] Farm hover raised and real HP loss arms an exact-target emergency dodge.
+--  [E33-1] Gacha remains first, but known rejection no longer stalls melee for 4s.
+--  [E33-2] First-time melee unlock quests preempt level farm when prerequisites exist.
+--
+--  v21.33 ACTIVE FARM / ECONOMY FIX:
 --  [AF-1] Quest scanning no longer reuses the authority-only radius when authority mode is OFF.
 --         Current quest mobs get a wider live-search field instead of disappearing from LastBatch.
 --  [AF-2] Empty wave / stale anchor no longer means stand still: visit live matching mob roots first,
@@ -15,7 +59,7 @@
 --         V1, Dragon Breath, Superhuman, V2 styles, Godhuman and Sanguine all use the same rule.
 --  [EC-3] Ready fighting-style unlock quests/keys preempt ordinary farm instead of waiting for a farm window.
 --
---  v21.32 STABILITY AUDIT (VIDEO Roblox(10)):
+--  v21.33 STABILITY AUDIT (VIDEO Roblox(10)):
 --  [SI-1] Sticky mandatory progression intent: Saber/Sea gates cannot fall back to level
 --         farm for a few frames between retries. This removes Farm <-> progression ping-pong.
 --  [SI-2] Quest UI close is debounced/leased before optional boss/item work may start.
@@ -669,7 +713,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.29 IMMEDIATE MELEE + GACHA + SMART DODGE] Loading...")
+print("[BobonHub v21.34 ALL-IN FARM + RAID + PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -799,8 +843,8 @@ _G.Settings = {
     -- v19.3 Teddy-style air farm: player never descends into ordinary M1 range.
     -- Quest/skip/raid farming stays parked above the persistent cluster while
     -- helper/token/legacy fast-hit backends damage the whole stacked batch.
-    FarmHeight          = 22,
-    BossFarmHeight      = 28,
+    FarmHeight          = 28,
+    BossFarmHeight      = 32,
     -- Compatibility value only. Air-farm code never intentionally requests a
     -- lower client-click height; keeping it equal prevents accidental dipping.
     ClientHoverHeight   = 22,
@@ -881,7 +925,7 @@ _G.Settings = {
     ClusterAuthorityProbeMissCooldown = 1.60,
     ClusterAuthorityMaxProbeAttempts = 3,
     ClusterAuthorityHardMissCooldown = 5.0,
-    ClusterAuthorityFieldRadius = 1200,
+    ClusterAuthorityFieldRadius = 1800,
     ClusterQuestPhysicalFallback = true,
     ClusterSkipPhysicalFallback = true,
     ClusterStrictOwnership = true,
@@ -906,8 +950,11 @@ _G.Settings = {
     -- tokenized single-target hit. Do the same for every proven stack member
     -- instead of relying on one batch swing being consumed for multiple victims.
     ClusterIndependentSwingFanout = true,
-    ClusterIndependentSwingGap = 0.022,
-    ClusterIndependentSwingMaxTargets = 8,
+    -- Source-ad inspired but HP-verified: prefer the simple per-victim direct
+    -- RegisterAttack/RegisterHit fanout before token/helper backends for a real pile.
+    ClusterPreferLegacyFanout = true,
+    ClusterIndependentSwingGap = 0.016,
+    ClusterIndependentSwingMaxTargets = 12,
     CombatLateGrace     = 0.35,
     CombatProofsRequired= 2,
     -- A previously verified backend is re-probed after a quiet period, but
@@ -948,13 +995,15 @@ _G.Settings = {
     RandomFruitInterval = 2,       -- rejected attempt fallback; unified economy worker retries conservatively
     RandomFruitSuccessCooldown = 7200, -- confirmed roll: respect the server cooldown
     RandomFruitMinLevel = 50,
-    RandomFruitResultWait = 4.0,
+    RandomFruitResultWait = 1.50,
+    RandomFruitRejectRetry = 12,
+    RandomFruitUnknownRetry = 4,
     RandomFruitMoneyRetry = 0.50,
     RandomFruitAttemptMinGap = 0.75,
     RandomFruitCooldownRejectDelay = 30,
     MeleePurchaseInterval = 0.35,
     EconomyTick          = 0.25,
-    EconomyMeleePriorityHold = 0.00, -- compatibility only; v21.32 is Gacha-first
+    EconomyMeleePriorityHold = 0.00, -- compatibility only; v21.33 is Gacha-first
     EconomyPauseDuration = 2.10,
     EconomyGachaFirst = true,
     FruitStoreInterval  = 8,
@@ -988,33 +1037,37 @@ _G.Settings = {
     ClusterAcquireGrace = 0.35,
     -- A quest uses only its current spawn field. GatherMaxDistance remains the
     -- emergency chase limit for stale QDB coordinates, not the magnet radius.
-    ClusterQuestRadius  = 1200,
-    ClusterQuestSearchRadius = 2400,
+    ClusterQuestRadius  = 1800,
+    ClusterQuestSearchRadius = 3000,
+    -- v21.33: no blind ring. Follow exact game spawn markers + learned live positions.
     ClusterFieldPatrolEnabled = true,
-    ClusterFieldPatrolRadius = 165,
-    ClusterFieldPatrolOuterRadius = 310,
-    ClusterFieldPatrolHold = 0.90,
-    ClusterFieldPatrolArrival = 14,
-    ClusterFieldPatrolSpeed = 420,
-    ClusterFieldPatrolHeight = 18,
+    ClusterFieldPatrolRadius = 0,
+    ClusterFieldPatrolOuterRadius = 0,
+    ClusterFieldPatrolHold = 0.55,
+    ClusterFieldPatrolArrival = 18,
+    ClusterFieldPatrolSpeed = 400,
+    ClusterFieldPatrolHeight = 24,
+    ClusterSpawnMemoryLimit = 24,
+    ClusterSpawnMemoryMerge = 18,
+    ClusterSpawnMarkerRefresh = 2.0,
 
     ClusterAcquireSweep = true,
-    ClusterAcquireTimeout = 2.00,
-    ClusterAcquireMaxTimeout = 6.00,
-    ClusterAcquireSettle = 0.60,
-    ClusterAcquireRetry = 0.12,
-    ClusterAcquireMaxAttempts = 6,
-    ClusterAcquireCycleRetry = 0.35,
-    ClusterAcquireArrivalThreshold = 3.25,
+    ClusterAcquireTimeout = 0.75,
+    ClusterAcquireMaxTimeout = 1.80,
+    ClusterAcquireSettle = 0.20,
+    ClusterAcquireRetry = 0.06,
+    ClusterAcquireMaxAttempts = 3,
+    ClusterAcquireCycleRetry = 0.75,
+    ClusterAcquireArrivalThreshold = 8.0,
     ClusterAcquireTravelSpeed = 420,
     ClusterAcquireHoverHeight = 6,
-    ClusterAcquireGroupRadius = 180,
+    ClusterAcquireGroupRadius = 240,
     ClusterOwnershipSettle = 0.18,
     ClusterAcquirePreferCoverage = true,
     -- v21.23: fallback ONLY for environments where ownership cannot be queried.
     -- It requires real HP damage at the mob's real position + close physical approach,
     -- then a one-shot movement persistence test before the mob may join the pile.
-    ClusterDamageLeaseEnabled = true,
+    ClusterDamageLeaseEnabled = false,
     ClusterDamageLeaseAcquireRadius = 28,
     ClusterDamageLeaseProofWindow = 0.28,
     ClusterDamageLeaseProofChecks = 5,
@@ -1023,9 +1076,24 @@ _G.Settings = {
     ClusterDamageLeaseTTL = 2.50,
     -- v21.22: a single exact pile stays horizontally under the player during sweep.
     ClusterOnePileUnderfoot = true,
-    ClusterPileFollowDuringSweep = true,
+    ClusterPileFollowDuringSweep = false,
     ClusterPileSettleRadius = 12,
-    ClusterPileUseAcquireGroundY = true,
+    ClusterPileUseAcquireGroundY = false,
+    -- v21.34 fixed-pile phase farm. Gather first, then kill the stack.
+    ClusterFixedPile = true,
+    ClusterFixedAnchorRelocateDistance = 650,
+    ClusterAcquireBeforeAttack = true,
+    ClusterAcquirePhaseBudget = 4.0,
+    ClusterKillPhaseSlice = 1.15,
+    ClusterAcquireTouchRadius = 95,
+    ClusterUnknownPersistenceProof = true,
+    ClusterUnknownPersistenceTime = 0.18,
+    ClusterUnknownPersistenceChecks = 2,
+    ClusterUnknownPersistenceRadius = 8,
+    ClusterUnknownPersistenceRejectRadius = 22,
+    ClusterPersistNoDamageTimeout = 1.35,
+    ClusterPersistReacquireCooldown = 0.55,
+    ClusterWaveNewMobPreempt = true,
     ClusterAnchorVerifyRadius = 9,
     ClusterAnchorMaxDrift = 18,
     ClusterSimulationRadius = 10000,
@@ -1053,9 +1121,22 @@ _G.Settings = {
     RaidHoverHeight      = 22,
     RaidFastAttackMaxTargets = 32,
     RaidRunTimeout       = 900,
-    RaidNoChipRetry      = 90,
+    RaidNoChipRetry      = 20,
     RaidFragmentDemandTTL= 120,
     RaidCheapFruitMaxPrice = 650000,
+    RaidReserveCheapFruit = true,
+    RaidLabFallback = true,
+    RaidLabMaxClicksPerButton = 8,
+    RaidStartConfirmTimeout = 12,
+    RaidStartRetry = 2.0,
+    FruitPopupGuard = true,
+    -- v21.35 one scheduler / progression hardening.
+    PrioritySchedulerInterval = 0.20,
+    PriorityPassiveInterval = 1.25,
+    PriorityStatusStallTimeout = 75,
+    SeaTransitionCleanup = true,
+    LegendarySwordHopFailures = 3,
+    KatakuriProgressStallTimeout = 120,
     -- Core movement optimization: one short snap only for the active quest mob.
     -- This is intentionally not exposed in Configs; it is part of the farm core.
     NearQuestSnap        = true,
@@ -1071,15 +1152,16 @@ _G.Settings = {
     DodgeAttacks        = true,
     -- v21.28 SMART SKILL DODGE: detect cast/charge/transient AoE, pause attacks,
     -- evade with the SAME TravelManager owner, confirm clear, then resume target.
-    -- v21.32 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
+    -- v21.33 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
     DodgeCooldown       = 0.30,
-    DodgeDistance       = 20,
+    DodgeDistance       = 26,
     DodgeHeight         = 4,
     DodgeRadius         = 42,
-    DodgeEmergencySpeed = 320,
+    DodgeEmergencySpeed = 380,
     DodgeMinHold        = 0.30,
     DodgeSafeConfirm    = 0.50,
-    DodgeMaxHold        = 2.20,
+    DodgeMaxHold        = 2.50,
+    DodgeDamageFallbackHold = 1.10,
     DodgeReplanInterval = 0.55,
     DodgeMonitorInterval= 0.05,
     DodgeHazardTTL      = 1.20,
@@ -1159,6 +1241,9 @@ _G.Settings = {
     MasteryTarget        = 600,
     GetFruits            = true,
     HopEnabled           = false,
+    -- Hard progression may server-hop even when generic Hop is disabled.
+    -- This is intentionally limited to a missing required boss/key/item spawn.
+    HopRequiredProgression = true,
     HopFindFruit         = true,
     HopElite             = true,
     HopFindDarkbeard     = true,
@@ -1233,6 +1318,7 @@ do
         local hop = cfg.Hop
         if type(hop) == "table" then
             _G.Settings.HopEnabled = bool(hop.Enable, _G.Settings.HopEnabled)
+            _G.Settings.HopRequiredProgression = bool(hop["Hop Required Progression"], _G.Settings.HopRequiredProgression)
             _G.Settings.HopFindFruit = bool(hop["Find Fruit"], _G.Settings.HopFindFruit)
             _G.Settings.HopElite = bool(hop["Hop Elite"], _G.Settings.HopElite)
             _G.Settings.HopFindDarkbeard = bool(hop["Hop Find Darkbeard"], _G.Settings.HopFindDarkbeard)
@@ -1290,7 +1376,8 @@ local function IsFiniteVector3(pos)
 end
 
 local function IsSubmergedPosition(pos)
-    if game.PlaceId ~= 7449423635 or not IsFiniteVector3(pos) then return false end
+    if (game.PlaceId ~= 7449423635 and game.PlaceId ~= 100117331123089)
+        or not IsFiniteVector3(pos) then return false end
     local bounds = SUBMERGED_REGION
     return pos.X >= bounds.MinX and pos.X <= bounds.MaxX
         and pos.Z >= bounds.MinZ and pos.Z <= bounds.MaxZ
@@ -1344,6 +1431,13 @@ _G.State = {
     ClusterAcquireStartedAt = 0,
     ClusterAcquireDeadline = 0,
     ClusterAcquireCompleted = 0,
+    ClusterFixedAnchor = nil,
+    ClusterPhase = "ACQUIRE",
+    ClusterPhaseStartedAt = 0,
+    ClusterWaveStartedAt = 0,
+    ClusterLastCandidateCount = 0,
+    ClusterPhaseVerified = 0,
+    ClusterPhaseTotal = 0,
     IsTraveling      = false,
     IsRecovering     = false,
     ActionToken      = 0,
@@ -1363,6 +1457,17 @@ _G.State = {
     QuestClosedStable = false,
     ProgressionLock   = nil,
     WorkIntent        = "LEVEL_FARM",
+    -- v21.35 scheduler/sea-transition diagnostics live on State to avoid extra
+    -- competing controller globals and to keep HUD/debug state authoritative.
+    LastKnownSea      = 0,
+    SeaTransitionAt   = 0,
+    PriorityStage     = "BOOT",
+    PriorityDetail    = "",
+    PriorityHint      = "",
+    PriorityLastPassiveAt = 0,
+    PriorityWatchOwner = nil,
+    PriorityWatchStatus = nil,
+    PriorityWatchAt   = 0,
     EconomyPauseUntil = 0,
     EconomyPauseReason= nil,
     FarmSafetyUntil   = 0,
@@ -1374,7 +1479,7 @@ _G.State = {
     Sea              = 1,
 }
 
--- v21.32 SINGLE ECONOMY OWNER.  Melee and Gacha are both Beli spenders; running
+-- v21.33 SINGLE ECONOMY OWNER.  Melee and Gacha are both Beli spenders; running
 -- them in independent workers created a race where Gacha could spend the exact
 -- 150k/500k/750k threshold before the style buyer, or a style/core purchase
 -- could be mistaken for Gacha success merely because Beli dropped.
@@ -1403,8 +1508,24 @@ function _G.BobonEconomy:PauseFarm(reason, duration)
     self:Notice(state.EconomyPauseReason, hold)
 end
 
+function _G.BobonEconomy:TryBegin(owner)
+    if self.Busy then return false end
+    self.Busy = true
+    self.Owner = tostring(owner or "ECONOMY")
+    return true
+end
+
+function _G.BobonEconomy:End(owner)
+    if owner == nil or self.Owner == tostring(owner) then
+        self.Busy = false
+        self.Owner = nil
+        return true
+    end
+    return false
+end
+
 function _G.State:SetMode(mode)
-    -- v21.32: Mode is state, not a status message.  The old assignment below made
+    -- v21.33: Mode is state, not a status message.  The old assignment below made
     -- every 0.15s farm tick overwrite detailed Saber/Boss/Farm text and created
     -- misleading HUD flicker even when the movement owner had not changed.
     self.Mode = mode
@@ -1898,6 +2019,13 @@ do
                         FlagL.Text = "LOCK • " .. string.upper(tostring(state.ProgressionLock))
                     elseif state.DodgeActive then
                         FlagL.Text = "DODGE • TARGET LOCK"
+                    elseif state.PriorityStage and state.PriorityStage ~= "LEVEL_FARM"
+                        and state.PriorityStage ~= "BOOT" then
+                        local detail = tostring(state.PriorityDetail or "")
+                        FlagL.Text = string.upper(tostring(state.PriorityStage))
+                            .. (detail ~= "" and (" • " .. detail) or "")
+                    elseif state.PriorityHint and tostring(state.PriorityHint) ~= "" then
+                        FlagL.Text = tostring(state.PriorityHint)
                     elseif state.FState == "SKIP_FARM" and (state.Sea or 1) == 1 then
                         FlagL.Text = lv <= 50 and "SKIP • FLOOR 1" or "SKIP • FLOOR 2"
                     elseif state.LastTargetContested and tick() - state.LastTargetContested <= (_G.Settings.ContestGrace or 3) then
@@ -1993,9 +2121,11 @@ end
 
 local function GetSea()
     local id = game.PlaceId
-    if id == 2753915549 then return 1 end
-    if id == 4442272183 then return 2 end
-    if id == 7449423635 then return 3 end
+    -- v21.34: accept both classic and alternate live place ids seen in the
+    -- comparison source. Never carry a stale world flag across teleport/re-execute.
+    if id == 2753915549 or id == 85211729168715 then return 1 end
+    if id == 4442272183 or id == 79091703265657 then return 2 end
+    if id == 7449423635 or id == 100117331123089 then return 3 end
     return 1
 end
 
@@ -2875,6 +3005,12 @@ function CombatController:LegacyAllowed()
     if ClusterFarmController and ClusterFarmController:IsShadowCombatActive() then
         return true
     end
+    if _G.Settings.ClusterPreferLegacyFanout ~= false
+        and IsAirFarmCombat() and _G.State and _G.State.ClusterMode ~= "OFF"
+        and _G.Settings.ClusterIndependentSwingFanout == true then
+        -- This path is still provisional until exact Humanoid HP loss confirms it.
+        return true
+    end
     local gameGlobal = self:GetGameGlobal()
     local flag = gameGlobal and rawget(gameGlobal, "COMBAT_REMOTE_THREAD")
     return flag ~= true
@@ -3377,7 +3513,9 @@ function CombatController:SelectBackend(now)
         local order = shadowQuest
             and {"LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
             or (clusterMulti
-                and {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"}
+                and (_G.Settings.ClusterPreferLegacyFanout ~= false
+                    and {"LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
+                    or {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"})
                 or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"})
         for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
@@ -4706,6 +4844,8 @@ function FarmPositionController:ReleaseCluster()
         ClusterFarmController.AcquireAttempts = setmetatable({}, { __mode = "k" })
         ClusterFarmController.PositionProof = setmetatable({}, { __mode = "k" })
         ClusterFarmController.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
+        ClusterFarmController.UnknownProof = setmetatable({}, { __mode = "k" })
+        ClusterFarmController.VictimWatch = setmetatable({}, { __mode = "k" })
     end
     if _G.State then
         _G.State.ClusterMode = "OFF"
@@ -4722,6 +4862,13 @@ function FarmPositionController:ReleaseCluster()
         _G.State.ClusterAcquireStartedAt = 0
         _G.State.ClusterAcquireDeadline = 0
         _G.State.ClusterAcquireCompleted = 0
+        _G.State.ClusterFixedAnchor = nil
+        _G.State.ClusterPhase = "ACQUIRE"
+        _G.State.ClusterPhaseStartedAt = 0
+        _G.State.ClusterWaveStartedAt = 0
+        _G.State.ClusterLastCandidateCount = 0
+        _G.State.ClusterPhaseVerified = 0
+        _G.State.ClusterPhaseTotal = 0
         _G.State.ClusterAuthorityProbeTarget = nil
         _G.State.ClusterAuthorityProbeStartedAt = 0
         _G.State.ClusterAuthorityProbeFirstAttackAt = 0
@@ -4858,9 +5005,15 @@ ClusterFarmController = {
     PositionProof = setmetatable({}, { __mode = "k" }),
     -- v21.13: bounded remote-pull retries; weak keys avoid retaining dead NPC roots.
     RemotePullRetryAt = setmetatable({}, { __mode = "k" }),
+    UnknownProof = setmetatable({}, { __mode = "k" }),
+    VictimWatch = setmetatable({}, { __mode = "k" }),
     PatrolIndex = 1,
     PatrolLastSwitch = 0,
     PatrolLastPoint = nil,
+    SpawnMemory = {},
+    SpawnMarkerCache = {},
+    SpawnMarkerCacheAt = {},
+    SpawnRouteIndex = {},
 }
 
 local function NormalizeClusterNames(names)
@@ -4940,10 +5093,27 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
     if #list == 0 or (typeof(anchorCF) ~= "CFrame" and typeof(anchorCF) ~= "Vector3") then return false end
     local cf = typeof(anchorCF) == "Vector3" and CFrame.new(anchorCF) or anchorCF
     if not IsValidPos(cf.Position) or not IsAllowedWorldPosition(cf.Position) then return false end
+
     local state = _G.State
-    local changed = state.ClusterMode ~= mode or state.ClusterMobName ~= list[1]
-        or not state.ClusterAnchor
-        or (state.ClusterAnchor.Position - cf.Position).Magnitude > (_G.Settings.ClusterAnchorMaxDrift or 18)
+    local sameIdentity = state.ClusterMode == mode
+        and state.ClusterMobName == list[1] and state.ClusterAnchor ~= nil
+    local drift = state.ClusterAnchor and (state.ClusterAnchor.Position - cf.Position).Magnitude or math.huge
+    local changed = not sameIdentity
+
+    -- QUEST keeps one pile for the whole active quest. Only relocate a same-name
+    -- quest when the old field has been empty long enough AND the new anchor is
+    -- clearly another island/field. RAID/SKIP/ITEM may move their anchor normally.
+    if sameIdentity then
+        if mode == "QUEST" and _G.Settings.ClusterFixedPile ~= false then
+            local stale = tick() - (state.ClusterLastSeen or 0) > 1.50
+            if drift > (_G.Settings.ClusterFixedAnchorRelocateDistance or 650) and stale then
+                changed = true
+            end
+        elseif drift > (_G.Settings.ClusterAnchorMaxDrift or 18) then
+            changed = true
+        end
+    end
+
     if changed then
         GatherGeneration = GatherGeneration + 1
         VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
@@ -4954,15 +5124,20 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         GatherProbeAttempts = setmetatable({}, { __mode = "k" })
         GatherOriginalPositions = setmetatable({}, { __mode = "k" })
         GatherVisualPinnedAt = setmetatable({}, { __mode = "k" })
-    _G.BobonGatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
-    _G.BobonGatherMoveTrial = setmetatable({}, { __mode = "k" })
+        _G.BobonGatherDamageLeaseUntil = setmetatable({}, { __mode = "k" })
+        _G.BobonGatherMoveTrial = setmetatable({}, { __mode = "k" })
         self.AcquireBlockedUntil = setmetatable({}, { __mode = "k" })
         self.AcquireAttempts = setmetatable({}, { __mode = "k" })
         self.PositionProof = setmetatable({}, { __mode = "k" })
         self.RemotePullRetryAt = setmetatable({}, { __mode = "k" })
+        self.UnknownProof = setmetatable({}, { __mode = "k" })
+        self.VictimWatch = setmetatable({}, { __mode = "k" })
         self.PatrolIndex = 1
         self.PatrolLastSwitch = 0
         self.PatrolLastPoint = nil
+        if self.SpawnRouteIndex then
+            self.SpawnRouteIndex[string.lower(tostring(list[1] or ""))] = 1
+        end
         state.ClusterGeneration = (state.ClusterGeneration or 0) + 1
         state.ClusterActivatedAt = tick()
         state.ClusterPrimary = nil
@@ -4970,6 +5145,13 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         state.ClusterAcquireStartedAt = 0
         state.ClusterAcquireDeadline = 0
         state.ClusterAcquireCompleted = 0
+        state.ClusterFixedAnchor = CFrame.new(cf.Position)
+        state.ClusterPhase = "ACQUIRE"
+        state.ClusterPhaseStartedAt = tick()
+        state.ClusterWaveStartedAt = tick()
+        state.ClusterLastCandidateCount = 0
+        state.ClusterPhaseVerified = 0
+        state.ClusterPhaseTotal = 0
         state.ClusterPileAnchor = nil
         state.ClusterAuthorityProbeTarget = nil
         state.ClusterAuthorityProbeStartedAt = 0
@@ -4982,8 +5164,12 @@ function ClusterFarmController:Activate(mode, names, anchorCF, owner)
         state.ClusterShadowVisualAnchor = nil
         DLog("CLUSTER", "Activate " .. tostring(mode) .. " / " .. tostring(list[1]))
     end
+
     state.ClusterMode = mode
-    state.ClusterAnchor = CFrame.new(cf.Position)
+    if changed or _G.Settings.ClusterFixedPile == false or not state.ClusterAnchor then
+        state.ClusterAnchor = CFrame.new(cf.Position)
+    end
+    if not state.ClusterFixedAnchor then state.ClusterFixedAnchor = CFrame.new(state.ClusterAnchor.Position) end
     state.ClusterMobNames = list
     state.ClusterMobName = list[1]
     state.ClusterOwner = owner or "Farm"
@@ -4992,57 +5178,19 @@ end
 
 function ClusterFarmController:GetPileAnchorPosition()
     local state = _G.State
-    local baseCF = state and state.ClusterAnchor
+    local baseCF = state and (state.ClusterFixedAnchor or state.ClusterAnchor)
     if not baseCF then return nil end
-
     local base = baseCF.Position
-    if _G.Settings.ClusterOnePileUnderfoot == false then
-        state.ClusterPileAnchor = CFrame.new(base)
-        return base
-    end
 
-    -- Stable hover already uses FarmOffsetX. Put the final pile at that same X/Z
-    -- so it is literally below the player's feet instead of 3 studs to the side.
+    -- v21.34: the pile is fixed for the active QUEST/wave. Player acquisition
+    -- travel no longer drags already gathered NPCs around the field.
     local stable = Vector3.new(base.X + (_G.Settings.FarmOffsetX or 0), base.Y, base.Z)
-    local me = HRP()
-    if not me then
-        state.ClusterPileAnchor = CFrame.new(stable)
-        return stable
-    end
-
-    local flatToStable = (Vector3.new(me.Position.X, 0, me.Position.Z)
-        - Vector3.new(stable.X, 0, stable.Z)).Magnitude
-    local acquire = state.ClusterAcquireTarget
-    local acquireHum = acquire and acquire:FindFirstChildOfClass("Humanoid")
-    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
-    -- Do not call IsVerified() here: IsVerified itself asks for the pile anchor.
-    -- The acquire handle may remain set for one main-loop tick after ownership
-    -- transfers; following it for that tiny window keeps the pile underfoot.
-    local acquireLive = acquire and acquire.Parent and self:IsModelAllowed(acquire)
-        and acquireHum and acquireHum.Health > 0 and acquireRoot and acquireRoot.Parent
-    local follow = _G.Settings.ClusterPileFollowDuringSweep ~= false
-        and (acquireLive or flatToStable > (_G.Settings.ClusterPileSettleRadius or 20))
-
-    if follow then
-        local groundY = base.Y
-        if _G.Settings.ClusterPileUseAcquireGroundY ~= false and acquireLive then
-            local r = acquireRoot
-            if r and r.Parent then
-                local ok, y = pcall(function() return r.Position.Y end)
-                if ok and type(y) == "number" and y == y then groundY = y end
-            end
-        end
-        local moving = Vector3.new(me.Position.X, groundY, me.Position.Z)
-        state.ClusterPileAnchor = CFrame.new(moving)
-        return moving
-    end
-
     state.ClusterPileAnchor = CFrame.new(stable)
     return stable
 end
 
 function ClusterFarmController:GetHoverCFrame(height)
-    local anchor = _G.State and _G.State.ClusterAnchor
+    local anchor = _G.State and (_G.State.ClusterFixedAnchor or _G.State.ClusterAnchor)
     if not anchor then return nil end
     local p = anchor.Position
     local h = height or _G.Settings.FarmHeight or 15
@@ -5086,6 +5234,15 @@ function ClusterFarmController:IsVerified(model)
         if ClientOwnsMob(root) ~= true then
             GatherAuthorityClass[root] = nil
             VerifiedGatherRoots[root] = nil
+            return false
+        end
+    elseif authority == "PERSIST" then
+        -- Unknown owner API is allowed only after a no-rewrite persistence proof.
+        -- If a working API explicitly says server-owned, immediately revoke it.
+        if ClientOwnsMob(root) == false then
+            GatherAuthorityClass[root] = nil
+            VerifiedGatherRoots[root] = nil
+            self.PositionProof[root] = nil
             return false
         end
     elseif authority == "DAMAGE-LEASE" then
@@ -5440,8 +5597,10 @@ end
 -- after ClientOwnsMob becomes true. Unknown ownership is never treated as safe.
 function ClusterFarmController:GetAcquireTarget()
     local state = _G.State
-    if not state or (state.ClusterMode ~= "QUEST" and state.ClusterMode ~= "SKIP")
-        or _G.Settings.ClusterAcquireSweep == false or not self:PolicyValid() then
+    local mode = state and state.ClusterMode
+    local supported = mode == "QUEST" or mode == "SKIP" or mode == "RAID"
+    if not state or not supported or _G.Settings.ClusterAcquireSweep == false
+        or not self:PolicyValid() then
         if state then
             state.ClusterAcquireTarget = nil
             state.ClusterAcquireStartedAt = 0
@@ -5450,20 +5609,14 @@ function ClusterFarmController:GetAcquireTarget()
         return nil
     end
 
-    if state.ClusterMode == "QUEST"
-        and _G.Settings.ClusterQuestPhysicalFallback ~= true then
+    if _G.Settings.ClusterAcquireBeforeAttack ~= false and state.ClusterPhase == "KILL" then
         state.ClusterAcquireTarget = nil
         state.ClusterAcquireStartedAt = 0
         state.ClusterAcquireDeadline = 0
         return nil
     end
-    if state.ClusterMode == "SKIP"
-        and _G.Settings.ClusterSkipPhysicalFallback == false then
-        state.ClusterAcquireTarget = nil
-        state.ClusterAcquireStartedAt = 0
-        state.ClusterAcquireDeadline = 0
-        return nil
-    end
+    if mode == "QUEST" and _G.Settings.ClusterQuestPhysicalFallback ~= true then return nil end
+    if mode == "SKIP" and _G.Settings.ClusterSkipPhysicalFallback == false then return nil end
 
     local now = tick()
     local current = state.ClusterAcquireTarget
@@ -5472,9 +5625,9 @@ function ClusterFarmController:GetAcquireTarget()
         if now <= (state.ClusterAcquireDeadline or 0) then return current end
         local attempts = (self.AcquireAttempts[current] or 0) + 1
         self.AcquireAttempts[current] = attempts
-        local retryAfter = attempts >= (_G.Settings.ClusterAcquireMaxAttempts or 1)
-            and (_G.Settings.ClusterAcquireCycleRetry or 20)
-            or (_G.Settings.ClusterAcquireRetry or 1.2)
+        local retryAfter = attempts >= (_G.Settings.ClusterAcquireMaxAttempts or 3)
+            and (_G.Settings.ClusterAcquireCycleRetry or 0.75)
+            or (_G.Settings.ClusterAcquireRetry or 0.06)
         self.AcquireBlockedUntil[current] = now + retryAfter
     elseif current and self:IsVerified(current) then
         self.AcquireAttempts[current] = nil
@@ -5490,63 +5643,241 @@ function ClusterFarmController:GetAcquireTarget()
         local model, root = entry.Model, entry.Root
         if model and root and root.Parent and self:IsModelAllowed(model)
             and not self:IsVerified(model)
-            and not _G.BobonGatherMoveTrial[root]
             and (self.AcquireBlockedUntil[model] or 0) <= now
             and ClientOwnsMob(root) ~= true then
             local ok, livePos = pcall(function() return root.Position end)
-            local pos = entry.Position or GatherOriginalPositions[root]
-                or (ok and livePos or nil)
+            local pos = entry.Position or GatherOriginalPositions[root] or (ok and livePos or nil)
             if pos and IsValidPos(pos) then
                 acquirePool[#acquirePool + 1] = {
-                    Model = model,
-                    Root = root,
-                    Position = pos,
-                    PlayerDistance = me and (pos - me.Position).Magnitude or 0,
+                    Model=model, Root=root, Position=pos,
+                    PlayerDistance=me and (pos-me.Position).Magnitude or 0,
                 }
             end
         end
     end
 
-    -- v21.21 group sweep: choose the real mob whose neighborhood covers the most
-    -- still-unowned mobs. One proximity pass can therefore transfer several nearby
-    -- assemblies instead of forcing a strict mob-by-mob tour.
     local best, bestDist, bestCoverage = nil, nil, -1
-    local groupRadius = math.max(25,
-        tonumber(_G.Settings.ClusterAcquireGroupRadius) or 90)
+    local groupRadius = math.max(25, tonumber(_G.Settings.ClusterAcquireGroupRadius) or 240)
     for _, row in ipairs(acquirePool) do
         local coverage = 1
         if _G.Settings.ClusterAcquirePreferCoverage ~= false then
             coverage = 0
             for _, other in ipairs(acquirePool) do
-                if (other.Position - row.Position).Magnitude <= groupRadius then
-                    coverage = coverage + 1
-                end
+                if (other.Position-row.Position).Magnitude <= groupRadius then coverage = coverage + 1 end
             end
         end
-        if coverage > bestCoverage
-            or (coverage == bestCoverage
-                and (bestDist == nil or row.PlayerDistance < bestDist)) then
-            best = row.Model
-            bestDist = row.PlayerDistance
-            bestCoverage = coverage
+        if coverage > bestCoverage or (coverage == bestCoverage
+            and (bestDist == nil or row.PlayerDistance < bestDist)) then
+            best, bestDist, bestCoverage = row.Model, row.PlayerDistance, coverage
         end
     end
+
     if best then
         state.ClusterAcquireTarget = best
         state.ClusterAcquireStartedAt = now
         local eta = (bestDist or 0) / math.max(1,
-            _G.Settings.SkipTravelSpeed or _G.Settings.FlySpeed or 180)
+            _G.Settings.ClusterAcquireTravelSpeed or _G.Settings.FlySpeed or 180)
         state.ClusterAcquireDeadline = now + math.clamp(
-            eta + (_G.Settings.ClusterAcquireSettle or 0.7),
-            _G.Settings.ClusterAcquireTimeout or 0.9,
-            _G.Settings.ClusterAcquireMaxTimeout or 4.0)
+            eta + (_G.Settings.ClusterAcquireSettle or 0.20),
+            _G.Settings.ClusterAcquireTimeout or 0.75,
+            _G.Settings.ClusterAcquireMaxTimeout or 1.80)
     end
     return best
 end
 
--- v21.32 ACTIVE FIELD SWEEP. No verified target no longer means park forever.
+-- v21.34 explicit farm phases. A new live mob reopens ACQUIRE. We gather for a
+-- bounded budget so one permanently server-owned NPC cannot freeze the whole kaitun.
+function ClusterFarmController:UpdatePhase()
+    local state = _G.State
+    if not state or not self:PolicyValid() then return "OFF",0,0 end
+    local now = tick()
+    local total, verified = 0, 0
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model = entry.Model
+        local hum = model and model:FindFirstChildOfClass("Humanoid")
+        if model and hum and hum.Health > 0 and self:IsModelAllowed(model) then
+            total = total + 1
+            if self:IsVerified(model) then verified = verified + 1 end
+        end
+    end
+
+    local previous = tonumber(state.ClusterLastCandidateCount) or 0
+    if _G.Settings.ClusterWaveNewMobPreempt ~= false and total > previous then
+        state.ClusterPhase = "ACQUIRE"
+        state.ClusterPhaseStartedAt = now
+        state.ClusterWaveStartedAt = now
+    end
+    state.ClusterLastCandidateCount = total
+    state.ClusterPhaseVerified = verified
+    state.ClusterPhaseTotal = total
+
+    if total <= 0 then
+        state.ClusterPhase = "ACQUIRE"
+        state.ClusterPhaseStartedAt = state.ClusterPhaseStartedAt > 0 and state.ClusterPhaseStartedAt or now
+        return state.ClusterPhase, verified, total
+    end
+
+    if verified >= total then
+        if state.ClusterPhase ~= "KILL" then
+            state.ClusterPhase = "KILL"
+            state.ClusterPhaseStartedAt = now
+        end
+    elseif state.ClusterPhase ~= "ACQUIRE" and state.ClusterPhase ~= "KILL" then
+        state.ClusterPhase = "ACQUIRE"
+        state.ClusterPhaseStartedAt = now
+    elseif state.ClusterPhase == "ACQUIRE" then
+        if now - (state.ClusterPhaseStartedAt or now)
+            >= (_G.Settings.ClusterAcquirePhaseBudget or 4.0) then
+            state.ClusterPhase = "KILL"
+            state.ClusterPhaseStartedAt = now
+        end
+    elseif state.ClusterPhase == "KILL" then
+        if verified < total and now - (state.ClusterPhaseStartedAt or now)
+            >= (_G.Settings.ClusterKillPhaseSlice or 1.15) then
+            state.ClusterPhase = "ACQUIRE"
+            state.ClusterPhaseStartedAt = now
+        end
+    end
+    return state.ClusterPhase, verified, total
+end
+
+-- PERSIST is only an executor fallback. If the visual stack survives but that exact
+-- Humanoid never loses real HP while we are parked over the pile, revoke the local
+-- pin, restore its original position, and reacquire instead of leaving a statue.
+function ClusterFarmController:AuditVictimLiveness()
+    local state = _G.State
+    if not state or state.ClusterPhase ~= "KILL" or not self:PolicyValid() then return 0 end
+    if not TravelManager or not TravelManager:IsAtCombatAnchor() then return 0 end
+    local now, revoked = tick(), 0
+    local timeout = math.max(0.6, tonumber(_G.Settings.ClusterPersistNoDamageTimeout) or 1.35)
+
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, root, hum = entry.Model, entry.Root, entry.Humanoid
+        if model and root and hum and hum.Health > 0 and self:IsVerified(model) then
+            local watch = self.VictimWatch[model]
+            if not watch then
+                watch = {Health=hum.Health, LastDamage=now, SeenAt=now}
+                self.VictimWatch[model] = watch
+            else
+                local current = tonumber(hum.Health) or 0
+                if current < (tonumber(watch.Health) or current) - 0.01 then
+                    watch.LastDamage = now
+                    pcall(function() self:ConfirmDamageProof(model) end)
+                elseif current > (tonumber(watch.Health) or current) + 0.01 then
+                    watch.LastDamage = now
+                end
+                watch.Health = current
+            end
+
+            if GatherAuthorityClass[root] == "PERSIST"
+                and now - math.max(watch.LastDamage or now, watch.SeenAt or now) >= timeout then
+                VerifiedGatherRoots[root] = nil
+                DamageProvenGatherRoots[root] = nil
+                GatherAuthorityClass[root] = nil
+                self.UnknownProof[root] = nil
+                self.PositionProof[root] = nil
+                self.VictimWatch[model] = nil
+                self.AcquireBlockedUntil[model] = now + (_G.Settings.ClusterPersistReacquireCooldown or 0.55)
+                local original = GatherOriginalPositions[root]
+                if original and IsValidPos(original) then
+                    pcall(function()
+                        local rot = root.CFrame.Rotation
+                        root.CFrame = CFrame.new(original) * rot
+                    end)
+                end
+                state.ClusterPhase = "ACQUIRE"
+                state.ClusterPhaseStartedAt = now
+                if state.ClusterPrimary == model then state.ClusterPrimary = nil end
+                if state.FarmTarget == model then state.FarmTarget = nil end
+                if state.CurrentTarget == model then state.CurrentTarget = nil end
+                revoked = revoked + 1
+            end
+        end
+    end
+    return revoked
+end
+
+-- v21.33 ACTIVE FIELD SWEEP. No verified target no longer means park forever.
 -- Prefer a real live quest root; if none is currently streamed, patrol a compact
 -- ring around the active quest field until the next wave becomes visible.
+function ClusterFarmController:RememberSpawnPoint(mobName, pos)
+    if type(mobName) ~= "string" or typeof(pos) ~= "Vector3" or not IsAllowedWorldPosition(pos) then return end
+    local key = string.lower(mobName)
+    self.SpawnMemory = self.SpawnMemory or {}
+    local list = self.SpawnMemory[key]
+    if type(list) ~= "table" then list = {}; self.SpawnMemory[key] = list end
+    local merge = math.max(6, tonumber(_G.Settings.ClusterSpawnMemoryMerge) or 18)
+    for _, oldPos in ipairs(list) do
+        if typeof(oldPos) == "Vector3" and (oldPos - pos).Magnitude <= merge then return end
+    end
+    list[#list + 1] = pos
+    local limit = math.max(4, math.floor(tonumber(_G.Settings.ClusterSpawnMemoryLimit) or 24))
+    while #list > limit do table.remove(list, 1) end
+end
+
+function ClusterFarmController:GetSpawnSweepPoints(fallbackCF)
+    local state = _G.State
+    if not state or state.ClusterMode ~= "QUEST" then return {} end
+    local mobName = tostring(state.ClusterMobName or "")
+    if mobName == "" then return {} end
+    local key = string.lower(mobName)
+    local now = tick()
+    self.SpawnMarkerCache = self.SpawnMarkerCache or {}
+    self.SpawnMarkerCacheAt = self.SpawnMarkerCacheAt or {}
+    local points = self.SpawnMarkerCache[key]
+    if type(points) ~= "table"
+        or now - (tonumber(self.SpawnMarkerCacheAt[key]) or 0)
+            >= (_G.Settings.ClusterSpawnMarkerRefresh or 2.0) then
+        points = {}
+        local origin = workspace:FindFirstChild("_WorldOrigin")
+        local spawns = origin and origin:FindFirstChild("EnemySpawns")
+        if spawns then
+            for _, marker in ipairs(spawns:GetChildren()) do
+                local markerName = string.lower(tostring(marker.Name or ""))
+                if string.find(markerName, key, 1, true) then
+                    local pos
+                    if marker:IsA("BasePart") then
+                        pos = marker.Position
+                    elseif marker:IsA("Model") then
+                        local part = marker:FindFirstChild("HumanoidRootPart")
+                            or marker.PrimaryPart
+                            or marker:FindFirstChildWhichIsA("BasePart", true)
+                        if part then pos = part.Position else pcall(function() pos = marker:GetPivot().Position end) end
+                    end
+                    if typeof(pos) == "Vector3" and IsAllowedWorldPosition(pos) then
+                        local duplicate = false
+                        for _, existing in ipairs(points) do
+                            if (existing - pos).Magnitude <= (_G.Settings.ClusterSpawnMemoryMerge or 18) then
+                                duplicate = true
+                                break
+                            end
+                        end
+                        if not duplicate then
+                            points[#points + 1] = pos
+                            self:RememberSpawnPoint(mobName, pos)
+                        end
+                    end
+                end
+            end
+        end
+        self.SpawnMarkerCache[key] = points
+        self.SpawnMarkerCacheAt[key] = now
+    end
+    if #points == 0 then
+        local memory = self.SpawnMemory and self.SpawnMemory[key]
+        if type(memory) == "table" then
+            for _, pos in ipairs(memory) do
+                if typeof(pos) == "Vector3" and IsAllowedWorldPosition(pos) then points[#points + 1] = pos end
+            end
+        end
+    end
+    if #points == 0 and fallbackCF then
+        local p = typeof(fallbackCF) == "CFrame" and fallbackCF.Position or fallbackCF
+        if typeof(p) == "Vector3" and IsAllowedWorldPosition(p) then points[1] = p end
+    end
+    return points
+end
+
 function ClusterFarmController:GetFieldSweepGoal(fallbackCF)
     local state = _G.State
     if not state or state.ClusterMode ~= "QUEST"
@@ -5558,7 +5889,7 @@ function ClusterFarmController:GetFieldSweepGoal(fallbackCF)
     local anchorCF = state.ClusterAnchor or fallbackCF
     if not anchorCF then return nil, nil end
     local anchor = typeof(anchorCF) == "CFrame" and anchorCF.Position or anchorCF
-    local searchRadius = math.max(250, tonumber(_G.Settings.ClusterQuestSearchRadius) or 2400)
+    local searchRadius = math.max(300, tonumber(_G.Settings.ClusterQuestSearchRadius) or 3000)
 
     local bestRoot, bestDist
     if folder then
@@ -5569,6 +5900,7 @@ function ClusterFarmController:GetFieldSweepGoal(fallbackCF)
                 if hum and hum.Health > 0 and root and root.Parent then
                     local ok, pos = pcall(function() return root.Position end)
                     if ok and IsAllowedWorldPosition(pos) and (pos - anchor).Magnitude <= searchRadius then
+                        self:RememberSpawnPoint(tostring(state.ClusterMobName or mob.Name), pos)
                         local d = me and (pos - me.Position).Magnitude or 0
                         if not bestDist or d < bestDist then bestRoot, bestDist = root, d end
                     end
@@ -5577,36 +5909,37 @@ function ClusterFarmController:GetFieldSweepGoal(fallbackCF)
         end
     end
     if bestRoot then
-        self.PatrolLastPoint = nil
+        _G.BobonDiagnostics.Bring = "LIVE-SPAWN-SWEEP"
         return bestRoot, "LIVE"
     end
 
-    local r1 = tonumber(_G.Settings.ClusterFieldPatrolRadius) or 165
-    local r2 = tonumber(_G.Settings.ClusterFieldPatrolOuterRadius) or 310
-    local offsets = {
-        Vector3.new(0,0,0),
-        Vector3.new(r1,0,0), Vector3.new(0,0,r1), Vector3.new(-r1,0,0), Vector3.new(0,0,-r1),
-        Vector3.new(r2,0,r2*0.35), Vector3.new(-r2*0.35,0,r2),
-        Vector3.new(-r2,0,-r2*0.35), Vector3.new(r2*0.35,0,-r2),
-    }
+    local points = self:GetSpawnSweepPoints(fallbackCF)
+    if #points == 0 then return nil, nil end
+    local key = string.lower(tostring(state.ClusterMobName or ""))
+    self.SpawnRouteIndex = self.SpawnRouteIndex or {}
+    local idx = math.clamp(math.floor(tonumber(self.SpawnRouteIndex[key]) or 1), 1, #points)
     local now = tick()
-    local idx = math.clamp(tonumber(self.PatrolIndex) or 1, 1, #offsets)
-    local function pointFor(i)
-        local p = anchor + offsets[i]
-        local h = math.max(10, tonumber(_G.Settings.ClusterFieldPatrolHeight) or 18)
-        return Vector3.new(p.X, math.max(p.Y + h, _G.Settings.MinY + 2), p.Z)
-    end
-    local point = pointFor(idx)
-    local arrived = me and (Vector3.new(me.Position.X,0,me.Position.Z)
-        - Vector3.new(point.X,0,point.Z)).Magnitude <= (_G.Settings.ClusterFieldPatrolArrival or 14)
-    if arrived or now - (self.PatrolLastSwitch or 0) >= (_G.Settings.ClusterFieldPatrolHold or 0.90) then
-        idx = idx % #offsets + 1
-        self.PatrolIndex = idx
+    local height = math.max(12, tonumber(_G.Settings.ClusterFieldPatrolHeight) or 24)
+    local raw = points[idx]
+    local goal = Vector3.new(raw.X, math.max(raw.Y + height, _G.Settings.MinY + 2), raw.Z)
+    local flatDist = me and (Vector3.new(me.Position.X,0,me.Position.Z)
+        - Vector3.new(goal.X,0,goal.Z)).Magnitude or math.huge
+    local arrived = flatDist <= (_G.Settings.ClusterFieldPatrolArrival or 18)
+    if arrived then
+        if self.PatrolLastSwitch == 0 then self.PatrolLastSwitch = now end
+        if now - self.PatrolLastSwitch >= (_G.Settings.ClusterFieldPatrolHold or 0.55) then
+            idx = idx % #points + 1
+            self.SpawnRouteIndex[key] = idx
+            self.PatrolLastSwitch = now
+            raw = points[idx]
+            goal = Vector3.new(raw.X, math.max(raw.Y + height, _G.Settings.MinY + 2), raw.Z)
+        end
+    else
         self.PatrolLastSwitch = now
-        point = pointFor(idx)
     end
-    self.PatrolLastPoint = point
-    return CFrame.new(point), "PATROL"
+    self.PatrolLastPoint = goal
+    _G.BobonDiagnostics.Bring = ("SPAWN-MARKER %d/%d"):format(idx, #points)
+    return CFrame.new(goal), "SPAWN"
 end
 
 function ClusterFarmController:SelectPrimary()
@@ -5633,6 +5966,23 @@ function ClusterFarmController:SelectPrimary()
         end
     end
     state.ClusterPrimary = best
+    return best
+end
+
+function ClusterFarmController:SelectFallbackRealTarget()
+    local me = HRP()
+    local best, bestDist
+    for _, entry in ipairs(self.LastBatch or {}) do
+        local model, hum, root = entry.Model, entry.Humanoid, entry.Root
+        if model and model.Parent and hum and hum.Health > 0 and root and root.Parent
+            and self:IsModelAllowed(model) and not self:IsVerified(model) then
+            local ok, pos = pcall(function() return root.Position end)
+            if ok and IsValidPos(pos) then
+                local d = me and (pos-me.Position).Magnitude or 0
+                if not bestDist or d < bestDist then best, bestDist = model, d end
+            end
+        end
+    end
     return best
 end
 
@@ -5676,12 +6026,19 @@ end
 function ClusterFarmController:RestackBatch()
     if not self:PolicyValid() then return 0 end
     local state = _G.State
-    local anchorCF = state and state.ClusterAnchor
+    local anchorCF = state and (state.ClusterFixedAnchor or state.ClusterAnchor)
     if not anchorCF then return 0 end
 
     local anchor = self:GetPileAnchorPosition() or anchorCF.Position
     local now = tick()
     local kept, verifiedCount = {}, 0
+    local me = HRP()
+
+    local proofTime = math.max(0.08, tonumber(_G.Settings.ClusterUnknownPersistenceTime) or 0.18)
+    local proofChecks = math.max(2, math.floor(tonumber(_G.Settings.ClusterUnknownPersistenceChecks) or 2))
+    local proofRadius = tonumber(_G.Settings.ClusterUnknownPersistenceRadius) or 8
+    local rejectRadius = tonumber(_G.Settings.ClusterUnknownPersistenceRejectRadius) or 22
+    local touchRadius = tonumber(_G.Settings.ClusterAcquireTouchRadius) or 95
 
     local function writeRoot(root)
         return pcall(function()
@@ -5691,12 +6048,25 @@ function ClusterFarmController:RestackBatch()
         end)
     end
 
-    local proofWindow = tonumber(_G.Settings.ClusterDamageLeaseProofWindow) or 0.28
-    local proofChecks = math.max(2,
-        math.floor(tonumber(_G.Settings.ClusterDamageLeaseProofChecks) or 5))
-    local proofRadius = tonumber(_G.Settings.ClusterDamageLeaseProofRadius) or 7
-    local rejectRadius = tonumber(_G.Settings.ClusterDamageLeaseSnapRejectRadius) or 18
-    local leaseTTL = tonumber(_G.Settings.ClusterDamageLeaseTTL) or 1.80
+    local function revoke(model, root, restore)
+        VerifiedGatherRoots[root] = nil
+        DamageProvenGatherRoots[root] = nil
+        GatherAuthorityClass[root] = nil
+        self.PositionProof[root] = nil
+        self.UnknownProof[root] = nil
+        if restore then
+            local original = GatherOriginalPositions[root]
+            if original and IsValidPos(original) then
+                pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.CFrame = CFrame.new(original) * rot
+                end)
+            end
+        end
+        if model then
+            self.AcquireBlockedUntil[model] = now + (_G.Settings.ClusterPersistReacquireCooldown or 0.55)
+        end
+    end
 
     for _, entry in ipairs(self.LastBatch or {}) do
         local model = entry.Model
@@ -5715,64 +6085,73 @@ function ClusterFarmController:RestackBatch()
             end
 
             local own = ClientOwnsMob(root)
+            local authority = GatherAuthorityClass[root]
+
             if own == true then
                 if writeRoot(root) then
                     GatherAuthorityClass[root] = "OWNED"
+                    VerifiedGatherRoots[root] = now
+                    self.PositionProof[root] = nil
+                    self.UnknownProof[root] = nil
                     _G.BobonGatherDamageLeaseUntil[root] = nil
                     _G.BobonGatherMoveTrial[root] = nil
-                    VerifiedGatherRoots[root] = now
-                    GatherProbeCandidates[root] = nil
-                    GatherProbeFailedUntil[root] = nil
                     verifiedCount = verifiedCount + 1
                 end
-            else
-                local trial = _G.BobonGatherMoveTrial[root]
-                if trial then
-                    -- IMPORTANT: do not rewrite during proof. A server-owned root must get
-                    -- a chance to snap back; otherwise a local-only statue could pass.
-                    local okTrialPos, trialPos = pcall(function() return root.Position end)
-                    if okTrialPos and IsValidPos(trialPos) then
-                        local dist = (trialPos - trial.Anchor).Magnitude
+
+            elseif authority == "PERSIST" and own ~= false then
+                if writeRoot(root) then
+                    VerifiedGatherRoots[root] = now
+                    verifiedCount = verifiedCount + 1
+                else
+                    revoke(model, root, false)
+                end
+
+            elseif own == nil and _G.Settings.ClusterUnknownPersistenceProof ~= false then
+                local proof = self.UnknownProof[root]
+                if proof then
+                    -- Do not rewrite while proving persistence. A server-owned assembly
+                    -- must be allowed to snap back; a local ghost then fails this test.
+                    local okTrial, trialPos = pcall(function() return root.Position end)
+                    if okTrial and IsValidPos(trialPos) then
+                        local dist = (trialPos - proof.Anchor).Magnitude
                         if dist <= proofRadius then
-                            trial.Checks = (trial.Checks or 0) + 1
-                            if now - (trial.StartedAt or now) >= proofWindow
-                                and trial.Checks >= proofChecks
-                                and self:IsDamageProven(model) then
-                                _G.BobonGatherMoveTrial[root] = nil
-                                GatherAuthorityClass[root] = "DAMAGE-LEASE"
-                                _G.BobonGatherDamageLeaseUntil[root] = now + leaseTTL
+                            proof.Checks = (proof.Checks or 0) + 1
+                            if now - (proof.StartedAt or now) >= proofTime
+                                and proof.Checks >= proofChecks then
+                                self.UnknownProof[root] = nil
+                                self.PositionProof[root] = nil
+                                GatherAuthorityClass[root] = "PERSIST"
                                 VerifiedGatherRoots[root] = now
-                                verifiedCount = verifiedCount + 1
+                                if writeRoot(root) then verifiedCount = verifiedCount + 1 end
                             end
                         elseif dist >= rejectRadius
-                            or now - (trial.StartedAt or now) > proofWindow + 0.35 then
-                            _G.BobonGatherMoveTrial[root] = nil
-                            _G.BobonGatherDamageLeaseUntil[root] = nil
-                            GatherAuthorityClass[root] = nil
-                            VerifiedGatherRoots[root] = nil
+                            or now - (proof.StartedAt or now) > proofTime + 0.35 then
+                            revoke(model, root, false)
                         end
-                    end
-                elseif GatherAuthorityClass[root] == "DAMAGE-LEASE"
-                    and (_G.BobonGatherDamageLeaseUntil[root] or 0) > now
-                    and self:IsDamageProven(model) then
-                    -- Damage-backed lease has already survived a no-rewrite persistence
-                    -- test. Keep the root in the moving underfoot pile until damage goes
-                    -- stale; every later HP delta refreshes the lease.
-                    if writeRoot(root) then
-                        VerifiedGatherRoots[root] = now
-                        -- Do NOT extend the lease here. Only a new real HP delta in
-                        -- ConfirmDamageProof may refresh it.
-                        verifiedCount = verifiedCount + 1
+                    else
+                        revoke(model, root, false)
                     end
                 else
-                    if GatherAuthorityClass[root] == "OWNED"
-                        or GatherAuthorityClass[root] == "DAMAGE-LEASE"
-                        or GatherAuthorityClass[root] == "DAMAGE-TRIAL" then
-                        GatherAuthorityClass[root] = nil
+                    local isAcquire = state.ClusterAcquireTarget == model
+                    local near = me and okPos and IsValidPos(rootPos)
+                        and (rootPos - me.Position).Magnitude <= touchRadius
+                    if isAcquire and near then
+                        if writeRoot(root) then
+                            self.UnknownProof[root] = {
+                                Anchor=anchor, StartedAt=now, Checks=0,
+                                Original=GatherOriginalPositions[root],
+                            }
+                        end
                     end
-                    _G.BobonGatherDamageLeaseUntil[root] = nil
+                end
+
+            else
+                -- Explicit server ownership: never leave a client-only pin/statue.
+                if authority == "PERSIST" or self.UnknownProof[root] then
+                    revoke(model, root, true)
+                else
                     VerifiedGatherRoots[root] = nil
-                    GatherProbeCandidates[root] = nil
+                    GatherAuthorityClass[root] = nil
                 end
             end
         end
@@ -5820,18 +6199,15 @@ function ClusterFarmController:Tick()
     end
 
     local candidates = {}
-    -- v21.32: when authority mode is OFF, do not let its smaller radius hide quest mobs.
-    local questFieldRadius
-    if _G.Settings.ClusterAuthorityEnabled ~= false then
-        questFieldRadius = tonumber(_G.Settings.ClusterAuthorityFieldRadius)
-            or tonumber(_G.Settings.ClusterQuestRadius) or 1200
-    else
-        questFieldRadius = tonumber(_G.Settings.ClusterQuestRadius) or 1200
-    end
+    local questFieldRadius = math.max(
+        tonumber(_G.Settings.ClusterAuthorityFieldRadius) or 0,
+        tonumber(_G.Settings.ClusterQuestRadius) or 0,
+        tonumber(_G.Settings.ClusterQuestSearchRadius) or 0,
+        180)
     local maxDistance = state.ClusterMode == "RAID"
         and math.max(100, tonumber(_G.Settings.RaidGatherRadius) or 700)
         or (state.ClusterMode == "QUEST"
-            and math.max(120, tonumber(_G.Settings.ClusterQuestSearchRadius) or questFieldRadius)
+            and questFieldRadius
             or math.max(100, tonumber(_G.Settings.GatherMaxDistance) or 3000))
 
     for _, mob in ipairs(folder:GetChildren()) do
@@ -5845,6 +6221,9 @@ function ClusterFarmController:Tick()
                         GatherOriginalPositions[root] = pos
                     end
                     local fieldPos = GatherOriginalPositions[root] or pos
+                    if state.ClusterMode == "QUEST" and state.ClusterMobName then
+                        self:RememberSpawnPoint(tostring(state.ClusterMobName), fieldPos)
+                    end
                     -- v21.23: field membership uses the immutable pre-magnet position.
                     -- A pile being towed hundreds of studs during the sweep must NEVER
                     -- disappear from LastBatch just because its current CFrame moved.
@@ -5892,9 +6271,12 @@ function ClusterFarmController:Tick()
     _G.BobonDiagnostics.BringProbe = probes
     _G.BobonDiagnostics.BringReachable = reachable
     _G.BobonDiagnostics.BringMoved = stacked
-
-    if stacked > 0 then
-        _G.BobonDiagnostics.Bring = "AUTHORITY-STACK"
+    local phase, phaseVerified, phaseTotal = self:UpdatePhase()
+    local revokedGhosts = self:AuditVictimLiveness()
+    if revokedGhosts > 0 then
+        _G.BobonDiagnostics.Bring = "REACQUIRE-GHOST"
+    elseif stacked > 0 then
+        _G.BobonDiagnostics.Bring = tostring(phase) .. " " .. tostring(phaseVerified) .. "/" .. tostring(phaseTotal)
     elseif #candidates == 0 then
         _G.BobonDiagnostics.Bring = "WAIT-SPAWN"
     elseif unknown > 0 then
@@ -5928,6 +6310,21 @@ pcall(function()
             pcall(function() ClusterFarmController:RestackBatch() end)
         end
     end)
+end)
+pcall(function()
+    local enemies = workspace:FindFirstChild("Enemies")
+    if enemies then
+        ClusterFarmController.EnemyAddedConnection = enemies.ChildAdded:Connect(function(mob)
+            if not SessionAlive() or not _G.State or _G.State.ClusterMode == "OFF" then return end
+            task.delay(0.03, function()
+                if not SessionAlive() or not mob or not mob.Parent then return end
+                if ClusterFarmController:IsModelAllowed(mob) then
+                    _G.State.ClusterPhase = "ACQUIRE"
+                    _G.State.ClusterPhaseStartedAt = tick()
+                end
+            end)
+        end)
+    end
 end)
 task.spawn(function()
     while SessionAlive() and task.wait(0.03) do
@@ -6849,6 +7246,17 @@ local function BindPlayerDamage(character, humanoid)
         if not SessionAlive() or PlayerDamageCharacter ~= character then return end
         if newHealth < lastHealth then
             _G.State.LastIncomingDamage = tick()
+            -- v21.33 damage-confirmed fallback: some ordinary NPC sword swings use
+            -- generic animation names and expose no transient hitbox.  The first real
+            -- HP loss therefore arms one short dodge against the exact current NPC.
+            local damageTarget = _G.State.CurrentTarget
+            local enemies = workspace:FindFirstChild("Enemies")
+            if damageTarget and enemies and damageTarget.Parent == enemies
+                and (_G.State.Mode == "Farming" or _G.State.Mode == "Bossing"
+                    or _G.State.Mode == "GettingItem") then
+                _G.State.DamageDodgeTarget = damageTarget
+                _G.State.DamageDodgeUntil = tick() + (_G.Settings.DodgeDamageFallbackHold or 1.10)
+            end
             local maxHealth = tonumber(humanoid.MaxHealth) or 0
             local hpPct = maxHealth > 0 and (newHealth / maxHealth) * 100 or 100
             if hpPct <= (_G.Settings.EmergencyHealthPercent or 55) then
@@ -7067,7 +7475,7 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
---    v21.32 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
+--    v21.33 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
 --   * Never scans unrelated nearby NPCs as threats; only the TravelManager active target.
 --   * No generic Action-priority fallback: ordinary combat/idle animations cannot trigger dodge.
 --   * A threat must be seen in consecutive monitor samples before movement changes.
@@ -7213,6 +7621,11 @@ local function TargetThreat()
     local dist=(root.Position-me.Position).Magnitude
     if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
 
+    if _G.State.DamageDodgeTarget == target
+        and tick() <= (tonumber(_G.State.DamageDodgeUntil) or 0) then
+        return target,root,"damage-confirmed"
+    end
+
     local anim,why=NamedAttackAnimation(hum)
     if anim then return target,root,why end
 
@@ -7288,6 +7701,10 @@ function DodgeController:Finish(reason)
     self.PendingCount=0
     _G.State.DodgeActive=false
     _G.State.DodgeThreatName=nil
+    if _G.State.DamageDodgeTarget == self.Threat then
+        _G.State.DamageDodgeTarget = nil
+        _G.State.DamageDodgeUntil = 0
+    end
     TravelManager:ClearDodgeOffset()
     _G.BobonDiagnostics.Dodge="CLEAR:"..tostring(reason or "safe")
     DLog("DODGE","confirmed safe → resume exact active target")
@@ -7392,7 +7809,7 @@ task.spawn(function()
         pcall(function() DodgeController:TryDodge() end)
     end
 end)
-end -- v21.32 target-lock dodge lexical scope
+end -- v21.33 target-lock dodge lexical scope
 -- ══════════════════════════════════════════════════════════════════
 --         RECOVERY MANAGER v7 (Fix #2,#6)
 --   State machine: STOP → CLEANUP → RESET → WAIT → CHECK → IDLE
@@ -8291,6 +8708,9 @@ end
 -- ══════════════════════════════════════════════════════════════════
 local SwordProgressionController = {
     LastLegendaryProbe = 0,
+    LastLegendarySuccessAt = 0,
+    LastLegendaryFailedAt = 0,
+    LegendaryFailStreak = 0,
     LastTTKProbe = 0,
     LastStatus = "idle",
 }
@@ -8330,24 +8750,60 @@ function SwordProgressionController:InvalidateInventory()
     WeaponInventoryCache.At = 0
 end
 
+function SwordProgressionController:GetMissingLegendary()
+    local missing = {}
+    for index, aliases in ipairs(LegendarySwordAliases) do
+        if not InventoryHasAny(aliases) then
+            missing[#missing + 1] = {Index=index, Aliases=aliases, Label=aliases[#aliases] or aliases[1]}
+        end
+    end
+    return missing
+end
+
 function SwordProgressionController:TryLegendaryDealer()
     if not _G.Settings.AutoBuySwords or GetSea() ~= 2 or Level() < 850 then return false end
-    local missing = false
-    for _, aliases in ipairs(LegendarySwordAliases) do
-        if not InventoryHasAny(aliases) then missing = true break end
-    end
-    if not missing or Beli() < 2000000 then return false end
+    local missing = self:GetMissingLegendary()
+    if #missing == 0 or Beli() < 2000000 then return false end
     if tick() - self.LastLegendaryProbe < (_G.Settings.LegendarySwordProbe or 8) then return false end
+    if not _G.BobonEconomy:TryBegin("TTK") then return false end
     self.LastLegendaryProbe = tick()
-    -- The dealer sells exactly one of the three per spawn. Public current
-    -- implementations probe choices 1/2/3; the server accepts only the live one.
-    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "1") end)
-    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "2") end)
-    pcall(function() CommF_:InvokeServer("LegendarySwordDealer", "3") end)
-    self:InvalidateInventory()
-    self.LastStatus = "Legendary Sword Dealer probe"
+    _G.BobonEconomy:PauseFarm("TTK • Legendary Sword Dealer", 1.25)
+
+    local labels = {}
+    for _, row in ipairs(missing) do labels[#labels + 1] = tostring(row.Label) end
+    self.LastStatus = "TTK • Missing " .. table.concat(labels, "/")
+    _G.BobonStatus = self.LastStatus
+    _G.BobonEconomy:Notice(self.LastStatus, 2.0)
     DLog("SWORD", self.LastStatus)
-    return true
+
+    local beforeMissing = #missing
+    local beforeBeli = Beli()
+    local acquired = false
+    for _, choice in ipairs({"1","2","3"}) do
+        pcall(function() CommF_:InvokeServer("LegendarySwordDealer", choice) end)
+        task.wait(0.08)
+        self:InvalidateInventory()
+        local after = self:GetMissingLegendary()
+        if #after < beforeMissing or Beli() < beforeBeli then
+            acquired = true
+            break
+        end
+    end
+
+    if acquired then
+        self.LastLegendarySuccessAt = tick()
+        self.LastLegendaryFailedAt = 0
+        self.LegendaryFailStreak = 0
+        self.LastStatus = "TTK • Legendary sword acquired"
+        _G.BobonStatus = self.LastStatus
+        _G.BobonEconomy:Notice(self.LastStatus, 3.0)
+        DLog("SWORD", self.LastStatus)
+    else
+        self.LastLegendaryFailedAt = tick()
+        self.LegendaryFailStreak = (self.LegendaryFailStreak or 0) + 1
+    end
+    _G.BobonEconomy:End("TTK")
+    return acquired
 end
 
 function SwordProgressionController:TrainTTKPrerequisite()
@@ -8383,15 +8839,22 @@ function SwordProgressionController:TryTrueTripleKatana()
         if not owned or mastery < target then return false end
     end
     if tick() - self.LastTTKProbe < 8 then return false end
+    if not _G.BobonEconomy:TryBegin("TTK") then return false end
     self.LastTTKProbe = tick()
-    -- Mysterious Man purchase flow: check/claim then buy. Server validates
-    -- possession + 300 mastery on all three swords + 2,000,000 Beli.
+    _G.BobonEconomy:PauseFarm("TTK • True Triple Katana", 1.50)
+    _G.BobonEconomy:Notice("TTK → purchase", 2.0)
+
     pcall(function() CommF_:InvokeServer("MysteriousMan", "1") end)
     pcall(function() CommF_:InvokeServer("MysteriousMan", "2") end)
+    task.wait(0.35)
     self:InvalidateInventory()
-    self.LastStatus = "True Triple Katana purchase probe"
+    local verified = InventoryHas("True Triple Katana") == true
+    self.LastStatus = verified and "TTK ✓ acquired" or "TTK • purchase not verified"
+    _G.BobonStatus = self.LastStatus
+    _G.BobonEconomy:Notice(self.LastStatus, verified and 4.0 or 2.5)
     DLog("SWORD", self.LastStatus)
-    return true
+    _G.BobonEconomy:End("TTK")
+    return verified
 end
 
 function SwordProgressionController:Tick()
@@ -8401,29 +8864,23 @@ function SwordProgressionController:Tick()
     -- Kaitun-only sword work: do NOT buy random shop swords.
     -- Keep the TTK prerequisite chain because it is an explicit kaitun goal.
     -- Training never owns movement: normal quest/cluster farm supplies the kills.
+    local missing = self:GetMissingLegendary()
+    if #missing > 0 and GetSea() == 2 and Level() >= 850 then
+        local labels = {}
+        for _, row in ipairs(missing) do labels[#labels + 1] = tostring(row.Label) end
+        self.LastStatus = "TTK • Missing " .. table.concat(labels, "/")
+    end
     self:TryLegendaryDealer()
     if self:TrainTTKPrerequisite() then return true end
     self:TryTrueTripleKatana()
     return false
 end
 
-task.spawn(function()
-    while SessionAlive() and task.wait(3) do
-        if _G.State.ActiveActionToken == 0 then
-            local meleeTraining = false
-            if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
-                local ok, result = pcall(function() return FightingStyleController:Tick() end)
-                meleeTraining = ok and result == true
-            end
-            if not meleeTraining and _G.Settings.AutoBuySwords then
-                pcall(function() SwordProgressionController:Tick() end)
-            end
-        end
-    end
-end)
+-- v21.35: removed the old independent 3-second melee/sword worker.
+-- Passive mastery selection + TTK probes are executed by the one Priority Scheduler.
 
 
--- v21.32: purchase execution moved to the SINGLE ECONOMY WORKER after FruitManager.
+-- v21.33: purchase execution moved to the SINGLE ECONOMY WORKER after FruitManager.
 -- This prevents Melee and Gacha from spending Beli concurrently.
 
 -- ══════════════════════════════════════════════════════════════════
@@ -10493,14 +10950,11 @@ function ItemProgression:CheckRaceV2()
     end)
 end
 
--- Progression is deliberately a *farm-window* operation.  A valid quest is
--- never interrupted by an optional item or boss; Sea 2/3 and item checks run
--- only after the current quest is finished (or before the first quest).
--- `allowSea` also accepts a wrong quest so the level-700/1500 sea gate cannot
--- accidentally send the player to a next-sea quest before unlocking it.
--- v21.32 sticky hard-progression intent.  These milestones must finish before
--- ordinary level farming is allowed to resume; retry cooldowns only delay the next
--- attempt, they no longer create a 0.15s window where Farm/Boss steals movement.
+-- Permanent progression is driven by one watcher and may preempt ordinary level
+-- farming as soon as a real prerequisite is ready.  Every movement-heavy branch
+-- still has to claim ActionToken/PrepareClaimedAction, so there is only one owner.
+-- Sticky hard milestones (Saber/Sea gates) remain blocking until server progress
+-- proves completion; optional work uses bounded retries and relinquishes cleanly.
 function ItemProgression:GetBlockingReason()
     local now=tick()
     if now-(self.BlockingCheckedAt or 0)<0.50 then
@@ -10533,12 +10987,11 @@ end
 function ItemProgression:RunChecks(allowSea, allowOptional)
     if not allowSea or not _G.State:CanAct() then return false end
 
-    -- v21.32: Melee purchases are handled by the single economy worker, not this
+    -- v21.33: Melee purchases are handled by the single economy worker, not this
     -- progression scheduler.  This avoids duplicate purchase coroutines racing Gacha.
 
-    -- v21.32: ready style-unlock work (key/Previous Hero/essence) preempts normal farm.
-    if allowOptional and FightingStyleUnlockController
-        and FightingStyleUnlockController:TryRun() then return true end
+    -- v21.35: ready melee unlock work is called once by Priority Scheduler,
+    -- not again from inside this item chain.
 
     -- Sea-1 permanent milestone before world exit.
     if allowOptional and self:CheckSaber() then return true end
@@ -10553,9 +11006,7 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     if allowOptional then
         if MaterialPrepController and MaterialPrepController:TryRunCurrentSea() then return true end
 
-        local meleeBusy=false
-        pcall(function() meleeBusy=FightingStyleController:Tick()==true end)
-        if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
+        -- Passive melee mastery + TTK probing are scheduler-owned in v21.35.
 
         if self:CheckKabucha() then return true end
         if self:CheckRengoku() then return true end
@@ -10574,23 +11025,8 @@ function ItemProgression:RunChecks(allowSea, allowOptional)
     return false
 end
 
--- v21.27 IMMEDIATE FULL-PROGRESSION WATCHER. This is intentionally its own closure
--- instead of adding statements/locals to the already-large MainController function.
--- Once Saber/Sea/item work claims ActionToken, PrepareClaimedAction stops Farm travel
--- and the main loop's existing ActiveActionToken gate yields control immediately.
-task.spawn(function()
-    while SessionAlive() do
-        task.wait(0.25)
-        if IsAlive() and _G.State and _G.State:CanAct() then
-            local ok, started = pcall(function()
-                return ItemProgression:RunChecks(true, true)
-            end)
-            if not ok then
-                warn("[BobonHub] Module Error: ProgressionWatcher: " .. tostring(started))
-            end
-        end
-    end
-end)
+-- v21.35: old ProgressionWatcher removed.  Permanent movement work is started
+-- only by the unified Priority Scheduler defined after RaidController.
 
 -- ══════════════════════════════════════════════════════════════════
 --              BOSSMANAGER v16.4 — DATA-DRIVEN
@@ -10765,6 +11201,78 @@ function BossManager:FindLiveBoss()
     return best, bestEntry
 end
 
+-- v21.34 REQUIRED-SPAWN PRIORITY.  These are not generic boss hunts: each row
+-- is tied to a concrete permanent kaitun upgrade that is currently missing.
+-- A live required boss may preempt level farm; if it is absent, HopManager may
+-- search another server even when generic Hop is disabled.
+function BossManager:GetPriorityDemand()
+    local sea, lv = GetSea(), Level()
+
+    if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee and sea == 2 then
+        if lv >= 1400 and not FightingStyleController:Known("Death Step")
+            and math.max(EffectiveMastery("Dark Step"), EffectiveMastery("Black Leg")) >= 400
+            and not FindOwnedTool("Library Key") then
+            return {"Awakened Ice Admiral"}, "melee-library-key"
+        end
+        if lv >= 1475 and not FightingStyleController:Known("Sharkman Karate")
+            and math.max(EffectiveMastery("Water Kung Fu"), EffectiveMastery("Fishman Karate")) >= 400
+            and not FindOwnedTool("Water Key") then
+            return {"Tide Keeper"}, "melee-water-key"
+        end
+    end
+
+    if _G.Settings.AutoItems and sea == 1 and lv >= 575 and not InventoryHas("Pole (1st Form)") then
+        return {"Thunder God"}, "item-pole-v1"
+    end
+    if _G.Settings.AutoItems and sea == 2 then
+        if lv >= 1100 and not InventoryHas("Rengoku") and not FindOwnedTool("Hidden Key") then
+            return {"Awakened Ice Admiral"}, "item-rengoku-key"
+        end
+        if lv >= 1475 and not InventoryHas("Dragon Trident") then
+            return {"Tide Keeper"}, "item-dragon-trident"
+        end
+        if lv >= 925 and not InventoryHas("Gravity Blade") and not InventoryHas("Gravity Cane") then
+            return {"Orbitus", "Fajita"}, "item-gravity-blade"
+        end
+    end
+    return nil
+end
+
+function BossManager:FindPriorityBoss()
+    local names, reason = self:GetPriorityDemand()
+    if not names then return nil, nil, nil end
+    local best, bestDist, bestEntry = nil, math.huge, nil
+    local me = HRP()
+    for _, name in ipairs(names) do
+        local boss = FindBoss(name)
+        if boss then
+            local root = boss:FindFirstChild("HumanoidRootPart")
+            local dist = root and me and (root.Position - me.Position).Magnitude or 0
+            if dist < bestDist then
+                best, bestDist = boss, dist
+                for _, entry in ipairs(BossDatabase) do
+                    if entry.N == name then bestEntry = entry; break end
+                end
+            end
+        end
+    end
+    return best, bestEntry, reason
+end
+
+function BossManager:TryPriorityBoss()
+    if self.Active or not _G.State:CanAct()
+        or not CombatController:IsDamageReady() then return false end
+    local boss, entry, reason = self:FindPriorityBoss()
+    if not boss or not entry then return false end
+    local token = _G.State:ClaimAction("BossPriority")
+    if token == 0 then return false end
+    PrepareClaimedAction("BossPriority")
+    self.Active = true
+    _G.State.WorkIntent = "PROGRESSION:" .. tostring(reason or entry.N)
+    task.spawn(function() self:_RunBoss(boss, entry, token) end)
+    return true
+end
+
 function BossManager:_Finish(token, reason)
     if TravelManager and _G.State.IsTraveling and _G.State.MovementOwner == "Boss" then
         TravelManager:Stop("Boss:" .. tostring(reason))
@@ -10824,7 +11332,7 @@ end
 
 function BossManager:TryFightBoss()
     if not _G.Settings.BossEnabled or self.Active or not _G.State:CanAct() then return false end
-    -- v21.32: below max level, a boss may start only after the Quest wrapper has
+    -- v21.33: below max level, a boss may start only after the Quest wrapper has
     -- stayed CLOSED for a confirmed window. A one-frame UI rebuild must never
     -- turn a normal level quest into an unrelated boss trip.
     if Level() < MAX_LEVEL then
@@ -10932,6 +11440,7 @@ local KatakuriController = {
     NextTry = 0,
     LastProgress = nil,
     LastProgressAt = 0,
+    LastProgressChangeAt = 0,
     CraftNextTry = 0,
 }
 
@@ -11001,6 +11510,11 @@ function KatakuriController:GetRemaining(force)
         n = result
     else
         for digits in tostring(result or ""):gmatch("%d+") do n = tonumber(digits) or n end
+    end
+    if n ~= nil and n ~= self.LastProgress then
+        self.LastProgressChangeAt = now
+    elseif n ~= nil and (self.LastProgressChangeAt or 0) <= 0 then
+        self.LastProgressChangeAt = now
     end
     self.LastProgress, self.LastProgressAt = n, now
     return n
@@ -11209,7 +11723,10 @@ function KatakuriController:TryRun()
     end
 
     local label = remaining and tostring(remaining) or "?"
-    return self:StartAction("Katakuri: Cake mobs remaining " .. label, function(token)
+    local stale = remaining ~= nil and (self.LastProgressChangeAt or 0) > 0
+        and tick() - self.LastProgressChangeAt > (_G.Settings.KatakuriProgressStallTimeout or 120)
+    local suffix = stale and " • counter stale/rechecking" or ""
+    return self:StartAction("Katakuri: Cake mobs remaining " .. label .. suffix, function(token)
         self:FarmNamed(CAKE_MOBS, token, math.min(_G.Settings.KatakuriWorkTimeout or 90, 90))
         self.LastProgressAt = 0
     end)
@@ -11231,6 +11748,14 @@ local FruitManager = {
     LastObservedBeli = Beli(),
     SuppressMoneyWakeUntil = 0,
     LastResult = "idle",
+}
+
+_G.BobonRaidFallbackFruitPrices = _G.BobonRaidFallbackFruitPrices or {
+    ["Rocket-Rocket"]=5000, ["Spin-Spin"]=7500, ["Blade-Blade"]=30000, ["Chop-Chop"]=30000,
+    ["Spring-Spring"]=60000, ["Bomb-Bomb"]=80000, ["Smoke-Smoke"]=100000, ["Spike-Spike"]=180000,
+    ["Flame-Flame"]=250000, ["Falcon-Falcon"]=300000, ["Ice-Ice"]=350000, ["Sand-Sand"]=420000,
+    ["Dark-Dark"]=500000, ["Diamond-Diamond"]=600000, ["Light-Light"]=650000, ["Rubber-Rubber"]=750000,
+    ["Barrier-Barrier"]=800000, ["Ghost-Ghost"]=940000, ["Magma-Magma"]=960000,
 }
 
 local FruitIdFallback = {
@@ -11316,19 +11841,64 @@ function FruitManager:LooksLikeCooldownResult(result)
         or text:find("not ready",1,true) ~= nil
 end
 
-function FruitManager:StoreBackpackFruits(force)
-    if not _G.Settings.FruitEnabled then return false end
-    if _G.State and _G.State.ActionOwner == "Raid" then return false end
-    local now = tick()
-    if not force and now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
-    self.LastStore = now
-    local storedAny = false
+function FruitManager:LooksLikeUnavailableResult(result)
+    if type(result) ~= "string" then return false end
+    local text = string.lower(result)
+    return text:find("not enough",1,true) ~= nil
+        or text:find("don't have enough",1,true) ~= nil
+        or text:find("do not have enough",1,true) ~= nil
+        or text:find("can't afford",1,true) ~= nil
+        or text:find("cannot afford",1,true) ~= nil
+        or text:find("need $",1,true) ~= nil
+        or text:find("need beli",1,true) ~= nil
+        or text:find("need money",1,true) ~= nil
+        or (text:find("level",1,true) ~= nil and text:find("need",1,true) ~= nil)
+end
+
+function FruitManager:RaidReserveNeeded()
+    if _G.Settings.RaidReserveCheapFruit == false or not _G.State then return false end
+    if GetSea() < 2 or FindOwnedTool("Special Microchip") then return false end
+    local goal = tonumber(_G.State.FragmentDemandGoal) or 0
+    return goal > 0 and Fragments() < goal
+end
+
+function FruitManager:GetRaidReserveTool()
+    if not self:RaidReserveNeeded() then return nil end
+    local cap = tonumber(_G.Settings.RaidCheapFruitMaxPrice) or 650000
+    local best, bestPrice
     local c = Char()
     local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
     for _, container in ipairs({c, backpack}) do
         if container then
             for _, tool in ipairs(container:GetChildren()) do
                 if LooksLikeFruitTool(tool) then
+                    local id = FruitOriginalName(tool)
+                    local price = id and _G.BobonRaidFallbackFruitPrices[id] or nil
+                    if price and price <= cap and (not bestPrice or price < bestPrice) then
+                        best, bestPrice = tool, price
+                    end
+                end
+            end
+        end
+    end
+    return best, bestPrice
+end
+
+function FruitManager:StoreBackpackFruits(force)
+    if not _G.Settings.FruitEnabled then return false end
+    if _G.State and _G.State.ActionOwner == "Raid" then return false end
+    local now = tick()
+    if not force and now - self.LastStore < (_G.Settings.FruitStoreInterval or 8) then return false end
+    self.LastStore = now
+
+    local reserveTool = self:GetRaidReserveTool()
+    local storedAny = false
+    local c = Char()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    for _, container in ipairs({c, backpack}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if LooksLikeFruitTool(tool) and tool ~= reserveTool then
                     local fruitName = FruitOriginalName(tool)
                     if fruitName then
                         local ok, result = pcall(function()
@@ -11397,24 +11967,26 @@ function FruitManager:TryRandomFruit(forceWake)
     end
 
     local confirmed = self:LooksLikeSuccessResult(result)
-    local deadline = tick() + (_G.Settings.RandomFruitResultWait or 4.0)
-    repeat
-        task.wait(0.15)
-        local physicalNow = self:CountPhysicalFruits()
-        if physicalNow > beforeFruitCount then
-            confirmed = true
-            break
-        end
-        -- Some builds/store paths can move the fruit into server inventory before the
-        -- local Tool is visible.  Check authoritative fruit inventory as an extra proof.
-        if beforeStoredCount ~= nil then
-            local storedNow = self:CountStoredFruits()
-            if storedNow ~= nil and storedNow > beforeStoredCount then
+    local knownCooldown = self:LooksLikeCooldownResult(result)
+    local knownUnavailable = self:LooksLikeUnavailableResult(result)
+    if not confirmed and not knownCooldown and not knownUnavailable then
+        local deadline = tick() + (_G.Settings.RandomFruitResultWait or 1.50)
+        repeat
+            task.wait(0.12)
+            local physicalNow = self:CountPhysicalFruits()
+            if physicalNow > beforeFruitCount then
                 confirmed = true
                 break
             end
-        end
-    until tick() >= deadline or not SessionAlive()
+            if beforeStoredCount ~= nil then
+                local storedNow = self:CountStoredFruits()
+                if storedNow ~= nil and storedNow > beforeStoredCount then
+                    confirmed = true
+                    break
+                end
+            end
+        until tick() >= deadline or not SessionAlive()
+    end
 
     if confirmed then
         self.LastSuccessAt = tick()
@@ -11424,17 +11996,18 @@ function FruitManager:TryRandomFruit(forceWake)
         self.SuppressMoneyWakeUntil = self.NextRollAt
         _G.BobonEconomy:Notice("GACHA ✓ rolled", 4.0)
         DLog("FRUIT", "Random fruit VERIFIED from anywhere")
-        task.wait(0.35)
+        task.wait(0.20)
         pcall(function() self:StoreBackpackFruits(true) end)
     else
         self.LastResult = "server-rejected:" .. tostring(result)
-        local delay = _G.Settings.RandomFruitInterval or 5
-        if self:LooksLikeCooldownResult(result) then
+        local delay = _G.Settings.RandomFruitUnknownRetry or 4
+        if knownCooldown then
             delay = math.max(delay, _G.Settings.RandomFruitCooldownRejectDelay or 30)
             self.SuppressMoneyWakeUntil = tick() + delay
+        elseif knownUnavailable then
+            delay = math.max(delay, _G.Settings.RandomFruitRejectRetry or 12)
+            self.SuppressMoneyWakeUntil = 0
         else
-            -- Likely money/level-side rejection: allow a Beli increase to wake the buyer
-            -- immediately instead of waiting out the fallback timer.
             self.SuppressMoneyWakeUntil = 0
         end
         self.NextRollAt = tick() + delay
@@ -11446,7 +12019,78 @@ function FruitManager:TryRandomFruit(forceWake)
     return confirmed
 end
 
--- v21.32 SINGLE ECONOMY WORKER — GACHA FIRST, then ALL MELEE.
+-- v21.34 EVENT-DRIVEN GACHA POPUP GUARD. It only acts for a few seconds around
+-- this script's own gacha attempt and never destroys camera children/Lighting effects.
+FruitManager.PopupConnections = {}
+function FruitManager:CloseRecentPopup()
+    if _G.Settings.FruitPopupGuard == false then return end
+    if tick() - (self.LastAttemptAt or 0) > 5.0 then return end
+    local pg = LP:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local closed = false
+    local popup = pg:FindFirstChild("ModelPopup")
+    if popup and popup:IsA("ScreenGui") and popup.Enabled then
+        local frame = popup:FindFirstChild("CloseButtonFrame")
+        local button = frame and frame:FindFirstChild("CloseButton")
+        if button and type(firesignal) == "function" then
+            pcall(function() firesignal(button.Activated) end)
+            pcall(function() firesignal(button.MouseButton1Click) end)
+        end
+        pcall(function() popup.Enabled = false end)
+        closed = true
+    end
+    local main = pg:FindFirstChild("Main")
+    local inv = main and main:FindFirstChild("FruitInventory")
+    if inv and inv:IsA("GuiObject") and inv.Visible then
+        local exit = inv:FindFirstChild("Info") and inv.Info:FindFirstChild("Exit")
+        if exit and type(firesignal) == "function" then
+            pcall(function() firesignal(exit.Activated) end)
+            pcall(function() firesignal(exit.MouseButton1Click) end)
+        else
+            pcall(function() inv.Visible = false end)
+        end
+        closed = true
+    end
+    if closed then
+        local cam = workspace.CurrentCamera
+        local hum = Char() and Char():FindFirstChildOfClass("Humanoid")
+        if cam and hum and cam.CameraType == Enum.CameraType.Scriptable then
+            pcall(function()
+                cam.CameraType = Enum.CameraType.Custom
+                cam.CameraSubject = hum
+            end)
+        end
+    end
+end
+
+pcall(function()
+    local pg = LP:FindFirstChild("PlayerGui")
+    if pg then
+        FruitManager.PopupConnections[#FruitManager.PopupConnections+1] = pg.ChildAdded:Connect(function(child)
+            if not SessionAlive() then return end
+            local name = string.lower(tostring(child.Name or ""))
+            if name:find("fruit",1,true) or name:find("gacha",1,true)
+                or name:find("modelpopup",1,true) or name:find("reward",1,true) then
+                task.delay(0.03, function() FruitManager:CloseRecentPopup() end)
+            end
+            if child.Name == "ModelPopup" then
+                FruitManager.PopupConnections[#FruitManager.PopupConnections+1] = child:GetPropertyChangedSignal("Enabled"):Connect(function()
+                    if child.Parent and child.Enabled then
+                        task.delay(0.02, function() FruitManager:CloseRecentPopup() end)
+                    end
+                end)
+            end
+        end)
+        local popup = pg:FindFirstChild("ModelPopup")
+        if popup then
+            FruitManager.PopupConnections[#FruitManager.PopupConnections+1] = popup:GetPropertyChangedSignal("Enabled"):Connect(function()
+                if popup.Enabled then task.delay(0.02, function() FruitManager:CloseRecentPopup() end) end
+            end)
+        end
+    end
+end)
+
+-- v21.33 SINGLE ECONOMY WORKER — GACHA FIRST, then ALL MELEE.
 -- One serial worker remains, so Beli transactions cannot race each other.
 -- Gacha always gets first refusal when its client cooldown allows an attempt.
 -- After success OR rejection, the worker re-reads balance and immediately probes melee.
@@ -11454,27 +12098,23 @@ task.spawn(function()
     while SessionAlive() and task.wait(_G.Settings.EconomyTick or 0.25) do
         if not IsAlive() then continue end
 
-        if _G.Settings.GetFruits and _G.Settings.FruitEnabled then
-            _G.BobonEconomy.Busy = true
-            _G.BobonEconomy.Owner = "GACHA"
+        if _G.Settings.GetFruits and _G.Settings.FruitEnabled
+            and _G.BobonEconomy:TryBegin("GACHA") then
             local okGacha, rolled = pcall(function()
                 FruitManager:StoreBackpackFruits()
                 return FruitManager:TryRandomFruit(_G.BobonEconomy.Wake == true)
             end)
-            _G.BobonEconomy.Busy = false
-            _G.BobonEconomy.Owner = nil
+            _G.BobonEconomy:End("GACHA")
             if not okGacha then
                 _G.BobonEconomy:Notice("GACHA ERROR • " .. tostring(rolled), 4.0)
             end
         end
         _G.BobonEconomy.Wake = false
 
-        if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
-            _G.BobonEconomy.Busy = true
-            _G.BobonEconomy.Owner = "MELEE"
+        if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee
+            and _G.BobonEconomy:TryBegin("MELEE") then
             local okMelee, bought = pcall(function() return FightingStyleController:PurchaseTick() end)
-            _G.BobonEconomy.Busy = false
-            _G.BobonEconomy.Owner = nil
+            _G.BobonEconomy:End("MELEE")
             if not okMelee then
                 _G.BobonEconomy:Notice("MELEE ERROR • " .. tostring(bought), 4.0)
             end
@@ -11652,7 +12292,9 @@ function RaidController:LoadCheapestStoredFruit()
         if type(row) == "table" then
             local name = row.Name or row.name
             if name then
-                local price = tonumber(row.Price or row.price or prices[tostring(name)])
+                local rawName = tostring(name)
+                local fallbackId = FruitIdFallback[rawName] or rawName
+                local price = tonumber(row.Price or row.price or prices[rawName] or _G.BobonRaidFallbackFruitPrices[fallbackId])
                 if price and price <= cap and (not bestPrice or price < bestPrice) then
                     bestName, bestPrice = tostring(name), price
                 end
@@ -11666,15 +12308,40 @@ function RaidController:LoadCheapestStoredFruit()
     return true
 end
 
-function RaidController:ProtectBackpackFruits()
+function RaidController:GetPhysicalCheapFruit()
+    local cap = tonumber(_G.Settings.RaidCheapFruitMaxPrice) or 650000
+    local best, bestPrice
+    local reserveTool, reservePrice = FruitManager:GetRaidReserveTool()
+    if reserveTool and reserveTool.Parent then return reserveTool, reservePrice end
+    for _, container in ipairs({Char(), LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if LooksLikeFruitTool(tool) then
+                    local id = FruitOriginalName(tool)
+                    local price = id and _G.BobonRaidFallbackFruitPrices[id] or nil
+                    if price and price <= cap and (not bestPrice or price < bestPrice) then
+                        best, bestPrice = tool, price
+                    end
+                end
+            end
+        end
+    end
+    return best, bestPrice
+end
+
+function RaidController:ProtectBackpackFruits(keepTool)
     local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
-    if not backpack then return end
-    for _, tool in ipairs(backpack:GetChildren()) do
-        if LooksLikeFruitTool(tool) then
-            local fruitName = FruitOriginalName(tool)
-            if fruitName then
-                pcall(function() CommF_:InvokeServer("StoreFruit", fruitName, tool) end)
-                task.wait(0.08)
+    local c = Char()
+    for _, container in ipairs({c, backpack}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if LooksLikeFruitTool(tool) and tool ~= keepTool then
+                    local fruitName = FruitOriginalName(tool)
+                    if fruitName then
+                        pcall(function() CommF_:InvokeServer("StoreFruit", fruitName, tool) end)
+                        task.wait(0.08)
+                    end
+                end
             end
         end
     end
@@ -11682,19 +12349,52 @@ end
 
 function RaidController:AcquireChip(raidName)
     if FindSpecialMicrochip() then return true end
-    -- Never let a random/high-value physical fruit sitting in Backpack become
-    -- an accidental chip payment. Store first, then explicitly load only a
-    -- low-value fruit if the normal $100k chip route is on cooldown.
-    self:ProtectBackpackFruits()
-    task.wait(0.2)
-    local function selectChip()
-        local ok, result = pcall(function() return CommF_:InvokeServer("RaidsNpc", "Select", raidName) end)
-        self.LastChipResult = ok and result or tostring(result)
-        task.wait(0.8)
+
+    local function verifyChip(delay)
+        task.wait(delay or 0.35)
         return FindSpecialMicrochip() ~= nil
     end
-    if selectChip() then return true end
-    if self:LoadCheapestStoredFruit() and selectChip() then return true end
+
+    local function selectNormal()
+        local ok, result = pcall(function() return CommF_:InvokeServer("RaidsNpc", "Select", raidName) end)
+        self.LastChipResult = ok and result or tostring(result)
+        return ok and verifyChip(0.45)
+    end
+
+    local function selectWithFruit(tool)
+        if not tool or not tool.Parent then return false end
+        local hum = Char() and Char():FindFirstChildOfClass("Humanoid")
+        if hum and tool.Parent ~= Char() then pcall(function() hum:EquipTool(tool) end); task.wait(0.12) end
+        local id = FruitOriginalName(tool)
+        local raw = tostring(tool.Name or "")
+        local stripped = raw:gsub("%s+[Ff]ruit$", "")
+        for _, fruitArg in ipairs({raw, stripped, id}) do
+            if fruitArg and tostring(fruitArg) ~= "" then
+                local ok, result = pcall(function()
+                    return CommF_:InvokeServer("RaidsNpc", "Select", raidName, fruitArg)
+                end)
+                self.LastChipResult = ok and result or tostring(result)
+                if ok and verifyChip(0.25) then return true end
+            end
+        end
+        return selectNormal()
+    end
+
+    -- Prefer exactly one cheap physical fruit when Fragment progression needs Raid.
+    local cheap = self:GetPhysicalCheapFruit()
+    self:ProtectBackpackFruits(cheap)
+    task.wait(0.12)
+    if cheap and cheap.Parent and selectWithFruit(cheap) then return true end
+
+    -- Normal Beli chip route next. The server owns its real cooldown.
+    if selectNormal() then return true end
+
+    -- If Beli is cooldown-blocked, explicitly unstore the cheapest safe fruit and retry.
+    if self:LoadCheapestStoredFruit() then
+        task.wait(0.20)
+        local loaded = self:GetPhysicalCheapFruit()
+        if loaded and selectWithFruit(loaded) then return true end
+    end
     return false
 end
 
@@ -11704,32 +12404,111 @@ function RaidController:FindStartDetector()
     local sea = GetSea()
     local preferred = sea == 2 and map:FindFirstChild("CircleIsland") or (sea == 3 and map:FindFirstChild("Boat Castle"))
     local summon = preferred and preferred:FindFirstChild("RaidSummon2", true)
-    local detector = summon and summon:FindFirstChildWhichIsA("ClickDetector", true)
-    if detector then return detector end
+    if summon then
+        local cd = summon:FindFirstChildWhichIsA("ClickDetector", true)
+        if cd then return cd end
+        local pp = summon:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pp then return pp end
+    end
     for _, node in ipairs(map:GetDescendants()) do
         if node.Name == "RaidSummon2" then
             local cd = node:FindFirstChildWhichIsA("ClickDetector", true)
             if cd then return cd end
+            local pp = node:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if pp then return pp end
         end
     end
     return nil
 end
 
-function RaidController:StartRaid()
+function RaidController:TravelNear(cf, token, timeout)
+    if typeof(cf) ~= "CFrame" then return false end
+    local deadline = tick() + (timeout or 25)
+    while SessionAlive() and IsAlive() and _G.State:IsActionValid(token) and tick() < deadline do
+        _G.State:TouchAction(token)
+        local root = HRP()
+        if root and (root.Position-cf.Position).Magnitude <= 9 then return true end
+        TravelManager:Request(cf, "Raid", {arrivalThreshold=7, speed=_G.Settings.RaidTravelSpeed or 300})
+        task.wait(0.06)
+    end
+    return false
+end
+
+function RaidController:SolveSea2Lab(token)
+    if GetSea() ~= 2 or _G.Settings.RaidLabFallback == false then return false end
+    local map = workspace:FindFirstChild("Map")
+    local circle = map and map:FindFirstChild("CircleIsland")
+    local lab = circle and circle:FindFirstChild("Lab")
+    local combo = lab and lab:FindFirstChild("Combo")
+    if not combo then return false end
+
+    local targets = {"Red","Blue","Green","Blue"}
+    local function partOf(obj)
+        if not obj then return nil end
+        if obj:IsA("BasePart") then return obj end
+        return obj:FindFirstChildWhichIsA("BasePart", true)
+    end
+    local function colorName(obj)
+        local part = partOf(obj)
+        if not part then return "Unknown" end
+        local bc = string.lower(tostring(part.BrickColor or ""))
+        local c = part.Color
+        if bc:find("red",1,true) or (c.R > 0.60 and c.G < 0.35 and c.B < 0.35) then return "Red" end
+        if bc:find("blue",1,true) or (c.B > 0.55 and c.R < 0.40) then return "Blue" end
+        if bc:find("green",1,true) or (c.G > 0.55 and c.R < 0.40 and c.B < 0.45) then return "Green" end
+        return "Other"
+    end
+
+    for i = 1, 4 do
+        if not _G.State:IsActionValid(token) then return false end
+        local button = combo:FindFirstChild("Button" .. i)
+        local part = partOf(button)
+        local detector = button and button:FindFirstChildWhichIsA("ClickDetector", true)
+        if not button or not part or not detector or type(fireclickdetector) ~= "function" then return false end
+        self:TravelNear(part.CFrame * CFrame.new(0, 3, 0), token, 25)
+        local attempts = 0
+        while colorName(button) ~= targets[i] and attempts < (_G.Settings.RaidLabMaxClicksPerButton or 8) do
+            _G.State:TouchAction(token)
+            pcall(function() fireclickdetector(detector, 1) end)
+            attempts = attempts + 1
+            task.wait(0.22)
+        end
+        if colorName(button) ~= targets[i] then return false end
+    end
+    return true
+end
+
+function RaidController:StartRaid(token)
     if self:IsRaidActive() then return true end
     if not FindSpecialMicrochip() then return false end
-    local detector = self:FindStartDetector()
-    if not detector or type(fireclickdetector) ~= "function" then
-        self.LastChipResult = "NO-CLICKDETECTOR"
+
+    local function fireStart()
+        local detector = self:FindStartDetector()
+        if not detector then return false end
+        if detector:IsA("ClickDetector") and type(fireclickdetector) == "function" then
+            return pcall(function() fireclickdetector(detector, 1) end)
+        elseif detector:IsA("ProximityPrompt") and type(fireproximityprompt) == "function" then
+            return pcall(function() fireproximityprompt(detector) end)
+        end
         return false
     end
-    if not pcall(function() fireclickdetector(detector) end) then return false end
-    local deadline = tick() + 12
-    while SessionAlive() and IsAlive() and tick() < deadline do
-        if self:IsRaidActive() then return true end
-        task.wait(0.2)
+    local function confirm()
+        local deadline = tick() + (_G.Settings.RaidStartConfirmTimeout or 12)
+        while SessionAlive() and IsAlive() and tick() < deadline do
+            if token and not _G.State:IsActionValid(token) then return false end
+            if self:IsRaidActive() then return true end
+            task.wait(0.20)
+        end
+        return self:IsRaidActive()
     end
-    return self:IsRaidActive()
+
+    if fireStart() and confirm() then return true end
+    if GetSea() == 2 and token and self:SolveSea2Lab(token) then
+        task.wait(_G.Settings.RaidStartRetry or 2.0)
+        if fireStart() and confirm() then return true end
+    end
+    self.LastChipResult = "RAID-START-UNAVAILABLE"
+    return false
 end
 
 function RaidController:GetIslandWithEnemies()
@@ -11776,21 +12555,37 @@ function RaidController:FightTick(token)
         end
         return
     end
+
     ClusterFarmController:Activate("RAID", {"*"}, island.CFrame, "Raid")
     ClusterFarmController:Tick()
+    local phase, stacked, total = ClusterFarmController:UpdatePhase()
+    local acquire = phase == "ACQUIRE" and ClusterFarmController:GetAcquireTarget() or nil
+    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
+    if acquireRoot and _G.State:IsTargetValid(acquire) then
+        _G.State.CurrentTarget = acquire
+        TravelManager:Request(acquireRoot, "Raid", {
+            arrivalThreshold=_G.Settings.ClusterAcquireArrivalThreshold or 8,
+            combatHover=true, acquireSweep=true,
+            speed=_G.Settings.ClusterAcquireTravelSpeed or _G.Settings.RaidTravelSpeed or 300,
+        })
+        _G.BobonStatus = ("Raid: Island %d • ACQUIRE %d/%d"):format(island.Index, stacked, total)
+        return
+    end
+
     local primary = ClusterFarmController:SelectPrimary() or regular
     local hover = ClusterFarmController:GetHoverCFrame(_G.Settings.RaidHoverHeight or 22)
     if hover then
         TravelManager:Request(hover, "Raid", {arrivalThreshold=_G.Settings.FarmArrivalThreshold,
             combatHover=true, speed=_G.Settings.RaidTravelSpeed or 300, persistent=true})
     end
-    if primary and _G.State:IsTargetValid(primary) then
+    if phase == "KILL" and primary and _G.State:IsTargetValid(primary) then
         _G.State.CurrentTarget = primary
         PrepareCombatTarget(primary)
         if TravelManager:IsAtCombatAnchor() then EquipCombatTool(); Attack(primary, primary.Name) end
     end
-    _G.BobonStatus = ("Raid: Island %d • %d/%d Frag"):format(island.Index, Fragments(),
-        math.max(Fragments(), tonumber(_G.State.FragmentDemandGoal) or 0))
+    _G.BobonStatus = ("Raid: Island %d • %s %d/%d • %d/%d Frag")
+        :format(island.Index, tostring(phase), stacked, total, Fragments(),
+            math.max(Fragments(), tonumber(_G.State.FragmentDemandGoal) or 0))
 end
 
 function RaidController:_Finish(token, reason)
@@ -11825,7 +12620,7 @@ function RaidController:_Run(token, demand)
                     _G.BobonStatus = "Fragments: No raid chip • resume farm"
                     break
                 end
-                if not self:StartRaid() then
+                if not self:StartRaid(token) then
                     self.NextTry = tick() + (_G.Settings.RaidNoChipRetry or 90)
                     _G.BobonStatus = "Fragments: Raid start unavailable • resume farm"
                     break
@@ -11865,7 +12660,222 @@ function RaidController:TryStart()
     return true
 end
 
+function RaidController:TryPreempt()
+    local demand = FragmentManager:GetDemand()
+    if not demand then return false end
+    local started = self:TryStart()
+    if started then
+        _G.State.WorkIntent = "RAID:" .. tostring(demand.Reason or "Fragments")
+        _G.BobonStatus = ("Fragments: %d/%d • preempting farm"):format(Fragments(), demand.Goal or 0)
+    end
+    return started
+end
 
+-- ══════════════════════════════════════════════════════════════════
+--      v21.35 ONE PRIORITY SCHEDULER + SEA/STALL HARDENING
+--   No movement subsystem below runs in a second progression watcher.
+--   The serial Economy worker remains separate because Gacha/Melee purchases
+--   own money, not movement, and already arbitrate Gacha-first atomically.
+-- ══════════════════════════════════════════════════════════════════
+function _G.BobonSeaTransitionCleanup(newSea)
+    local state = _G.State
+    if not state then return false end
+    newSea = tonumber(newSea) or GetSea()
+    if state.LastKnownSea == 0 then
+        state.LastKnownSea = newSea
+        state.Sea = newSea
+        return false
+    end
+    if state.LastKnownSea == newSea then return false end
+
+    local oldSea = state.LastKnownSea
+    state.LastKnownSea = newSea
+    state.Sea = newSea
+    state.SeaTransitionAt = tick()
+    state.PriorityStage = "SEA_TRANSITION"
+    state.PriorityDetail = tostring(oldSea) .. "→" .. tostring(newSea)
+    state.WorkIntent = "SEA_TRANSITION"
+    _G.BobonStatus = ("Sea: %d → %d • clearing stale state"):format(oldSea, newSea)
+
+    pcall(function() TravelManager:Stop("SeaTransition") end)
+    pcall(function() FarmPositionController:ReleaseCluster() end)
+    pcall(function() CombatController:WatchTarget(nil, nil) end)
+    pcall(function() state:ClearTargets() end)
+    state.ActiveQuestMob = nil
+    state.QuestLastSeenAt = 0
+    state.QuestClosedSince = 0
+    state.QuestClosedStable = false
+    state.ProgressionLock = nil
+    state.FragmentDemandGoal = 0
+    state.FragmentDemandCost = 0
+    state.FragmentDemandReason = nil
+    state.FragmentDemandPriority = 0
+    state.FragmentDemandAt = 0
+
+    pcall(function()
+        ClusterFarmController.LastBatch = {}
+        ClusterFarmController.SpawnMemory = {}
+        ClusterFarmController.SpawnMarkerCache = {}
+        ClusterFarmController.SpawnMarkerCacheAt = {}
+        ClusterFarmController.SpawnRouteIndex = {}
+        ClusterFarmController.PatrolIndex = 1
+        ClusterFarmController.PatrolLastPoint = nil
+    end)
+    pcall(function() InventoryCache.At = 0 end)
+    pcall(function() WeaponInventoryCache.At = 0 end)
+    pcall(function()
+        for key in pairs(ItemProgression.NextOptional or {}) do ItemProgression.NextOptional[key] = 0 end
+    end)
+    return true
+end
+
+function _G.BobonPriorityWatchdogTick()
+    local state = _G.State
+    if not state then return false end
+    if state.ActiveActionToken == 0 then
+        state.PriorityWatchOwner = nil
+        state.PriorityWatchStatus = nil
+        state.PriorityWatchAt = 0
+        return false
+    end
+
+    local owner = tostring(state.ActionOwner or "Action")
+    local status = tostring(_G.BobonStatus or "")
+    if state.PriorityWatchOwner ~= owner or state.PriorityWatchStatus ~= status then
+        state.PriorityWatchOwner = owner
+        state.PriorityWatchStatus = status
+        state.PriorityWatchAt = tick()
+        return false
+    end
+
+    local staleFor = tick() - (tonumber(state.PriorityWatchAt) or tick())
+    if staleFor < (_G.Settings.PriorityStatusStallTimeout or 75) then return false end
+    local liveTarget = state.CurrentTarget and state:IsTargetValid(state.CurrentTarget)
+    if state.IsTraveling or liveTarget then return false end
+
+    warn(("[BobonHub] Progression stall release: %s • %s • %.1fs")
+        :format(owner, status, staleFor))
+    pcall(function() FarmPositionController:ReleaseCluster() end)
+    pcall(function() TravelManager:Stop("PriorityStall") end)
+    pcall(function() CombatController:WatchTarget(nil, nil) end)
+    pcall(function() state:ClearTargets() end)
+    state:ForceReleaseAction("PriorityStall")
+    state:SetMode("Idle")
+    state.WorkIntent = "RECOVER:PRIORITY_STALL"
+    state.PriorityStage = "STALL_RECOVERY"
+    state.PriorityWatchAt = tick()
+    return true
+end
+
+function _G.BobonPriorityPulse()
+    local state = _G.State
+    if not state or not IsAlive() then return false end
+    local sea = GetSea()
+    if _G.Settings.SeaTransitionCleanup ~= false and _G.BobonSeaTransitionCleanup(sea) then return true end
+    state.Sea = sea
+    if _G.BobonPriorityWatchdogTick() then return true end
+    if state.ActiveActionToken ~= 0 or not state:CanAct() then return false end
+
+    -- 1) Sticky hard gates: Saber / Second Sea / Bartilo / Third Sea.
+    local blocking = ItemProgression:GetBlockingReason()
+    state.ProgressionLock = blocking
+    if blocking then
+        state.PriorityStage = "HARD_GATE"
+        state.PriorityDetail = tostring(blocking)
+        state.WorkIntent = "PROGRESSION:" .. tostring(blocking)
+        local ok, started = pcall(function() return ItemProgression:RunChecks(true, true) end)
+        if not ok then warn("[BobonHub] Module Error: PriorityHardGate: " .. tostring(started)) end
+        if not started and state.ActiveActionToken == 0 then
+            _G.BobonStatus = "Progression: " .. tostring(blocking) .. " • waiting/retry"
+        end
+        return true
+    end
+
+    -- Passive mastery/TTK pulse is throttled but belongs to this scheduler.
+    if tick() - (tonumber(state.PriorityLastPassiveAt) or 0)
+        >= (_G.Settings.PriorityPassiveInterval or 1.25) then
+        state.PriorityLastPassiveAt = tick()
+        state.PriorityHint = ""
+        local meleeTraining = false
+        if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
+            local ok, result = pcall(function() return FightingStyleController:Tick() end)
+            meleeTraining = ok and result == true
+        end
+        if not meleeTraining and _G.Settings.AutoBuySwords then
+            pcall(function() SwordProgressionController:Tick() end)
+            local swordStatus = tostring(SwordProgressionController.LastStatus or "")
+            if swordStatus:find("Missing", 1, true) or swordStatus:find("mastery", 1, true) then
+                state.PriorityHint = swordStatus
+            end
+        elseif meleeTraining then
+            state.PriorityHint = tostring(_G.BobonStatus or "Melee mastery")
+        end
+    end
+
+    -- 2) A ready style door/quest/key is immediate progression.
+    if FightingStyleUnlockController then
+        local ok, started = pcall(function() return FightingStyleUnlockController:TryRun() end)
+        if not ok then warn("[BobonHub] Module Error: PriorityStyleUnlock: " .. tostring(started))
+        elseif started then
+            state.PriorityStage = "MELEE_UNLOCK"
+            state.PriorityDetail = tostring(_G.BobonStatus or "Melee")
+            return true
+        end
+    end
+
+    -- 3) Live boss carrying a currently-required key/item.
+    do
+        local ok, started = pcall(function() return BossManager:TryPriorityBoss() end)
+        if not ok then warn("[BobonHub] Module Error: PriorityBoss: " .. tostring(started))
+        elseif started then
+            state.PriorityStage = "REQUIRED_BOSS"
+            state.PriorityDetail = tostring(_G.BobonStatus or "Boss")
+            return true
+        end
+    end
+
+    -- 4) Factory is time-limited; if Core is live, take it before ordinary farming.
+    do
+        local ok, started = pcall(function() return FactoryController:TryRun() end)
+        if not ok then warn("[BobonHub] Module Error: PriorityFactory: " .. tostring(started))
+        elseif started then
+            state.PriorityStage = "FACTORY"
+            state.PriorityDetail = "Core"
+            return true
+        end
+    end
+
+    -- 5) A registered Fragment shortage preempts level farm.
+    do
+        local demand = FragmentManager:GetDemand()
+        if demand then
+            state.PriorityStage = "FRAGMENTS"
+            state.PriorityDetail = tostring(demand.Reason or "Progression")
+            state.PriorityHint = ("Need %d/%d Frag • %s")
+                :format(Fragments(), tonumber(demand.Goal) or 0, tostring(demand.Reason or "Progression"))
+            if RaidController:TryPreempt() then return true end
+        end
+    end
+
+    -- 6) Remaining permanent/optional kaitun progression.
+    do
+        local ok, started = pcall(function() return ItemProgression:RunChecks(true, true) end)
+        if not ok then warn("[BobonHub] Module Error: PriorityProgression: " .. tostring(started))
+        elseif started then
+            state.PriorityStage = "PROGRESSION"
+            state.PriorityDetail = tostring(_G.BobonStatus or "Progression")
+            return true
+        end
+    end
+
+    state.PriorityStage = "LEVEL_FARM"
+    state.PriorityDetail = ""
+    state.WorkIntent = "LEVEL_FARM"
+    return false
+end
+
+-- Scheduler task is started AFTER CompletionSeaController is declared so that
+-- max-level sea completion and Dough/endgame can join the same progression owner.
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -12069,6 +13079,54 @@ function CompletionSeaController:TryTravel()
     return true
 end
 
+-- v21.35 unified scheduler task starts here, after every permanent/endgame
+-- controller it needs has a lexical binding.  This is the only permanent
+-- progression watcher; MainController does not start these controllers.
+task.spawn(function()
+    while SessionAlive() do
+        task.wait(_G.Settings.PrioritySchedulerInterval or 0.20)
+        local ok, started = pcall(_G.BobonPriorityPulse)
+        if not ok then
+            warn("[BobonHub] Module Error: PriorityScheduler: " .. tostring(started))
+            continue
+        end
+        if started or not _G.State:CanAct() then continue end
+
+        -- Max-level completion shuttle precedes optional endgame grinding.
+        if Level() >= MAX_LEVEL then
+            local okCompletion, completion = pcall(function() return CompletionSeaController:TryTravel() end)
+            if not okCompletion then
+                warn("[BobonHub] Module Error: PriorityCompletionSea: " .. tostring(completion))
+            elseif completion then
+                _G.State.PriorityStage = "COMPLETION_SEA"
+                _G.State.PriorityDetail = tostring(_G.BobonStatus or "Completion")
+                continue
+            end
+
+            -- Dough/Cake and generic boss work are endgame-only and start only
+            -- when the quest wrapper is confirmed closed, preventing quest theft.
+            if HasQuest() == false and _G.State.QuestClosedStable == true then
+                local okKata, kata = pcall(function() return KatakuriController:TryRun() end)
+                if not okKata then
+                    warn("[BobonHub] Module Error: PriorityKatakuri: " .. tostring(kata))
+                elseif kata then
+                    _G.State.PriorityStage = "KATAKURI"
+                    _G.State.PriorityDetail = tostring(_G.BobonStatus or "Dough")
+                    continue
+                end
+                local okBoss, boss = pcall(function() return BossManager:TryFightBoss() end)
+                if not okBoss then
+                    warn("[BobonHub] Module Error: PriorityEndgameBoss: " .. tostring(boss))
+                elseif boss then
+                    _G.State.PriorityStage = "ENDGAME_BOSS"
+                    _G.State.PriorityDetail = tostring(_G.BobonStatus or "Boss")
+                    continue
+                end
+            end
+        end
+    end
+end)
+
 local HopManager = { LastHop = 0, Visited = {} }
 local function FindDroppedFruit()
     for _, obj in ipairs(workspace:GetChildren()) do
@@ -12149,6 +13207,33 @@ function HopManager:ShouldHop()
             end
         end
     end
+    -- Required permanent progression is allowed to search another server even
+    -- when generic Hop is disabled.  Never interrupt an already claimed action,
+    -- and never hop if the required boss is already alive in this server.
+    if _G.Settings.HopRequiredProgression and _G.State.ActiveActionToken == 0
+        and _G.State.Mode ~= "Dead" and _G.State.Mode ~= "Respawning" then
+        local names, requiredReason = BossManager:GetPriorityDemand()
+        if names then
+            for _, name in ipairs(names) do
+                if FindBoss(name) then return nil end
+            end
+            return requiredReason
+        end
+    end
+
+    -- TTK dealer stock is server-dependent. After repeated verified no-progress
+    -- probes, allow a targeted progression hop even when generic Hop is OFF.
+    if _G.Settings.HopRequiredProgression and _G.State.ActiveActionToken == 0
+        and GetSea() == 2 and Level() >= 850 and _G.Settings.AutoTrueTripleKatana
+        and Beli() >= 2000000 and not InventoryHas("True Triple Katana") then
+        local missing = SwordProgressionController:GetMissingLegendary()
+        local failNeed = math.max(2, tonumber(_G.Settings.LegendarySwordHopFailures) or 3)
+        if #missing > 0 and (SwordProgressionController.LegendaryFailStreak or 0) >= failNeed then
+            local label = missing[1] and missing[1].Label or "legendary-sword"
+            return "ttk-dealer-" .. tostring(label)
+        end
+    end
+
     if not _G.Settings.HopEnabled then return nil end
 
     -- Server hopping is demand-driven. Never throw away a valid level quest or
@@ -12295,7 +13380,8 @@ if _G.Settings.Shutdown then task.defer(function() task.wait(1); pcall(function(
 -- ══════════════════════════════════════════════════════════════════
 --    MAIN CONTROLLER v16.2 FIXED — SINGLE LOOP
 --
---   Priority: Recovery > Team > Valid Quest+Farm > Sea gate > Items > Boss
+--   Priority: Recovery/Team are local gates; permanent movement priority is v21.35 Scheduler.
+--   This loop owns only quest/farm plus confirmed-safe optional user event/boss windows.
 --   CHỈ gọi TravelManager:Request(), KHÔNG tự ghi MovementOwner
 --   [FIX-2] Mỗi subsystem wrap pcall riêng + warn Module Error,
 --           lỗi 1 module không chặn Quest/Farm
@@ -12495,19 +13581,11 @@ task.spawn(function()
                 return
             end
 
-            -- Live Factory is a time-limited Sea-2 event. It is the one core event
-            -- allowed to preempt an ordinary level quest; another claimed action
-            -- still wins because TryRun requires State:CanAct().
-            local okFactory, factoryResult = pcall(function() return FactoryController:TryRun() end)
-            if not okFactory then
-                warn("[BobonHub] Module Error: FactoryController: " .. tostring(factoryResult))
-            elseif factoryResult then
-                return
-            end
+            -- v21.35: Factory/Raid/permanent progression are started only by the
+            -- Priority Scheduler. MainController remains the single quest/farm loop.
 
-
-            -- LEVEL FARM FALLBACK. Immediate permanent progression is handled by
-            -- the small watcher outside this large closure to keep compile pressure low.
+            -- LEVEL FARM FALLBACK. Permanent progression is handled by the
+            -- one v21.35 Priority Scheduler outside this large closure.
             local lv = Level()
             local questState = HasQuest() -- true / false / nil (UI not ready)
             local questNow = tick()
@@ -12539,18 +13617,16 @@ task.spawn(function()
                 end
                 FarmPositionController:ReleaseCluster()
                 _G.State:ClearTargets()
-                local okProgress, startedProgress = pcall(function()
-                    return ItemProgression:RunChecks(true,true)
-                end)
-                if not okProgress then
-                    warn("[BobonHub] Module Error: MandatoryProgression: " .. tostring(startedProgress))
-                elseif not startedProgress and _G.State.ActiveActionToken == 0 then
-                    _G.BobonStatus = "Progression: " .. tostring(progressionLock) .. " • retrying"
+                if _G.State.ActiveActionToken == 0 then
+                    _G.BobonStatus = "Progression: " .. tostring(progressionLock) .. " • scheduler"
                 end
                 return
             else
                 _G.State.WorkIntent = "LEVEL_FARM"
             end
+
+            -- v21.35: required bosses, live Factory and Fragment Raid are all
+            -- started by the one Priority Scheduler, never independently here.
 
             if GetSea() == 3 and lv >= 2600 and lv < MAX_LEVEL
                 and not SubmergedAccessController:IsInside() then
@@ -12588,44 +13664,10 @@ task.spawn(function()
                     and _G.State.MovementOwner == "Farm" then
                     TravelManager:Stop("NoQuest")
                 end
-                -- At max level there is no next quest to create an item window.
-                -- First revisit older seas until all retained useful items are complete.
-                local okCompletion, completionResult = pcall(function()
-                    return CompletionSeaController:TryTravel()
-                end)
-                if not okCompletion then
-                    warn("[BobonHub] Module Error: CompletionSeaController: " .. tostring(completionResult))
-                elseif completionResult then
-                    return
-                end
-                -- Continue end-game progression instead of becoming permanently Idle.
-                local okEnd, endResult = pcall(function()
-                    return ItemProgression:RunChecks(true, true)
-                end)
-                if okEnd and endResult then return end
-                local okRaidEnd, raidEnd = pcall(function() return RaidController:TryStart() end)
-                if not okRaidEnd then
-                    warn("[BobonHub] Module Error: RaidController: " .. tostring(raidEnd))
-                elseif raidEnd then
-                    return
-                end
-                local okKata, kataResult = pcall(function()
-                    return KatakuriController:TryRun()
-                end)
-                if not okKata then
-                    warn("[BobonHub] Module Error: KatakuriController: " .. tostring(kataResult))
-                elseif kataResult then
-                    return
-                end
-                local okBossEnd, bossEnd = pcall(function()
-                    return BossManager:TryFightBoss()
-                end)
-                if okBossEnd and bossEnd then return end
-                local meleeBusy = false
-                pcall(function() meleeBusy = FightingStyleController:Tick() == true end)
-                if not meleeBusy then pcall(function() SwordProgressionController:Tick() end) end
+                -- v21.35: Completion Sea, Katakuri/Dough, permanent items, Raid
+                -- and passive melee/TTK all belong to Priority Scheduler.
                 _G.State:SetMode("Idle")
-                _G.BobonStatus = "Max Level: Progression waiting"
+                _G.BobonStatus = "Max Level: Scheduler waiting"
                 return
             end
 
@@ -12685,7 +13727,7 @@ task.spawn(function()
             -- title). Bản cũ đòi match == true nên nil khiến bot kẹt
             -- re-request quest vô hạn → không farm, không gom, không đánh.
             local hasQuest = questState == true and questMatch ~= false
-            -- v21.32: retain the canonical active quest across a brief wrapper blink.
+            -- v21.33: retain the canonical active quest across a brief wrapper blink.
             -- Without this lease the controller cleared Farm, opened a "safe item window",
             -- and could launch BossManager before the Quest UI rebuilt.
             if not hasQuest and questState == false and questMatch ~= false
@@ -12710,16 +13752,9 @@ task.spawn(function()
             -- không còn xác nhận được đều phải quay lại giver ngay trong tick
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
-                local okSea, seaResult = pcall(function()
-                    -- Sea gates vẫn là bắt buộc ở level 700/1500; optional
-                    -- item/boss tuyệt đối không được chen vào giữa quest.
-                    return ItemProgression:RunChecks(true, false)
-                end)
-                if not okSea then
-                    warn("[BobonHub] Module Error: ItemProgression: " .. tostring(seaResult))
-                elseif seaResult then
-                    return
-                end
+                -- v21.35: Sea gates and permanent item work are scheduler-owned.
+                -- A confirmed closed quest is still the safe window for optional
+                -- user-enabled event/boss work that is intentionally not permanent.
 
                 -- A confirmed closed quest is the only safe window for
                 -- optional kaitun items/boss drops. The old placement was
@@ -12736,21 +13771,7 @@ task.spawn(function()
                     if okIndra and indraResult then return end
                     local okRainbow, rainbowResult = pcall(function() return RainbowHakiController:TryRun() end)
                     if okRainbow and rainbowResult then return end
-                    local okItems, itemResult = pcall(function()
-                        return ItemProgression:RunChecks(true, true)
-                    end)
-                    if not okItems then
-                        warn("[BobonHub] Module Error: ItemProgression: " .. tostring(itemResult))
-                    elseif itemResult then
-                        return
-                    end
-
-                    local okRaid, raidResult = pcall(function() return RaidController:TryStart() end)
-                    if not okRaid then
-                        warn("[BobonHub] Module Error: RaidController: " .. tostring(raidResult))
-                    elseif raidResult then
-                        return
-                    end
+                    -- Permanent items and Fragment Raid are Priority Scheduler-owned.
 
                     local okBoss, bossResult = pcall(function()
                         return BossManager:TryFightBoss()
@@ -12840,6 +13861,7 @@ task.spawn(function()
             local questAnchor = ResolveQuestClusterAnchor(q, questMobName) or q.MC
             ClusterFarmController:Activate("QUEST", {questMobName}, questAnchor, "Farm")
             ClusterFarmController:Tick()
+            ClusterFarmController:UpdatePhase()
 
             local anchorHeight = _G.Settings.FarmHeight or 22
             local hoverCF = ClusterFarmController:GetHoverCFrame(anchorHeight)
@@ -12847,22 +13869,18 @@ task.spawn(function()
                 hoverCF = ClusterFarmController:GetShadowCoverageHoverCFrame(anchorHeight) or hoverCF
             end
 
-            -- v21.6 VIDEO SWEEP FARM: acquisition and damage run in the same main
-            -- tick. Travel keeps approaching the exact active-quest mob while
-            -- the attack phase below starts as soon as that real root is inside
-            -- FastAttackRange. Heartbeat still stacks it after ownership moves.
-            local acquireTarget = ClusterFarmController:GetAcquireTarget()
+            -- v21.34 PHASED FARM: ACQUIRE physically visits unverified quest mobs
+            -- and stacks them at one fixed anchor.  Damage is withheld until KILL.
+            local acquireTarget = _G.State.ClusterPhase == "ACQUIRE" and ClusterFarmController:GetAcquireTarget() or nil
             local acquireRoot = acquireTarget
                 and acquireTarget:FindFirstChild("HumanoidRootPart")
             local acquiring = acquireRoot ~= nil
                 and _G.State:IsTargetValid(acquireTarget)
                 and IsEnemyNamed(acquireTarget, questMobName)
             if acquiring then
-                _G.State.FState = "GATHER_AND_ATTACK"
-                local stacked = tonumber(_G.State.ClusterAcquireCompleted) or 0
-                local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
-                _G.BobonStatus = ("Farm: ONE-PILE gather + attack %s (%d/%d)")
-                    :format(tostring(questMobName), stacked, total)
+                _G.State.FState = "ACQUIRE_STACK"
+                _G.BobonStatus = ("Farm: ACQUIRE + STACK %s (%d/%d)")
+                    :format(tostring(questMobName), tonumber(_G.State.ClusterPhaseVerified) or 0, tonumber(_G.State.ClusterPhaseTotal) or 0)
                 if _G.State:CanRequestTravel() then
                     TravelManager:Request(acquireRoot, "Farm", {
                         arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
@@ -12888,6 +13906,9 @@ task.spawn(function()
                 and IsFarmTargetContested(_G.State.FarmTarget)
             if not contested then
                 local promoted = ClusterFarmController:SelectPrimary()
+                if not promoted and _G.State.ClusterPhase == "KILL" then
+                    promoted = ClusterFarmController:SelectFallbackRealTarget()
+                end
                 local probeTarget = not promoted and ClusterFarmController:SelectProbePrimary() or nil
                 local chosen = promoted or probeTarget
                 if chosen then
@@ -12923,7 +13944,7 @@ task.spawn(function()
             -- branch, MOVE_TO_CLUSTER immediately retargeted the same owner back
             -- to hoverCF and the sweep never reached the remaining spawn roots.
             if acquiring then
-                _G.State.FState = "GATHER_AND_ATTACK"
+                _G.State.FState = "ACQUIRE_STACK"
             elseif hoverCF and (verifiedClusterTarget or authorityProbeTarget) and not contested then
                 _G.State.FState = authorityProbeTarget and "AUTHORITY_PROBE" or "MOVE_TO_CLUSTER"
                 if _G.State:CanRequestTravel() then
@@ -12957,10 +13978,11 @@ task.spawn(function()
                     end
                 end
             else
-                -- v21.32 active spawn-field search: never sit on an empty anchor.
+                -- v21.33 active spawn-field search: never sit on an empty anchor.
                 local sweepGoal, sweepKind = ClusterFarmController:GetFieldSweepGoal(q.MC)
                 if sweepGoal and _G.State:CanRequestTravel() then
-                    _G.State.FState = sweepKind == "LIVE" and "FIELD_SWEEP_LIVE" or "FIELD_PATROL"
+                    _G.State.FState = sweepKind == "LIVE" and "FIELD_SWEEP_LIVE"
+                        or (sweepKind == "SPAWN" and "FIELD_SPAWN_SWEEP" or "FIELD_PATROL")
                     if sweepKind == "LIVE" then
                         _G.BobonStatus = "Farm: sweeping live " .. tostring(questMobName) .. " spawn"
                         TravelManager:Request(sweepGoal, "Farm", {
@@ -12973,13 +13995,15 @@ task.spawn(function()
                                 or _G.Settings.ClusterAcquireTravelSpeed or 420,
                         })
                     else
-                        _G.BobonStatus = "Farm: patrolling " .. tostring(questMobName) .. " field"
+                        _G.BobonStatus = sweepKind == "SPAWN"
+                            and ("Farm: sweeping exact " .. tostring(questMobName) .. " spawns")
+                            or ("Farm: searching " .. tostring(questMobName) .. " field")
                         TravelManager:Request(sweepGoal, "Farm", {
-                            arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 14,
+                            arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
                             fallback = q.MC,
                             combatHover = false,
                             persistent = false,
-                            speed = _G.Settings.ClusterFieldPatrolSpeed or 420,
+                            speed = _G.Settings.ClusterFieldPatrolSpeed or 400,
                         })
                     end
                 elseif hoverCF and _G.State:CanRequestTravel() then
@@ -12992,40 +14016,20 @@ task.spawn(function()
                 end
             end
 
-            -- ATTACK: verified cluster roots are stacked inside one XZ pocket.
-            -- During acquisition the real quest root becomes preferred as soon
-            -- as it is inside remote range; verified stacked roots in the same
-            -- range are still fanned out by CombatController:CollectTargets().
+            -- v21.34 KILL PHASE ONLY. ACQUIRE never attacks: first make one real
+            -- fixed pile, then fan fresh swings across every eligible victim.  This removes
+            -- the old hybrid gather/attack path that could kill one mob at its spawn while
+            -- the rest of the client-only pile became statues.
             hrp = HRP()
-            local hybridAcquireAttack = false
-            if acquiring and acquireRoot and acquireRoot.Parent and hrp then
-                local okAcquirePos, acquirePos = pcall(function()
-                    return acquireRoot.Position
-                end)
-                hybridAcquireAttack = okAcquirePos and IsValidPos(acquirePos)
-                    and (hrp.Position - acquirePos).Magnitude
-                        <= (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
-            end
-            target = hybridAcquireAttack and acquireTarget or _G.State.FarmTarget
+            target = _G.State.FarmTarget
             targetRoot = target and target:FindFirstChild("HumanoidRootPart")
-            local hybridClusterAttack = false
-            if acquiring and not hybridAcquireAttack and targetRoot and targetRoot.Parent
-                and hrp and ClusterFarmController:IsVerified(target) then
-                local okClusterPos, clusterPos = pcall(function()
-                    return targetRoot.Position
-                end)
-                hybridClusterAttack = okClusterPos and IsValidPos(clusterPos)
-                    and (hrp.Position - clusterPos).Magnitude
-                        <= (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
-            end
-            if target and targetRoot and hrp and _G.State:IsTargetValid(target) then
+            if _G.State.ClusterPhase == "KILL"
+                and target and targetRoot and hrp and _G.State:IsTargetValid(target) then
                 PrepareCombatTarget(target)
 
-                -- v21.6 GLOBAL no-damage recovery: applies to every stable quest
-                -- mob. A locally stacked-looking root is not allowed to trap the
-                -- farm forever. A live acquisition root uses CombatController's
-                -- own per-target HP proof because its position is still changing.
-                if not hybridAcquireAttack and not authorityProbeTarget
+                -- Global liveness fallback: if a whole verified pile stops producing HP
+                -- deltas, revoke the stale authority/backend and force physical reacquire.
+                if not authorityProbeTarget
                     and not ClusterFarmController:IsShadowCombatActive()
                     and ClusterFarmController:GetVerifiedCount() <= 1
                     and ClusterFarmController:GetProbeCount() == 0
@@ -13035,18 +14039,16 @@ task.spawn(function()
                     DamageProvenGatherRoots[targetRoot] = nil
                     GatherAuthorityClass[targetRoot] = nil
                     if _G.State.ClusterPrimary == target then _G.State.ClusterPrimary = nil end
-                    -- A full three-second batch stall is stronger evidence than
-                    -- a single missed packet. Rotate the actual backend instead
-                    -- of aborting and immediately retrying the same dead route.
                     local failingBackend = CombatController.PendingBackend
                         or CombatController.VerifiedBackend
                     if failingBackend then
-                        CombatController:FailBackend(failingBackend,
-                            "GLOBAL-MOB-NO-DAMAGE")
+                        CombatController:FailBackend(failingBackend, "GLOBAL-MOB-NO-DAMAGE")
                     end
                     if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
                         TravelManager:Stop("GlobalMobNoDamageReacquire")
                     end
+                    _G.State.ClusterPhase = "ACQUIRE"
+                    _G.State.ClusterPhaseStartedAt = tick()
                     _G.BobonStatus = "Farm: Reacquiring " .. tostring(questMobName)
                     ResetFarmDamageWatch(target)
                     return
@@ -13058,35 +14060,24 @@ task.spawn(function()
                 local shadowClusterAttack = ClusterFarmController:IsShadowCombatActive()
                     and ClusterFarmController:GetShadowReachableCount(
                         _G.Settings.ClusterShadowAttackRange or _G.Settings.FastAttackRange or 100) > 0
-                if flatDist <= _G.Settings.AttackRange and farmHolds
-                    and (shadowClusterAttack or authorityProbeTarget or hybridAcquireAttack
-                        or hybridClusterAttack or TravelManager:IsAtCombatAnchor()) then
+                if flatDist <= (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
+                    and farmHolds
+                    and (shadowClusterAttack or authorityProbeTarget or TravelManager:IsAtCombatAnchor()) then
                     _G.State.FState = shadowClusterAttack and "SHADOW_CLUSTER_ATTACK"
-                        or (authorityProbeTarget and "AUTHORITY_PROBE_ATTACK"
-                            or ((hybridAcquireAttack or hybridClusterAttack)
-                                and "ATTACK_WHILE_GATHERING" or "ATTACK_CLUSTER"))
+                        or (authorityProbeTarget and "AUTHORITY_PROBE_ATTACK" or "ATTACK_CLUSTER")
                     EquipCombatTool()
-                    -- v21.23: once a real HP hit has started the one-shot movement
-                    -- persistence trial, stop spamming that unstacked mob for a moment.
-                    -- This keeps the NPC alive long enough to join the pile instead of
-                    -- killing it at its original spawn before the gather proof finishes.
-                    local moveTrialInFlight = targetRoot and _G.BobonGatherMoveTrial[targetRoot] ~= nil
-                    if not moveTrialInFlight then
-                        Attack(target, questMobName)
-                    else
-                        _G.BobonDiagnostics.Packet = "WAIT-PILE-PROOF"
-                    end
+                    Attack(target, questMobName)
                     if os.time() - lastAttackLog >= 5 then
                         lastAttackLog = os.time()
-                        DLog("ATTACK", ((hybridAcquireAttack or hybridClusterAttack)
-                            and "Gather target: " or "Cluster target: ") .. target.Name)
+                        DLog("ATTACK", "Cluster fanout: " .. target.Name)
                     end
                 end
             else
                 ResetFarmDamageWatch(nil)
                 if not acquiring and _G.State.FState ~= "FIELD_SWEEP_LIVE"
-                    and _G.State.FState ~= "FIELD_PATROL" then
-                    _G.BobonStatus = "Farm: searching " .. questMobName .. " spawn"
+                    and _G.State.FState ~= "FIELD_PATROL"
+                    and _G.State.FState ~= "FIELD_SPAWN_SWEEP" then
+                    _G.BobonStatus = "Farm: " .. tostring(_G.State.ClusterPhase) .. " • searching " .. questMobName .. " spawn"
                 end
             end
         end)
@@ -13282,6 +14273,18 @@ _G.BobonUnload = function()
     pcall(function() if FruitManager then FruitManager.Busy = false end end)
     pcall(function() FarmPositionController:ReleaseCluster() end)
     pcall(function() if ClusterHeartbeatConnection then ClusterHeartbeatConnection:Disconnect() end end)
+    pcall(function()
+        if ClusterFarmController and ClusterFarmController.EnemyAddedConnection then
+            ClusterFarmController.EnemyAddedConnection:Disconnect()
+            ClusterFarmController.EnemyAddedConnection = nil
+        end
+    end)
+    pcall(function()
+        if FruitManager and FruitManager.PopupConnections then
+            for _, conn in ipairs(FruitManager.PopupConnections) do if conn then conn:Disconnect() end end
+            FruitManager.PopupConnections = {}
+        end
+    end)
     pcall(function() BindPlayerDamage(nil, nil) end)
     pcall(function()
         for _, conn in ipairs(BobonUIConnections or {}) do
@@ -13294,10 +14297,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.32] Full Script Loaded Successfully!")
-print("[BobonHub v21.32] Architecture: Persistent Travel | ActionToken | Single Owner")
-print("[BobonHub v21.32] Core: TravelManager | StateManager | RecoveryManager")
-print("[BobonHub v21.32] Modules: QuestFarm | One-Pile Real-Ownership Cluster | Teddy Air Combat | Factory | Material Prep | Immediate Melee/Gacha | CDK/Skull | Fire HUD")
-print("[BobonHub v21.32] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.32] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.32] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.35] Full Script Loaded Successfully!")
+print("[BobonHub v21.35] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.35] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.35] Modules: QuestFarm | Fixed-Pile Acquire/Stack/Kill | All-Victim Air Combat | Smart Raid/Fragments | Fruit Reserve | Factory | Full Melee | CDK/Skull | Fire HUD")
+print("[BobonHub v21.35] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.35] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v21.35] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
