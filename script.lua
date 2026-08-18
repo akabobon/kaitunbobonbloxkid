@@ -845,7 +845,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v22.1 SAFE SOFT-BRING] Loading...")
+print("[BobonHub v22.3 DAMAGE CONTINUITY] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1101,6 +1101,10 @@ _G.Settings = {
     CombatCausalWindow  = 0.65,
     IgnoreIncomingDamage= true,
     IncomingDamageGrace = 2.0,
+    -- v22.3: raw HP loss is informational only. PvP hits and ordinary NPC contact
+    -- must not change hover/target/action or manufacture a skill-dodge.
+    IgnoreRawDamageEffects = true,
+    EmergencySafetyEnabled = false,
     -- v18.1: external hits/control effects must never cancel the current job.
     -- These values only affect controller policy; they do not mutate server Stun/Busy.
     ContinuityMode      = true,
@@ -1340,12 +1344,14 @@ _G.Settings = {
     -- [D-1/C-8] Chỉ né chiêu của NPC trong workspace.Enemies. Kỹ năng và
     -- sát thương từ người chơi không làm đổi target/hover/bring của kaitun.
     DodgeAttacks        = true,
-    -- v21.28 SMART SKILL DODGE: detect cast/charge/transient AoE, pause attacks,
-    -- evade with the SAME TravelManager owner, confirm clear, then resume target.
-    -- v21.33 TARGET-LOCK DODGE: conservative enough to avoid false-positive wandering.
-    DodgeCooldown       = 0.30,
-    DodgeDistance       = 26,
-    DodgeHeight         = 4,
+    -- v22.3: only real NPC skill evidence may trigger dodge. Raw HP loss never does.
+    DodgeOnRawDamage    = false,
+    DodgeKeepAttacking  = true,
+    DodgeSideStepOnly   = true,
+    -- Target-lock side-step: same TravelManager owner, same target, same combat stream.
+    DodgeCooldown       = 0.24,
+    DodgeDistance       = 22,
+    DodgeHeight         = 0,
     DodgeRadius         = 42,
     DodgeEmergencySpeed = 380,
     DodgeMinHold        = 0.30,
@@ -1507,6 +1513,11 @@ do
             _G.Settings.AutoCastleRaidEvent = bool(core["Castle Raid Event"], _G.Settings.AutoCastleRaidEvent)
             _G.Settings.KatakuriOnlyMax = not bool(core["Early Dough King"], not _G.Settings.KatakuriOnlyMax)
             _G.Settings.SmartFarmStuckEnabled = bool(core["Smart Stuck Hop"], _G.Settings.SmartFarmStuckEnabled)
+            _G.Settings.IgnoreRawDamageEffects = bool(core["Ignore Raw Damage"], _G.Settings.IgnoreRawDamageEffects)
+            _G.Settings.EmergencySafetyEnabled = not bool(core["Ignore Raw Damage"], not _G.Settings.EmergencySafetyEnabled)
+            _G.Settings.DodgeKeepAttacking = bool(core["Dodge While Attacking"], _G.Settings.DodgeKeepAttacking)
+            _G.Settings.DodgeSideStepOnly = bool(core["Side Step Dodge"], _G.Settings.DodgeSideStepOnly)
+            _G.Settings.DodgeOnRawDamage = not bool(core["Ignore Raw Damage"], not _G.Settings.DodgeOnRawDamage)
         end
 
         local fps = cfg["FPS Boost"]
@@ -2326,10 +2337,17 @@ local function Hum() local c=Char(); return c and c:FindFirstChild("Humanoid") e
 local function IsAlive() local h=Hum(); return h and h.Health > 0 end
 
 local function FarmSafetyActive()
-    local h = Hum()
-    if not h or h.Health <= 0 or h.MaxHealth <= 0 then return false end
     local state = _G.State
     if not state then return false end
+    -- v22.3: the requested kaitun policy is continuity-first. Low HP from PvP or
+    -- ordinary contact is not allowed to alter combat range/hover or pause attacks.
+    if _G.Settings and _G.Settings.EmergencySafetyEnabled == false then
+        state.FarmSafetyActive = false
+        state.FarmSafetyUntil = 0
+        return false
+    end
+    local h = Hum()
+    if not h or h.Health <= 0 or h.MaxHealth <= 0 then return false end
     local pct = (h.Health / h.MaxHealth) * 100
     local now = tick()
     if state.FarmSafetyActive then
@@ -4572,11 +4590,15 @@ end
 
 local function Attack(preferredTarget, mobName)
     if not IsAlive() then return false end
-    -- v21.28: while a confirmed NPC skill dodge is active, preserve the exact
-    -- combat target but do not keep swinging inside the danger window.
-    if _G.State and _G.State.DodgeActive then
+    -- v22.3: evade and attack are concurrent. Dodge only offsets TravelManager;
+    -- it never suppresses remote/fanout dispatch against the locked target.
+    local attackingWhileDodge = _G.State and _G.State.DodgeActive
+        and _G.Settings.DodgeKeepAttacking ~= false
+    if _G.State and _G.State.DodgeActive and not attackingWhileDodge then
         _G.BobonDiagnostics.Packet = "DODGE-HOLD"
         return false
+    elseif attackingWhileDodge then
+        _G.BobonDiagnostics.Packet = "DODGE+ATTACK"
     end
     local c = Char()
     local tool = c and c:FindFirstChildOfClass("Tool")
@@ -8129,44 +8151,55 @@ local function BindPlayerDamage(character, humanoid)
         if not SessionAlive() or PlayerDamageCharacter ~= character then return end
         if newHealth < lastHealth then
             _G.State.LastIncomingDamage = tick()
-            -- v21.33 damage-confirmed fallback: some ordinary NPC sword swings use
-            -- generic animation names and expose no transient hitbox.  The first real
-            -- HP loss therefore arms one short dodge against the exact current NPC.
-            local damageTarget = _G.State.CurrentTarget
-            local enemies = workspace:FindFirstChild("Enemies")
-            if damageTarget and enemies and damageTarget.Parent == enemies
-                and (_G.State.Mode == "Farming" or _G.State.Mode == "Bossing"
-                    or _G.State.Mode == "GettingItem") then
-                _G.State.DamageDodgeTarget = damageTarget
-                _G.State.DamageDodgeUntil = tick() + (_G.Settings.DodgeDamageFallbackHold or 1.10)
-            end
-            local maxHealth = tonumber(humanoid.MaxHealth) or 0
-            local hpPct = maxHealth > 0 and (newHealth / maxHealth) * 100 or 100
-            if hpPct <= (_G.Settings.EmergencyHealthPercent or 55) then
-                -- Preserve the exact job/target/cluster, but stop sitting inside NPC
-                -- melee range. This fixes the video failure where Snowmen chip HP to
-                -- zero while the client-input backend keeps the player at ~5 studs.
-                _G.State.FarmSafetyActive = true
-                _G.State.FarmSafetyUntil = math.max(_G.State.FarmSafetyUntil or 0,
-                    tick() + (_G.Settings.EmergencyMinHold or 2.5))
-                if CombatController then
-                    CombatController.DesiredClientRange = false
-                    CombatController.ClientRetreatUntil = math.max(
-                        CombatController.ClientRetreatUntil or 0,
-                        _G.State.FarmSafetyUntil)
+
+            -- v22.3 RAW DAMAGE IS NEVER A DODGE SIGNAL.
+            -- We cannot reliably attribute one HealthChanged event to PvP vs an
+            -- ordinary NPC contact swing, so raw HP loss is continuity-only.
+            -- Skill dodge is armed exclusively by DodgeController's current-target
+            -- animation/charge/hitbox/hazard evidence.
+            if _G.Settings.DodgeOnRawDamage == true then
+                local damageTarget = _G.State.CurrentTarget
+                local enemies = workspace:FindFirstChild("Enemies")
+                if damageTarget and enemies and damageTarget.Parent == enemies
+                    and (_G.State.Mode == "Farming" or _G.State.Mode == "Bossing"
+                        or _G.State.Mode == "GettingItem") then
+                    _G.State.DamageDodgeTarget = damageTarget
+                    _G.State.DamageDodgeUntil = tick() + (_G.Settings.DodgeDamageFallbackHold or 1.10)
                 end
-                _G.BobonStatus = "Farm: Safe hover • recovering HP"
+            else
+                _G.State.DamageDodgeTarget = nil
+                _G.State.DamageDodgeUntil = 0
             end
+
+            if _G.Settings.EmergencySafetyEnabled ~= false then
+                local maxHealth = tonumber(humanoid.MaxHealth) or 0
+                local hpPct = maxHealth > 0 and (newHealth / maxHealth) * 100 or 100
+                if hpPct <= (_G.Settings.EmergencyHealthPercent or 55) then
+                    _G.State.FarmSafetyActive = true
+                    _G.State.FarmSafetyUntil = math.max(_G.State.FarmSafetyUntil or 0,
+                        tick() + (_G.Settings.EmergencyMinHold or 2.5))
+                    if CombatController then
+                        CombatController.DesiredClientRange = false
+                        CombatController.ClientRetreatUntil = math.max(
+                            CombatController.ClientRetreatUntil or 0,
+                            _G.State.FarmSafetyUntil)
+                    end
+                end
+            else
+                _G.State.FarmSafetyActive = false
+                _G.State.FarmSafetyUntil = 0
+            end
+
             if _G.Settings.ContinuityMode then
-                -- Damage/knockback must not look like a travel stall. Keep the
-                -- existing ActionToken, MovementOwner, target and Mode intact.
+                -- PvP/NPC contact/knockback/Stun/Busy cannot look like a stalled job.
+                -- Preserve ActionToken, MovementOwner, CurrentTarget and combat backend.
                 _G.State.LastMoveTime = os.time()
                 _G.State.ConsecutiveFails = 0
-                DLog("CONTINUITY", "incoming damage preserved job; safe-hover may engage")
+                DLog("CONTINUITY", "raw incoming damage ignored; job+movement+target preserved")
             end
         end
-        -- Hysteresis: do not descend again the instant HP crosses the trigger.
-        if _G.State.FarmSafetyActive and humanoid.MaxHealth > 0
+        if _G.Settings.EmergencySafetyEnabled ~= false
+            and _G.State.FarmSafetyActive and humanoid.MaxHealth > 0
             and (newHealth / humanoid.MaxHealth) * 100
                 >= (_G.Settings.EmergencyResumePercent or 82)
             and tick() >= (_G.State.FarmSafetyUntil or 0) then
@@ -8364,7 +8397,7 @@ end)
 --   * A threat must be seen in consecutive monitor samples before movement changes.
 --   * One evade vector is frozen for the cast. Replan only if the chosen evade pocket itself
 --     becomes hazardous, preventing the left/right/behind zig-zag seen in Roblox(10).
---   * Attack pauses while DodgeActive; ActionToken/quest/cluster/target remain untouched.
+--   * Attack CONTINUES while DodgeActive; only TravelManager receives a lateral offset.
 -- ══════════════════════════════════════════════════════════════════
 do
 local DodgeController = {
@@ -8383,16 +8416,18 @@ local DodgeController = {
     HazardParts = setmetatable({}, {__mode="k"}),
 }
 
+-- v22.3: normal M1/contact animations are intentionally NOT dodge triggers.
+-- Only high-confidence skill/cast names may move the player sideways.
 local ATTACK_WORDS = {
-    "attack","combo","kick","punch","slash","swing","strike","smash",
-    "bite","claw","fist","spin","skill","cast","blast","beam","wave",
-    "shot","charge","roar","stomp","slam","burst",
+    "skill","cast","blast","beam","wave","projectile","charge",
+    "roar","stomp","slam","burst","explosion","shockwave",
+    "vortex","tornado","laser","eruption","aoe",
 }
--- High-confidence world hazards only.  Generic "fire/ice/snow/lightning/effect"
--- names were removed because player VFX and map decorations caused constant false dodges.
+-- High-confidence world hazards only. Generic Hitbox/Damage names are excluded
+-- because ordinary NPC melee boxes and player VFX would create false dodges.
 local HARD_HAZARD_WORDS = {
-    "hitbox","damage","projectile","bullet","beam","blast","explosion",
-    "shockwave","aoe","vortex","tornado","laser","eruption",
+    "projectile","beam","blast","explosion","shockwave","aoe",
+    "vortex","tornado","laser","eruption",
 }
 
 local function WordMatch(text, words)
@@ -8424,6 +8459,38 @@ local function IsOurCharacterDescendant(obj)
     return c and obj and obj:IsDescendantOf(c) or false
 end
 
+-- v22.3: PvP/player VFX are never NPC-skill dodge evidence.
+local function IsPlayerOwnedEffect(obj)
+    local node = obj
+    for _ = 1, 6 do
+        if not node then break end
+        if node:IsA("Model") and Players:GetPlayerFromCharacter(node) then
+            return true
+        end
+
+        for _, key in ipairs({"Creator","creator","Owner","owner"}) do
+            local marker = node:FindFirstChild(key)
+            if marker and marker:IsA("ObjectValue") then
+                local value = marker.Value
+                if value and value:IsA("Player") then return true end
+                if value and value:IsA("Model") and Players:GetPlayerFromCharacter(value) then
+                    return true
+                end
+            end
+        end
+
+        local uid = node:GetAttribute("OwnerUserId")
+            or node:GetAttribute("CreatorUserId")
+            or node:GetAttribute("UserId")
+        if type(uid) == "number" and uid > 0 then
+            local okPlayer, player = pcall(function() return Players:GetPlayerByUserId(uid) end)
+            if okPlayer and player then return true end
+        end
+        node = node.Parent
+    end
+    return false
+end
+
 local function FlatUnit(v, fallback)
     local flat = Vector3.new(v.X,0,v.Z)
     if flat.Magnitude > 0.05 then return flat.Unit end
@@ -8435,7 +8502,10 @@ local function FlatUnit(v, fallback)
 end
 
 local function TrackHazard(obj)
-    if not obj or not obj:IsA("BasePart") or IsOurCharacterDescendant(obj) then return end
+    if not obj or not obj:IsA("BasePart")
+        or IsOurCharacterDescendant(obj) or IsPlayerOwnedEffect(obj) then
+        return
+    end
     local target, targetRoot = ActiveCombatModel()
     local me = HRP()
     if not target or not targetRoot or not me then return end
@@ -8504,7 +8574,8 @@ local function TargetThreat()
     local dist=(root.Position-me.Position).Magnitude
     if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
 
-    if _G.State.DamageDodgeTarget == target
+    if _G.Settings.DodgeOnRawDamage == true
+        and _G.State.DamageDodgeTarget == target
         and tick() <= (tonumber(_G.State.DamageDodgeUntil) or 0) then
         return target,root,"damage-confirmed"
     end
@@ -8512,13 +8583,9 @@ local function TargetThreat()
     local anim,why=NamedAttackAnimation(hum)
     if anim then return target,root,why end
 
-    local okVel,vel=pcall(function() return root.AssemblyLinearVelocity end)
-    if okVel and typeof(vel)=="Vector3" and dist>0.5 then
-        local toMe=me.Position-root.Position
-        local closing=toMe.Unit:Dot(vel)
-        if closing>45 then return target,root,"charge" end
-    end
-
+    -- Do not infer a skill from root velocity alone. Bring/network correction can
+    -- move an NPC quickly and used to create a false "charge" dodge. Real charge
+    -- skills are still caught by their animation/cast name or spawned hazard.
     for _,obj in ipairs(target:GetDescendants()) do
         if obj:IsA("BasePart") and WordMatch(obj.Name,HARD_HAZARD_WORDS)
             and HazardTouchesPoint(obj,me.Position) then
@@ -8550,17 +8617,30 @@ end
 local function ChooseOffset(targetRoot)
     local me=HRP()
     if not me or not targetRoot then return Vector3.zero end
-    local distance=math.clamp(tonumber(_G.Settings.DodgeDistance) or 20,12,26)
-    local up=math.clamp(tonumber(_G.Settings.DodgeHeight) or 4,0,8)
+    local distance=math.clamp(tonumber(_G.Settings.DodgeDistance) or 20,12,30)
+    local up=math.clamp(tonumber(_G.Settings.DodgeHeight) or 0,0,8)
     local away=FlatUnit(me.Position-targetRoot.Position,-targetRoot.CFrame.LookVector)
     local side=Vector3.new(-away.Z,0,away.X)
     local look=FlatUnit(targetRoot.CFrame.LookVector,-away)
-    local candidates={
-        away*distance+Vector3.new(0,up,0),
-        side*distance+Vector3.new(0,up,0),
-        -side*distance+Vector3.new(0,up,0),
-        -look*(distance*0.90)+Vector3.new(0,up,0),
-    }
+    local vertical=Vector3.new(0,up,0)
+    local candidates
+    if _G.Settings.DodgeSideStepOnly ~= false then
+        -- Prefer a pure left/right sidestep at the existing hover height.
+        -- Tiny rear bias is only a fallback pocket if both sides overlap a hazard.
+        candidates={
+            side*distance+vertical,
+            -side*distance+vertical,
+            side*(distance*0.85)+away*(distance*0.20)+vertical,
+            -side*(distance*0.85)+away*(distance*0.20)+vertical,
+        }
+    else
+        candidates={
+            side*distance+vertical,
+            -side*distance+vertical,
+            away*distance+vertical,
+            -look*(distance*0.90)+vertical,
+        }
+    end
     local hoverBase=FarmPositionController:GetFarmPos(targetRoot.Parent,_G.Settings.FarmHeight or 22)
         or me.Position
     local best,bestScore=candidates[1],-math.huge
@@ -15867,10 +15947,10 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v22.1] Full Script Loaded Successfully!")
-print("[BobonHub v22.1] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
-print("[BobonHub v22.1] Core: GoalPlanner | PriorityScheduler | TravelManager | CombatController | EconomyMutex")
-print("[BobonHub v22.1] Modules: Combat-First QuestFarm | Optional Bring | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
-print("[BobonHub v22.1] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
-print("[BobonHub v22.1] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v22.1] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v22.3] Full Script Loaded Successfully!")
+print("[BobonHub v22.3] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
+print("[BobonHub v22.3] Core: GoalPlanner | PriorityScheduler | TravelManager | CombatController | EconomyMutex")
+print("[BobonHub v22.3] Modules: Combat-First QuestFarm | Optional Bring | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
+print("[BobonHub v22.3] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
+print("[BobonHub v22.3] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
+print("[BobonHub v22.3] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
