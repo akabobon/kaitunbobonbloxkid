@@ -1,7 +1,22 @@
 -- =================================================================
---         BOBON HUB v21.42 | FARM STABILITY REBASE + FIXED SHARED PILE + FULL PROGRESSION
+--         BOBON HUB v21.43 | SHARED COMBAT STARVATION + SKID-DIRECT FIX | FARM STABILITY REBASE
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.40 FIXED SHARED PILE + selective v21.41 quest parser | Version: v21.42
+--         Base: v21.42 FARM STABILITY REBASE | Version: v21.43
+--
+--  v21.43 ROBLOX(16) SHARED COMBAT STARVATION ROOT FIX:
+--  [C43-1] Video evidence separates gather from combat: shared BN reports 7 grouped/verified
+--          victims while the quest stays 1/8 and HUD remains WAIT-FAST-REMOTE.
+--  [C43-2] Shared-source fixed-pile farm now participates in aggregate HP proof. Damage on any
+--          dispatched same-name pile victim can validate the backend; proof is not primary-only.
+--  [C43-3] Net resolver supports both direct RE/RegisterAttack children and the shared-source
+--          require(Modules.Net):RemoteEvent(...) API used by the public Skid source.
+--  [C43-4] Adds SKID-DIRECT-4: fresh RegisterAttack + 4-argument RegisterHit for every shared
+--          pile victim using the source-shared payload shape, still promoted only by real HP loss.
+--  [C43-5] SKID-DIRECT-4 has a short bounded retry so remote-only air farm does not remain starved
+--          after the older helper/token/legacy shapes are rejected. No client M1 dip is introduced.
+--  [C43-6] Existing pending-probe state machine is otherwise unchanged; this patch does not alter
+--          Travel, fixed-pile placement, quest lease, scheduler priorities, or progression movement.
+--  [C43-7] HUD reports SHARED PILE while SharedSourceFarmMode owns ordinary quest farming.
 --
 --  v21.42 FARM STABILITY REBASE (ROBLOX 14/15 ROOT FIX):
 --  [S42-1] Active quest farm is protected from optional FruitFinder/Elite utility preemption.
@@ -936,6 +951,10 @@ _G.Settings = {
     EmergencyMinHold    = 0,
     RemoteOnlyFarmCombat = true,
     RemoteProbeAllCluster = true,
+    SharedSkidDirectFallback = true,
+    SharedSkidDirectRetry = 0.45,
+    SharedSkidDirectMaxTargets = 32,
+    SharedSkidDirectGap = 0.03,
     FarmOffsetX         = 1.5,
     -- Retained for compatibility only; enemy roots are no longer resized.
     HitboxSize          = 0,
@@ -2129,6 +2148,11 @@ do
                             :format(clusterMode, candidates, owned, moved,
                                 math.max(0, candidates - owned),
                                 tostring(diag.OwnerAPI or "CHECK"))
+                    elseif _G.Settings.SharedSourceFarmMode ~= false
+                        and mode == "Farming"
+                        and (state.FState == "SHARED_ATTACK" or state.FState == "SHARED_BRING_FARM") then
+                        ClusterL.Text = ("SHARED PILE ON  • grouped %d • combat %s")
+                            :format(candidates, tostring(diag.Net or "PROBING"))
                     else
                         ClusterL.Text = "ALL-MOB CLUSTER OFF  •  waiting"
                     end
@@ -2910,6 +2934,7 @@ end
 local CombatController = {
     RegisterAttack = nil,
     RegisterHit = nil,
+    NetModuleAPI = nil,
     GameGlobal = nil,
     NativeHelper = nil,
     HelperScanDone = 0,
@@ -2964,9 +2989,42 @@ function CombatController:ResolveRemotes()
         and self.RegisterHit and self.RegisterHit.Parent then
         return true
     end
+
     local net = ResolveNet()
-    self.RegisterAttack = net and net:FindFirstChild("RE/RegisterAttack") or nil
-    self.RegisterHit = net and net:FindFirstChild("RE/RegisterHit") or nil
+    local attack = net and net:FindFirstChild("RE/RegisterAttack") or nil
+    local hit = net and net:FindFirstChild("RE/RegisterHit") or nil
+
+    -- v21.43: the shared/public source does not assume RE/* are exposed as
+    -- direct children.  It requires Modules.Net and asks the module for the
+    -- live RemoteEvent object. Support both shapes instead of deadlocking the
+    -- combat selector when the direct children are absent on a client build.
+    if (not attack or not hit) and net and net:IsA("ModuleScript") then
+        local api = self.NetModuleAPI
+        if type(api) ~= "table" then
+            local okRequire, resolved = pcall(require, net)
+            if okRequire and type(resolved) == "table" then
+                api = resolved
+                self.NetModuleAPI = resolved
+            end
+        end
+        if type(api) == "table" and type(api.RemoteEvent) == "function" then
+            if not attack then
+                local okAttack, remote = pcall(function()
+                    return api:RemoteEvent("RegisterAttack")
+                end)
+                if okAttack then attack = remote end
+            end
+            if not hit then
+                local okHit, remote = pcall(function()
+                    return api:RemoteEvent("RegisterHit", true)
+                end)
+                if okHit then hit = remote end
+            end
+        end
+    end
+
+    self.RegisterAttack = attack
+    self.RegisterHit = hit
     return self.RegisterAttack ~= nil and self.RegisterHit ~= nil
 end
 
@@ -3429,6 +3487,9 @@ function CombatController:FailBackend(backend, reason)
     local retryFor = wasProven
         and (_G.Settings.CombatVerifiedBackendRetry or 0.85)
         or (_G.Settings.CombatBackendRetry or 12)
+    if backend == "SKID-DIRECT-4" and not wasProven then
+        retryFor = math.max(0.20, tonumber(_G.Settings.SharedSkidDirectRetry) or 0.45)
+    end
     self.FailedUntil[backend] = tick() + retryFor
     if backend == "TOKEN-4" then
         if IsCombatToken(self.SessionToken) then
@@ -3573,12 +3634,27 @@ function CombatController:CheckPending(now)
     end
 end
 
+function CombatController:BuildSharedDirectToken()
+    -- Match the public shared-source fallback first.  It combines three user-id
+    -- digits with five characters from the current coroutine string.  If this
+    -- executor formats coroutine.running() differently, fall back to the live
+    -- token resolver already used by TOKEN-4.
+    local uid = tostring(LP and LP.UserId or "")
+    local co = tostring(coroutine.running())
+    local token = uid:sub(2, 4) .. co:sub(11, 15)
+    if IsCombatToken(token) then return token end
+    return self:ResolveSessionToken()
+end
+
 function CombatController:BackendAvailable(name)
     if (self.FailedUntil[name] or 0) > tick() then return false end
     if name == "CLIENT-HELPER" then
         return self:ResolveRemotes() and type(self:ResolveNativeHelper()) == "function"
     elseif name == "TOKEN-4" then
         return self:ResolveRemotes() and IsCombatToken(self:ResolveSessionToken())
+    elseif name == "SKID-DIRECT-4" then
+        return _G.Settings.SharedSkidDirectFallback ~= false
+            and self:ResolveRemotes()
     elseif name == "LEGACY-2" then
         return self:ResolveRemotes() and self:LegacyAllowed()
     elseif name == "CLIENT-MOUSE" then
@@ -3595,9 +3671,9 @@ function CombatController:SelectBackend(now)
         and ClusterFarmController:IsShadowCombatActive()
     local stackedCount = tonumber(_G.BobonDiagnostics
         and _G.BobonDiagnostics.BringMoved) or 0
-    local sharedMulti = airFarm and _G.Settings.SharedSourceFarmMode ~= false
+    local sharedFarm = airFarm and _G.Settings.SharedSourceFarmMode ~= false
         and _G.State and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
-        and stackedCount >= 2
+    local sharedMulti = sharedFarm and stackedCount >= 2
     local clusterMulti = airFarm
         and _G.State and (_G.State.ClusterMode ~= "OFF" or sharedMulti)
         and stackedCount >= 2
@@ -3637,6 +3713,12 @@ function CombatController:SelectBackend(now)
         return "LEGACY-2"
     end
 
+    -- v21.43: ordinary shared-source quest farm probes the source-compatible
+    -- direct 4-argument hit shape first. Real HP proof still decides trust.
+    if sharedFarm and self:BackendAvailable("SKID-DIRECT-4") then
+        return "SKID-DIRECT-4"
+    end
+
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
@@ -3648,9 +3730,9 @@ function CombatController:SelectBackend(now)
             and {"LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
             or (clusterMulti
                 and (_G.Settings.ClusterPreferLegacyFanout ~= false
-                    and {"LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
-                    or {"TOKEN-4", "CLIENT-HELPER", "LEGACY-2"})
-                or {"CLIENT-HELPER", "TOKEN-4", "LEGACY-2"})
+                    and {"SKID-DIRECT-4", "LEGACY-2", "TOKEN-4", "CLIENT-HELPER"}
+                    or {"SKID-DIRECT-4", "TOKEN-4", "CLIENT-HELPER", "LEGACY-2"})
+                or {"SKID-DIRECT-4", "CLIENT-HELPER", "TOKEN-4", "LEGACY-2"})
         for _, name in ipairs(order) do
             if self:BackendAvailable(name) then return name end
         end
@@ -3658,7 +3740,7 @@ function CombatController:SelectBackend(now)
     end
 
     for _, name in ipairs({
-        "CLIENT-HELPER", "TOKEN-4", "LEGACY-2",
+        "CLIENT-HELPER", "SKID-DIRECT-4", "TOKEN-4", "LEGACY-2",
         "CLIENT-MOUSE", "CLIENT-VIM", "CLIENT-TOOL",
     }) do
         if self:BackendAvailable(name) then return name end
@@ -3819,6 +3901,37 @@ function CombatController:Dispatch(backend, tool, entries, preferredRoot)
         return pcall(function()
             self.RegisterHit:FireServer(entries[1].Part, {}, nil, token)
         end)
+
+    elseif backend == "SKID-DIRECT-4" then
+        if not self:ResolveRemotes() then return false end
+        local token = self:BuildSharedDirectToken()
+        if not IsCombatToken(token) then return false end
+
+        -- Exact shared-source rhythm: every victim receives a fresh registered
+        -- attack followed by RegisterHit(part, {{model, part}, part}, nil, token).
+        -- Do not batch several victims under one swing; the live source repeats
+        -- RegisterAttack for each nearby NPC.
+        local anyOk = false
+        local limit = math.min(#entries,
+            math.max(1, math.floor(tonumber(_G.Settings.SharedSkidDirectMaxTargets)
+                or tonumber(_G.Settings.SharedAttackMaxTargets) or 32)))
+        local gap = math.max(0, tonumber(_G.Settings.SharedSkidDirectGap) or 0.03)
+        for i = 1, limit do
+            local entry = entries[i]
+            local part = entry.Model and (entry.Model:FindFirstChild("Head") or entry.Part)
+            if part and part:IsA("BasePart") then
+                pcall(function() self.RegisterAttack:FireServer(0.125) end)
+                local ok = pcall(function()
+                    self.RegisterHit:FireServer(part, {
+                        {entry.Model, part},
+                        part,
+                    }, nil, token)
+                end)
+                anyOk = anyOk or ok
+                if gap > 0 and i < limit then task.wait(gap) end
+            end
+        end
+        return anyOk
 
     elseif backend == "LEGACY-2" then
         local shadowQuest = ClusterFarmController
@@ -4206,7 +4319,11 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     -- verified stacked entry at the existing attack cadence. This is deliberately
     -- bounded to one victim per AttackDelay tick; no extra attack loop/thread is created.
     local dispatchEntries = entries
-    local clusterFanout = _G.State and _G.State.ClusterMode ~= "OFF"
+    local sharedFarmFanout = _G.Settings.SharedSourceFarmMode ~= false
+        and _G.State and _G.State.Mode == "Farming"
+        and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+    local clusterFanout = _G.State
+        and (_G.State.ClusterMode ~= "OFF" or sharedFarmFanout)
         and not IsClientInputBackend(backend)
 
     -- v21.17: if a full-context victim was selected above, entries[1] is that victim
@@ -4315,6 +4432,7 @@ function CombatController:Cleanup()
     self.WatchedHealth = nil
     self.NativeHelper = nil
     self.HelperScanDone = 0
+    self.NetModuleAPI = nil
     self.SessionToken = nil
     self.SessionTokenSource = nil
     self.TokenScanAt = 0
