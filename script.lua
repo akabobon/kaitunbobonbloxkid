@@ -1,7 +1,30 @@
 -- =================================================================
---         BOBON HUB v21.43 | SHARED COMBAT STARVATION + SKID-DIRECT FIX | FARM STABILITY REBASE
+--         BOBON HUB v21.45 | KAITUN COMPLETE: WEBHOOK + CONFIG FILE + CAP 2850
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.42 FARM STABILITY REBASE | Version: v21.43
+--         Base: v21.44 | Version: v21.45
+--
+--  v21.45 KAITUN COMPLETE (BananaHub-style essentials):
+--  [K45-1] Discord webhook notifier: boot, level milestones (every 100), max
+--          level and key item acquisitions (Saber, Pole V1, CDK, Skull
+--          Guitar, ...). Passive + pcall + rate-limited; never owns movement
+--          or combat, so farm stability is untouched.
+--  [K45-2] Config file persistence: BobonHub/Config.json saves/restores the
+--          user-facing settings (writefile/readfile). The external
+--          getgenv().Configs adapter still overrides saved values per run.
+--  [K45-3] External config adapter now accepts "Webhook" / "Webhook URL".
+--  [K45-4] U44 alignment stays: cap 2850 (U29+) and reworked fruit catalog
+--          (Eagle/Lightning/Tiger).
+--
+--  v21.44 UPDATE-29/30/31 ALIGNMENT (CURRENT GAME ERA):
+--  [U44-1] MAX_LEVEL raised 2800 -> 2850 (Update 29 raised the cap; U30/U31 kept it).
+--          QDB SubmergedQuest3/Grand Devotee extends to 2850 so the kaitun keeps
+--          farming the same Submerged pile instead of stopping at the old cap.
+--  [U44-2] Fruit catalog updated for the 2025-2026 reworks: Eagle (Falcon rework,
+--          U26), Lightning (Rumble rework, U27), Tiger (Leopard rework, U28).
+--          Legacy Falcon/Rumble/Leopard names remain as aliases for old inventories.
+--  [U44-3] Fallback shop prices added for Eagle/Lightning/Tiger so StoreFruit and
+--          buy decisions keep working when the game hides real prices.
+--  [U44-4] No travel, combat, scheduler or progression logic changed in this patch.
 --
 --  v21.43 ROBLOX(16) SHARED COMBAT STARVATION ROOT FIX:
 --  [C43-1] Video evidence separates gather from combat: shared BN reports 7 grouped/verified
@@ -1396,9 +1419,67 @@ _G.Settings = {
     RainbowHaki          = false,
     Shutdown             = false,
     SnipeFruit           = "",
+    WebhookURL           = "", -- v21.45: Discord webhook; empty = disabled
     SwitchMelee          = true,
 }
 
+
+-- ══════════════════════════════════════════════════════════════════
+--              KAITUN CONFIG FILE v1 (BananaHub-style persistence)
+--   Saves the user-facing settings to BobonHub/Config.json and restores
+--   them on the next execution. Pure file IO, never blocks movement.
+--   The external getgenv().Configs adapter below still overrides these
+--   saved values when the user injects an explicit config this run.
+-- ══════════════════════════════════════════════════════════════════
+local ConfigIO = { File = "BobonHub/Config.json", Loaded = false }
+local CONFIG_PERSIST_KEYS = {
+    "Team","AutoSaber","AutoKatakuri","AutoCDK","AutoSoulGuitar","AutoRaceV2",
+    "GetFruits","FruitEnabled","RainbowHaki","Shutdown","SnipeFruit","WebhookURL",
+    "SwitchMelee","LockFragment","HopEnabled","HopFindFruit","HopElite",
+    "HopFindDarkbeard","HopFindMirage","HopFindMirrorFractal","HopFindSoulReaper",
+    "HopFindTushita","HopFindValkyrieHelm","HopPlayerNear","HopPlayerNearRadius",
+    "FPSBoostEnabled","FPSCap","FPSHideGameUI","FPSDisable3DRender",
+    "AutoStats","AutoItems","BossEnabled","DodgeAttacks","FarmBossDrops",
+    "FarmMasteryEnabled","MasteryTarget","MasteryHealthPercent","KatakuriPreferDough",
+}
+local hasFileAPI = (type(writefile) == "function")
+    and (type(readfile) == "function") and (type(isfile) == "function")
+
+function ConfigIO:Load()
+    if not hasFileAPI or self.Loaded then return end
+    self.Loaded = true
+    pcall(function()
+        if not isfile(self.File) then return end
+        local data = HttpService:JSONDecode(readfile(self.File))
+        if type(data) ~= "table" then return end
+        for _, key in ipairs(CONFIG_PERSIST_KEYS) do
+            if data[key] ~= nil and _G.Settings[key] ~= nil then
+                _G.Settings[key] = data[key]
+            end
+        end
+    end)
+end
+
+function ConfigIO:Save()
+    if not hasFileAPI or not self.Loaded then return end
+    pcall(function()
+        local data = {}
+        for _, key in ipairs(CONFIG_PERSIST_KEYS) do
+            if _G.Settings[key] ~= nil then data[key] = _G.Settings[key] end
+        end
+        writefile(self.File, HttpService:JSONEncode(data))
+    end)
+end
+
+task.spawn(function()
+    pcall(function()
+        if type(makefolder) == "function" then makefolder("BobonHub") end
+    end)
+    ConfigIO:Load()
+    while SessionAlive() and task.wait(30) do
+        ConfigIO:Save()
+    end
+end)
 
 -- External config adapter — compact Hune-style surface.
 -- Every key mapped here has real implementation in this file; no display-only toggles.
@@ -1424,6 +1505,7 @@ do
         _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
         _G.Settings.Shutdown = bool(cfg["Shutdown"], _G.Settings.Shutdown)
         _G.Settings.SnipeFruit = str(cfg["Snipe Fruit"], _G.Settings.SnipeFruit)
+        _G.Settings.WebhookURL = str(cfg["Webhook"], str(cfg["Webhook URL"], _G.Settings.WebhookURL))
         _G.Settings.SwitchMelee = bool(cfg["Switch Melee"], _G.Settings.SwitchMelee)
         _G.Settings.LockFragment = math.max(0, num(cfg["Lock Fragment"], _G.Settings.LockFragment))
         _G.Settings.HopPlayerNear = bool(cfg["Hop Player Near"], _G.Settings.HopPlayerNear)
@@ -8733,7 +8815,7 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 --          QUEST DATABASE v18 (SEA 1/2/3 COORDINATES)
 -- ══════════════════════════════════════════════════════════════════
-local MAX_LEVEL = 2800
+local MAX_LEVEL = 2850 -- U29 raised the cap; U30/U31 keep 2850 (Summer Expansion not out yet)
 local QDB = {
     {Min=1,Max=9,Q="BanditQuest1",M="Bandit",QL=1,QC=CFrame.new(1059.37,15.45,1550.42),MC=CFrame.new(1045.96,27.00,1560.82)},
     {Min=10,Max=14,Q="JungleQuest",M="Monkey",QL=1,QC=CFrame.new(-1598.09,35.55,153.38),MC=CFrame.new(-1448.52,67.85,11.47)},
@@ -8830,7 +8912,7 @@ local QDB = {
     {Min=2650,Max=2674,Q="SubmergedQuest2",M="Sea Chanter",QL=1,QC=CFrame.new(10880.686,-2086.200,10032.624),MC=CFrame.new(10671.272,-2057.592,10047.258)},
     {Min=2675,Max=2699,Q="SubmergedQuest2",M="Ocean Prophet",QL=2,QC=CFrame.new(10880.686,-2086.200,10032.624),MC=CFrame.new(11008.520,-2007.728,10223.079)},
     {Min=2700,Max=2724,Q="SubmergedQuest3",M="High Disciple",QL=1,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9750.416,-1966.939,9753.360)},
-    {Min=2725,Max=2800,Q="SubmergedQuest3",M="Grand Devotee",QL=2,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9611.705,-1993.471,9882.688)},
+    {Min=2725,Max=2850,Q="SubmergedQuest3",M="Grand Devotee",QL=2,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9611.705,-1993.471,9882.688)}, -- v21.44: last 50 levels farm the same Submerged pile
 }
 
 -- Resolve an already-open quest after re-execution. Prefer an exact canonical
@@ -8922,7 +9004,7 @@ end
 local function GetQ()
     local lv = Level()
     local sea = GetSea()
-    -- 2800 is already max; do not keep accepting Grand Devotee forever.
+    -- 2850 is already max (U29+); do not keep accepting Grand Devotee forever.
     if lv >= MAX_LEVEL then return nil end
     -- At a sea boundary the normal level table already points into the next
     -- world. Prove combat on the highest valid local quest before starting a
@@ -12544,16 +12626,17 @@ local FruitManager = {
 _G.BobonRaidFallbackFruitPrices = _G.BobonRaidFallbackFruitPrices or {
     ["Rocket-Rocket"]=5000, ["Spin-Spin"]=7500, ["Blade-Blade"]=30000, ["Chop-Chop"]=30000,
     ["Spring-Spring"]=60000, ["Bomb-Bomb"]=80000, ["Smoke-Smoke"]=100000, ["Spike-Spike"]=180000,
-    ["Flame-Flame"]=250000, ["Falcon-Falcon"]=300000, ["Ice-Ice"]=350000, ["Sand-Sand"]=420000,
+    ["Flame-Flame"]=250000, ["Falcon-Falcon"]=300000, ["Eagle-Eagle"]=1000000, ["Ice-Ice"]=350000, ["Sand-Sand"]=420000,
     ["Dark-Dark"]=500000, ["Diamond-Diamond"]=600000, ["Light-Light"]=650000, ["Rubber-Rubber"]=750000,
     ["Barrier-Barrier"]=800000, ["Ghost-Ghost"]=940000, ["Magma-Magma"]=960000,
+    ["Lightning-Lightning"]=2100000, ["Tiger-Tiger"]=2500000, -- v21.44 reworked fruit prices (U27/U28)
 }
 
 local FruitIdFallback = {
     ["Rocket"]="Rocket-Rocket", ["Spin"]="Spin-Spin", ["Blade"]="Blade-Blade",
     ["Chop"]="Chop-Chop", ["Spring"]="Spring-Spring", ["Bomb"]="Bomb-Bomb",
     ["Smoke"]="Smoke-Smoke", ["Spike"]="Spike-Spike", ["Flame"]="Flame-Flame",
-    ["Falcon"]="Falcon-Falcon", ["Ice"]="Ice-Ice", ["Sand"]="Sand-Sand",
+    ["Falcon"]="Falcon-Falcon", ["Eagle"]="Eagle-Eagle", ["Ice"]="Ice-Ice", ["Sand"]="Sand-Sand",
     ["Dark"]="Dark-Dark", ["Ghost"]="Ghost-Ghost", ["Diamond"]="Diamond-Diamond",
     ["Light"]="Light-Light", ["Rubber"]="Rubber-Rubber", ["Barrier"]="Barrier-Barrier",
     ["Creation"]="Creation-Creation", ["Magma"]="Magma-Magma", ["Quake"]="Quake-Quake",
@@ -12561,12 +12644,12 @@ local FruitIdFallback = {
     ["Love"]="Love-Love", ["Spider"]="Spider-Spider", ["String"]="String-String",
     ["Sound"]="Sound-Sound", ["Phoenix"]="Phoenix-Phoenix",
     ["Bird: Phoenix"]="Bird-Bird: Phoenix", ["Portal"]="Portal-Portal",
-    ["Door"]="Door-Door", ["Rumble"]="Rumble-Rumble", ["Pain"]="Pain-Pain",
+    ["Door"]="Door-Door", ["Rumble"]="Rumble-Rumble", ["Lightning"]="Lightning-Lightning", ["Pain"]="Pain-Pain",
     ["Paw"]="Paw-Paw", ["Blizzard"]="Blizzard-Blizzard", ["Gravity"]="Gravity-Gravity",
     ["Mammoth"]="Mammoth-Mammoth", ["T-Rex"]="T-Rex-T-Rex", ["Dough"]="Dough-Dough",
     ["Shadow"]="Shadow-Shadow", ["Venom"]="Venom-Venom", ["Control"]="Control-Control",
     ["Spirit"]="Spirit-Spirit", ["Soul"]="Soul-Soul", ["Gas"]="Gas-Gas",
-    ["Leopard"]="Leopard-Leopard", ["Yeti"]="Yeti-Yeti", ["Kitsune"]="Kitsune-Kitsune",
+    ["Leopard"]="Leopard-Leopard", ["Tiger"]="Tiger-Tiger", ["Yeti"]="Yeti-Yeti", ["Kitsune"]="Kitsune-Kitsune",
     ["Dragon"]="Dragon-Dragon",
 }
 local function FruitOriginalName(tool)
@@ -15291,6 +15374,102 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
+--              KAITUN WEBHOOK v1 (Discord notify)
+--   BananaHub-style passive notifier: boot, level milestones, max level
+--   and key kaitun item acquisitions. Never owns movement/combat;
+--   every send is pcall'd and rate-limited (10s per event, 30s backoff).
+-- ══════════════════════════════════════════════════════════════════
+local WebhookNotifier = { URL = "", LastSent = {}, LastErrorAt = 0 }
+local WEBHOOK_WATCH_ITEMS = {
+    {Name="Saber",             Label="Saber"},
+    {Name="Pole (1st Form)",   Label="Pole V1"},
+    {Name="Kabucha",           Label="Kabucha"},
+    {Name="Rengoku",           Label="Rengoku"},
+    {Name="Midnight Blade",    Label="Midnight Blade"},
+    {Name="Acidum Rifle",      Label="Acidum Rifle"},
+    {Name="Dragon Trident",    Label="Dragon Trident"},
+    {Name="Gravity Blade",     Label="Gravity Blade"},
+    {Name="Gravity Cane",      Label="Gravity Cane"},
+    {Name="Yama",              Label="Yama"},
+    {Name="Tushita",           Label="Tushita"},
+    {Name="Cursed Dual Katana",Label="Cursed Dual Katana (CDK)"},
+    {Name="Skull Guitar",      Label="Skull Guitar"},
+    {Name="Soul Guitar",       Label="Soul Guitar"},
+    {Name="True Triple Katana",Label="True Triple Katana"},
+    {Name="Valkyrie Helm",     Label="Valkyrie Helm"},
+    {Name="Mirror Fractal",    Label="Mirror Fractal"},
+}
+
+function WebhookNotifier:Enabled()
+    local url = self.URL
+    if type(url) ~= "string" or url == "" then return false end
+    return string.match(url, "^https://(discordapp%.com|discord%.com)/api/webhooks/") ~= nil
+end
+
+function WebhookNotifier:Send(title, desc, color)
+    if not self:Enabled() then return end
+    local now = tick()
+    if now - self.LastErrorAt < 30 then return end
+    if now - (self.LastSent[title] or 0) < 10 then return end
+    self.LastSent[title] = now
+    local ok = pcall(function()
+        local payload = HttpService:JSONEncode({
+            username = "BobonHub v21.45",
+            embeds = {{
+                title = title,
+                description = desc,
+                color = color,
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            }},
+        })
+        HttpService:PostAsync(self.URL, payload, Enum.HttpContentType.ApplicationJson)
+    end)
+    if not ok then self.LastErrorAt = now end
+end
+
+local WebhookWatcher = {
+    LastMilestone = 0,
+    MaxLevelSent = false,
+    BootSent = false,
+    ItemSent = {},
+}
+
+task.spawn(function()
+    task.wait(3)
+    while SessionAlive() and task.wait(5) do
+        pcall(function()
+            WebhookNotifier.URL = tostring(_G.Settings.WebhookURL or "")
+            local lv = Level()
+            if not WebhookWatcher.BootSent then
+                WebhookWatcher.BootSent = true
+                WebhookNotifier:Send("BobonHub Online",
+                    "Script loaded | Level " .. lv .. "/" .. MAX_LEVEL ..
+                    " | Sea " .. GetSea() .. " | Kills " .. (_G.State.KillCount or 0), 3447003)
+            end
+            local mile = math.floor(lv / 100)
+            if lv > 0 and mile > WebhookWatcher.LastMilestone then
+                WebhookWatcher.LastMilestone = mile
+                WebhookNotifier:Send("Level Milestone",
+                    "Level " .. lv .. "/" .. MAX_LEVEL .. " reached.", 65280)
+            end
+            if not WebhookWatcher.MaxLevelSent and lv >= MAX_LEVEL then
+                WebhookWatcher.MaxLevelSent = true
+                WebhookNotifier:Send("MAX LEVEL",
+                    "Reached level " .. MAX_LEVEL .. "! Kaitun endgame unlocked.", 16753920)
+            end
+            for _, item in ipairs(WEBHOOK_WATCH_ITEMS) do
+                if not WebhookWatcher.ItemSent[item.Name]
+                    and (InventoryHas(item.Name) or FindOwnedTool(item.Name)) then
+                    WebhookWatcher.ItemSent[item.Name] = true
+                    WebhookNotifier:Send("Item Acquired",
+                        item.Label .. " is now in the inventory.", 16744192)
+                end
+            end
+        end)
+    end
+end)
+
+-- ══════════════════════════════════════════════════════════════════
 --                   FINAL INITIALIZATION
 -- ══════════════════════════════════════════════════════════════════
 _G.State.Sea = GetSea()
@@ -15337,10 +15516,11 @@ _G.BobonUnload = function()
 end
 
 
-print("[BobonHub v21.42] Full Script Loaded Successfully!")
-print("[BobonHub v21.42] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.42] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.42] Modules: QuestFarm | Fixed Shared BN Pile | Quest-Farm Isolation | Stable Travel | Raid/Fragments | Full Progression | Fire HUD")
-print("[BobonHub v21.42] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.42] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
-print("[BobonHub v21.42] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.45] Full Script Loaded Successfully!")
+print("[BobonHub v21.45] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.45] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.45] Modules: QuestFarm | Fixed Shared BN Pile | Quest-Farm Isolation | Stable Travel | Raid/Fragments | Full Progression | Fire HUD")
+print("[BobonHub v21.45] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.45] Extras: Webhook Notify | Config File | Fruit Sniper | Gacha | Fast Attack")
+print("[BobonHub v21.45] Data: Sea1/2/3 QDB | Submerged | Cap 2850 (U29+) | Reworked fruits: Eagle/Lightning/Tiger")
+print("[BobonHub v21.45] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
