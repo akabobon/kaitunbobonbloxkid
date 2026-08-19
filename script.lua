@@ -1,8 +1,17 @@
 -- =================================================================
---         BOBON HUB v22.13 | TEDDY FULL-BATCH BRING
+--         BOBON HUB v22.14 | TEDDY AIR-SWEEP REBASE
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.12 CLASSIC BN BRING REBASE | Version: v22.13
+--         Base: v22.13 TEDDY FULL-BATCH | Version: v22.14
 --
+--
+--  v22.14 TEDDY AIR-SWEEP (REFERENCE Screen_Recording_20260818_004315_Roblox):
+--  [TA-1] Stop parking above one fixed q.MC pile. The reference keeps flying around the live spawn field.
+--  [TA-2] Attack stays active while Farm-owned travel is moving; no descend / wait-for-pile phase.
+--  [TA-3] Every tick snapshots ALL matching live mobs and rotates the air sweep through live roots.
+--  [TA-4] Physical bring is opportunistic only after the player is near / owns physics; never freezes Humanoid.
+--  [TA-5] Movable mobs are pulled to a moving under-foot pile; explicit server-owned roots are never ghost-pinned.
+--  [TA-6] Multi-target remote fanout admits fresh Teddy-air roots inside the true current attack range.
+--  [TA-7] Skip Lv10-70 uses this exact same continuous Teddy air-sweep engine.
 --
 --  v22.13 TEDDY FULL-BATCH BRING (VIDEO Roblox(21) + old Teddy behavior):
 --  [T23-1] Normal level farm + Sea1 skip no longer center the pile on the current
@@ -1324,13 +1333,22 @@ _G.Settings = {
     SharedBringMaxMobs   = 0, -- 0 = all matching mobs in the active field
     SharedBringInterval  = 0.03,
     SharedFarmHeight     = 25,
-    -- v22.13: exact Teddy-style full-field batch magnet.
-    SharedTeddyMode      = true,
+    -- v22.14: moving Teddy air-sweep replaces the old fixed q.MC pile.
+    SharedTeddyMode      = false,
+    TeddyAirSweepMode    = true,
+    TeddyAirHoverHeight  = 28,
+    TeddyAirSweepSpeed   = 430,
+    TeddyAirSweepHold    = 0.55,
+    TeddyAirAcquireRadius = 120,
+    TeddyAirFieldRange   = 1800,
+    TeddyAirVerifyTTL    = 0.55,
+    TeddyAirPileYOffset  = 0,
+    TeddyAirPullUnknownNear = true,
     SharedTeddyScanInterval = 0.03,
     SharedTeddyVerifyTTL = 0.35,
     SharedTeddyVerifyRadius = 12,
     SharedTeddyMaxDistance = 3000,
-    SharedFixedPile      = true,
+    SharedFixedPile      = false,
     SharedPileEmptyHold  = 2.0,
     SharedBringP         = 3000,
     SharedBringD         = 100,
@@ -7884,6 +7902,12 @@ function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
 
+    if _G.Settings.TeddyAirSweepMode ~= false then
+        local at = self.TeddyAirVerified and self.TeddyAirVerified[root]
+        local ttl = math.max(0.15, tonumber(_G.Settings.TeddyAirVerifyTTL) or 0.55)
+        return at ~= nil and tick() - at <= ttl
+    end
+
     if _G.Settings.SharedTeddyMode ~= false then
         local at = self.SharedTeddyVerified and self.SharedTeddyVerified[root]
         local anchorCF = self.SharedPileCFrame
@@ -7945,8 +7969,192 @@ function ClusterFarmController:SharedPrimaryNoDamage(target, attackWindow)
     return now - since >= timeout
 end
 
+
+function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefix)
+    if _G.Settings.TeddyAirSweepMode == false then return false end
+    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
+    if type(mobName) ~= "string" or mobName == "" then return false end
+
+    local folder = workspace:FindFirstChild("Enemies")
+    local me = HRP()
+    if not folder or not me then return true end
+    local now = tick()
+    local prefix = tostring(statusPrefix or "Farm")
+    local fieldCenter
+    if typeof(fallbackCF) == "CFrame" then
+        fieldCenter = fallbackCF.Position
+    elseif typeof(fallbackCF) == "Vector3" then
+        fieldCenter = fallbackCF
+    else
+        fieldCenter = me.Position
+    end
+
+    pcall(function() ExpandSimulationRadius() end)
+
+    local fieldRange = math.max(250, tonumber(_G.Settings.TeddyAirFieldRange) or 1800)
+    local candidates = {}
+    for _, mob in ipairs(folder:GetChildren()) do
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+                    and IsSubmergedPosition(pos) == IsSubmergedPosition(fieldCenter)
+                    and (pos - fieldCenter).Magnitude <= fieldRange then
+                    candidates[#candidates + 1] = {
+                        Model = mob,
+                        Humanoid = hum,
+                        Root = root,
+                        Position = pos,
+                    }
+                end
+            end
+        end
+    end
+
+    self.TeddyAirCandidates = candidates
+    self.TeddyAirVerified = self.TeddyAirVerified or setmetatable({}, {__mode="k"})
+    self.TeddyAirVisited = self.TeddyAirVisited or setmetatable({}, {__mode="k"})
+
+    if #candidates == 0 then
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "TEDDY_AIR_WAIT"
+        _G.State.ActionText = "Waiting Mob • " .. tostring(mobName)
+        self.TeddyAirSweepTarget = nil
+        if fallbackCF and _G.State:CanRequestTravel() then
+            local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
+            TravelManager:Request(baseCF * CFrame.new(0,
+                tonumber(_G.Settings.TeddyAirHoverHeight) or 28, 0), "Farm", {
+                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
+                fallback = fallbackCF,
+                combatHover = false,
+                persistent = false,
+                speed = _G.Settings.TeddyAirSweepSpeed or 430,
+            })
+        end
+        _G.BobonStatus = prefix .. ": Teddy Air • waiting " .. tostring(mobName)
+        return true
+    end
+
+    -- Real nearest victim is only the damage representative; it never owns the pile.
+    local target, targetDist = nil, math.huge
+    for _, entry in ipairs(candidates) do
+        local dist = (entry.Position - me.Position).Magnitude
+        if dist < targetDist then
+            target = entry.Model
+            targetDist = dist
+        end
+    end
+    if not target then return true end
+
+    _G.State.FarmTarget = target
+    _G.State.CurrentTarget = target
+    _G.State.ClusterMode = "OFF"
+    _G.State.ClusterPrimary = nil
+    _G.State.FState = "SHARED_ATTACK"
+    _G.State.ActionText = "Killing Mob • " .. tostring(mobName)
+
+    -- Keep flying between live roots. This is the visual/physical shape from the
+    -- Teddy reference: high air movement + uninterrupted damage, never drop to M1 range.
+    local hold = math.max(0.20, tonumber(_G.Settings.TeddyAirSweepHold) or 0.55)
+    local sweepTarget = self.TeddyAirSweepTarget
+    local sweepValid = false
+    if sweepTarget and sweepTarget.Parent then
+        local sh = sweepTarget:FindFirstChildOfClass("Humanoid")
+        local sr = sweepTarget:FindFirstChild("HumanoidRootPart")
+        sweepValid = sh and sh.Health > 0 and sr and sr.Parent
+            and IsEnemyNamed(sweepTarget, mobName)
+    end
+    if not sweepValid or now >= (self.TeddyAirNextSweepAt or 0) then
+        local best, bestAt = nil, math.huge
+        for _, entry in ipairs(candidates) do
+            local at = tonumber(self.TeddyAirVisited[entry.Model]) or 0
+            if at < bestAt then
+                best = entry.Model
+                bestAt = at
+            end
+        end
+        sweepTarget = best or target
+        self.TeddyAirSweepTarget = sweepTarget
+        self.TeddyAirVisited[sweepTarget] = now
+        self.TeddyAirNextSweepAt = now + hold
+    end
+
+    local sweepRoot = sweepTarget and sweepTarget:FindFirstChild("HumanoidRootPart")
+    if sweepRoot and sweepRoot.Parent and _G.State:CanRequestTravel() then
+        TravelManager:Request(sweepRoot, "Farm", {
+            arrivalThreshold = math.max(18,
+                tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 28),
+            fallback = fallbackCF,
+            combatHover = true,
+            persistent = false,
+            speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
+        })
+    end
+
+    -- Moving under-foot pile. Explicit server-owned roots stay real; once the sweep
+    -- brings the player close enough for physics ownership, they are pulled underfoot.
+    me = HRP() or me
+    local acquireRadius = math.max(35, tonumber(_G.Settings.TeddyAirAcquireRadius) or 120)
+    local targetRoot = target:FindFirstChild("HumanoidRootPart")
+    local pileY = targetRoot and targetRoot.Parent and targetRoot.Position.Y or fieldCenter.Y
+    local pilePos = Vector3.new(
+        me.Position.X,
+        pileY + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
+        me.Position.Z
+    )
+    local moved = 0
+    for _, entry in ipairs(candidates) do
+        local root = entry.Root
+        if root and root.Parent then
+            local dist = (entry.Position - me.Position).Magnitude
+            local own = ClientOwnsMob(root)
+            local canPull = own == true
+                or (own == nil
+                    and _G.Settings.TeddyAirPullUnknownNear ~= false
+                    and dist <= acquireRadius)
+            if canPull then
+                local okMove = pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = CFrame.new(pilePos) * rot
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+                if okMove then
+                    self.TeddyAirVerified[root] = now
+                    moved = moved + 1
+                end
+            end
+        end
+    end
+
+    -- Damage never waits for bring. CollectTargets still enforces the live attack range,
+    -- so flying across the field naturally sweeps damage through the whole spawn.
+    PrepareCombatTarget(target)
+    EquipCombatTool()
+    local attempted = Attack(target, mobName)
+
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = ("TEDDY-AIR %d/%d"):format(moved, #candidates)
+        _G.BobonDiagnostics.BringCandidates = #candidates
+        _G.BobonDiagnostics.BringMoved = moved
+    end
+    _G.BobonStatus = ("%s: Teddy Air • %s • pile %d/%d • hit %s")
+        :format(prefix, tostring(mobName), moved, #candidates,
+            attempted and "ACTIVE" or "PROBING")
+    return true
+end
+
 function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     if _G.Settings.SharedSourceFarmMode == false then return false end
+    if _G.Settings.TeddyAirSweepMode ~= false then
+        return self:TeddyAirFarmTick(mobName, fallbackCF, "Farm")
+    end
     -- Teddy mode establishes the fixed field anchor and magnetizes the full spawn
     -- before choosing a representative damage target.
     if _G.Settings.SharedTeddyMode ~= false then
@@ -10366,6 +10574,13 @@ function SkipRouteController:Run()
 
     _G.State:SetMode("Farming")
     _G.State.FState = "SKIP_FARM"
+
+    -- v22.14: early skip uses the exact same continuous Teddy air-sweep engine.
+    if _G.Settings.TeddyAirSweepMode ~= false then
+        local skipName = route.Names and route.Names[1] or tostring(route.Display)
+        _G.State.ActiveQuestMob = skipName
+        return ClusterFarmController:TeddyAirFarmTick(skipName, route.Fallback, "Skip")
+    end
 
     -- Preserve a real primary until death so the pile does not jump between mobs.
     local target, targetName = nil, nil
