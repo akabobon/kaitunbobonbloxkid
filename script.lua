@@ -1,8 +1,22 @@
 -- =================================================================
---         BOBON HUB v22.14 | TEDDY AIR-SWEEP REBASE
+--         BOBON HUB v22.15 | TEDDY HP-TAG STACK
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.13 TEDDY FULL-BATCH | Version: v22.14
+--         Base: v22.14 TEDDY AIR-SWEEP | Version: v22.15
 --
+--
+--
+--  v22.15 TEDDY HP-TAG -> STACK (REFERENCE USER FLOW):
+--  [TH15-1] Fly to ONE live mob at a time and keep attacking that exact model until
+--           a causal REAL Humanoid HP decrease is observed. No HP loss = no bring.
+--  [TH15-2] After HP proof, enter PULL phase for that exact mob. Only then may its
+--           root be moved into the moving under-foot pile.
+--  [TH15-3] A mob is marked STACKED only after its root physically remains inside
+--           the under-foot pile radius for a short persistence window. Visual-only
+--           snap-back never counts as success.
+--  [TH15-4] Already STACKED mobs are restacked under the player while the player
+--           flies to the next unproven mob: hit -> real HP loss -> pull -> next.
+--  [TH15-5] New respawns automatically re-enter the HIT phase. Skip Lv10-70 and
+--           normal leveling share the exact same HP-tag Teddy engine.
 --
 --  v22.14 TEDDY AIR-SWEEP (REFERENCE Screen_Recording_20260818_004315_Roblox):
 --  [TA-1] Stop parking above one fixed q.MC pile. The reference keeps flying around the live spawn field.
@@ -1344,6 +1358,13 @@ _G.Settings = {
     TeddyAirVerifyTTL    = 0.55,
     TeddyAirPileYOffset  = 0,
     TeddyAirPullUnknownNear = true,
+    -- v22.15: exact per-mob HIT -> HP PROOF -> PULL -> STACK loop.
+    TeddyAirFocusTimeout  = 3.25,
+    TeddyAirPullTimeout   = 2.25,
+    TeddyAirPullVerifyRadius = 13,
+    TeddyAirPullStableDelay  = 0.12,
+    TeddyAirCausalDamageWindow = 0.80,
+    TeddyAirRetryDelay    = 0.45,
     SharedTeddyScanInterval = 0.03,
     SharedTeddyVerifyTTL = 0.35,
     SharedTeddyVerifyRadius = 12,
@@ -7991,8 +8012,16 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
 
     pcall(function() ExpandSimulationRadius() end)
 
+    self.TeddyAirTagged = self.TeddyAirTagged or setmetatable({}, {__mode="k"})
+    self.TeddyAirStacked = self.TeddyAirStacked or setmetatable({}, {__mode="k"})
+    self.TeddyAirStackStableAt = self.TeddyAirStackStableAt or setmetatable({}, {__mode="k"})
+    self.TeddyAirRetryAfter = self.TeddyAirRetryAfter or setmetatable({}, {__mode="k"})
+    self.TeddyAirVerified = self.TeddyAirVerified or setmetatable({}, {__mode="k"})
+    self.TeddyAirVisited = self.TeddyAirVisited or setmetatable({}, {__mode="k"})
+
     local fieldRange = math.max(250, tonumber(_G.Settings.TeddyAirFieldRange) or 1800)
     local candidates = {}
+    local candidateSet = setmetatable({}, {__mode="k"})
     for _, mob in ipairs(folder:GetChildren()) do
         if IsEnemyNamed(mob, mobName) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -8008,22 +8037,32 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
                         Root = root,
                         Position = pos,
                     }
+                    candidateSet[mob] = true
                 end
             end
         end
     end
-
     self.TeddyAirCandidates = candidates
-    self.TeddyAirVerified = self.TeddyAirVerified or setmetatable({}, {__mode="k"})
-    self.TeddyAirVisited = self.TeddyAirVisited or setmetatable({}, {__mode="k"})
+
+    -- Drop stale focus immediately; weak-key stack tables clean themselves on destroy.
+    local focus = self.TeddyAirFocusModel
+    if focus and (not focus.Parent or not candidateSet[focus]) then
+        self.TeddyAirFocusModel = nil
+        self.TeddyAirFocusPhase = nil
+        self.TeddyAirFocusStartedAt = 0
+        self.TeddyAirFocusLastHealth = nil
+        self.TeddyAirFocusRoot = nil
+        focus = nil
+    end
 
     if #candidates == 0 then
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
         _G.State.ClusterMode = "OFF"
-        _G.State.FState = "TEDDY_AIR_WAIT"
+        _G.State.FState = "TEDDY_HP_WAIT"
         _G.State.ActionText = "Waiting Mob • " .. tostring(mobName)
-        self.TeddyAirSweepTarget = nil
+        self.TeddyAirFocusModel = nil
+        self.TeddyAirFocusPhase = nil
         if fallbackCF and _G.State:CanRequestTravel() then
             local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
             TravelManager:Request(baseCF * CFrame.new(0,
@@ -8035,59 +8074,190 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
                 speed = _G.Settings.TeddyAirSweepSpeed or 430,
             })
         end
-        _G.BobonStatus = prefix .. ": Teddy Air • waiting " .. tostring(mobName)
+        _G.BobonStatus = prefix .. ": Teddy HP • waiting " .. tostring(mobName)
         return true
     end
 
-    -- Real nearest victim is only the damage representative; it never owns the pile.
-    local target, targetDist = nil, math.huge
+    local hover = math.max(12, tonumber(_G.Settings.TeddyAirHoverHeight) or 28)
+    local verifyRadius = math.max(6, tonumber(_G.Settings.TeddyAirPullVerifyRadius) or 13)
+    local stableDelay = math.max(0.06, tonumber(_G.Settings.TeddyAirPullStableDelay) or 0.12)
+    local acquireRadius = math.max(35, tonumber(_G.Settings.TeddyAirAcquireRadius) or 120)
+    local causalWindow = math.max(0.25, tonumber(_G.Settings.TeddyAirCausalDamageWindow) or 0.80)
+    local focusTimeout = math.max(1.25, tonumber(_G.Settings.TeddyAirFocusTimeout) or 3.25)
+    local pullTimeout = math.max(0.75, tonumber(_G.Settings.TeddyAirPullTimeout) or 2.25)
+    local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyAirRetryDelay) or 0.45)
+
+    -- One moving pile directly below the player. Previously stacked mobs follow it
+    -- while Farm flies to the next unproven victim.
+    me = HRP() or me
+    local pilePos = Vector3.new(
+        me.Position.X,
+        me.Position.Y - hover + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
+        me.Position.Z
+    )
+    if not IsSubmergedPosition(pilePos) then
+        pilePos = Vector3.new(pilePos.X, math.max(_G.Settings.MinY or 10, pilePos.Y), pilePos.Z)
+    end
+
+    local stackedCount = 0
     for _, entry in ipairs(candidates) do
-        local dist = (entry.Position - me.Position).Magnitude
-        if dist < targetDist then
-            target = entry.Model
-            targetDist = dist
+        local root = entry.Root
+        if root and root.Parent and self.TeddyAirStacked[root] then
+            pcall(function()
+                local rot = root.CFrame.Rotation
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.new(pilePos) * rot
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+            local okPos, pos = pcall(function() return root.Position end)
+            if okPos and IsValidPos(pos) and (pos - pilePos).Magnitude <= verifyRadius * 1.75 then
+                self.TeddyAirVerified[root] = now
+                stackedCount = stackedCount + 1
+            end
         end
     end
-    if not target then return true end
 
-    _G.State.FarmTarget = target
-    _G.State.CurrentTarget = target
+    -- Pick one NOT-YET-STACKED mob and commit to it. No rotating every 0.55s:
+    -- the bot must cause real HP loss first, then pull that exact mob into the pile.
+    focus = self.TeddyAirFocusModel
+    if not focus then
+        local best, bestScore = nil, math.huge
+        for _, entry in ipairs(candidates) do
+            local root = entry.Root
+            if root and root.Parent and not self.TeddyAirStacked[root]
+                and now >= (tonumber(self.TeddyAirRetryAfter[root]) or 0) then
+                local dist = (entry.Position - me.Position).Magnitude
+                local visited = tonumber(self.TeddyAirVisited[entry.Model]) or 0
+                local score = dist + math.min(500, math.max(0, now - visited) * -8)
+                if score < bestScore then
+                    best = entry.Model
+                    bestScore = score
+                end
+            end
+        end
+        if best then
+            focus = best
+            self.TeddyAirFocusModel = best
+            self.TeddyAirFocusPhase = "HIT"
+            self.TeddyAirFocusStartedAt = now
+            local bh = best:FindFirstChildOfClass("Humanoid")
+            self.TeddyAirFocusLastHealth = bh and bh.Health or nil
+            self.TeddyAirFocusRoot = best:FindFirstChild("HumanoidRootPart")
+            self.TeddyAirVisited[best] = now
+        end
+    end
+
+    -- If every current mob is already stacked, stay above the moving pile and keep
+    -- attacking a real live representative. A fresh respawn will become the next HIT focus.
+    if not focus then
+        local target, bestDist = nil, math.huge
+        for _, entry in ipairs(candidates) do
+            if self.TeddyAirStacked[entry.Root] then
+                local dist = (entry.Root.Position - me.Position).Magnitude
+                if dist < bestDist then target, bestDist = entry.Model, dist end
+            end
+        end
+        target = target or candidates[1].Model
+        _G.State.FarmTarget = target
+        _G.State.CurrentTarget = target
+        _G.State.ClusterMode = "OFF"
+        _G.State.ClusterPrimary = nil
+        _G.State.FState = "TEDDY_STACK_KILL"
+        _G.State.ActionText = "Attacking Pile • " .. tostring(mobName)
+        PrepareCombatTarget(target)
+        EquipCombatTool()
+        local attempted = Attack(target, mobName)
+        if _G.BobonDiagnostics then
+            _G.BobonDiagnostics.Bring = ("TEDDY-STACK %d/%d"):format(stackedCount, #candidates)
+            _G.BobonDiagnostics.BringCandidates = #candidates
+            _G.BobonDiagnostics.BringMoved = stackedCount
+        end
+        _G.BobonStatus = ("%s: Teddy HP • pile %d/%d • hit %s")
+            :format(prefix, stackedCount, #candidates, attempted and "ACTIVE" or "PROBING")
+        return true
+    end
+
+    local hum = focus:FindFirstChildOfClass("Humanoid")
+    local root = focus:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root or not root.Parent then
+        self.TeddyAirFocusModel = nil
+        self.TeddyAirFocusPhase = nil
+        self.TeddyAirFocusStartedAt = 0
+        self.TeddyAirFocusLastHealth = nil
+        self.TeddyAirFocusRoot = nil
+        return true
+    end
+
+    _G.State.FarmTarget = focus
+    _G.State.CurrentTarget = focus
     _G.State.ClusterMode = "OFF"
     _G.State.ClusterPrimary = nil
     _G.State.FState = "SHARED_ATTACK"
-    _G.State.ActionText = "Killing Mob • " .. tostring(mobName)
 
-    -- Keep flying between live roots. This is the visual/physical shape from the
-    -- Teddy reference: high air movement + uninterrupted damage, never drop to M1 range.
-    local hold = math.max(0.20, tonumber(_G.Settings.TeddyAirSweepHold) or 0.55)
-    local sweepTarget = self.TeddyAirSweepTarget
-    local sweepValid = false
-    if sweepTarget and sweepTarget.Parent then
-        local sh = sweepTarget:FindFirstChildOfClass("Humanoid")
-        local sr = sweepTarget:FindFirstChild("HumanoidRootPart")
-        sweepValid = sh and sh.Health > 0 and sr and sr.Parent
-            and IsEnemyNamed(sweepTarget, mobName)
-    end
-    if not sweepValid or now >= (self.TeddyAirNextSweepAt or 0) then
-        local best, bestAt = nil, math.huge
-        for _, entry in ipairs(candidates) do
-            local at = tonumber(self.TeddyAirVisited[entry.Model]) or 0
-            if at < bestAt then
-                best = entry.Model
-                bestAt = at
-            end
+    local phase = tostring(self.TeddyAirFocusPhase or "HIT")
+    if phase == "HIT" then
+        _G.State.ActionText = "Tagging Mob • " .. tostring(mobName)
+
+        -- Fly above this exact mob and keep real attack dispatch on it.
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(root, "Farm", {
+                arrivalThreshold = math.max(18, tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 28),
+                fallback = fallbackCF,
+                combatHover = true,
+                persistent = false,
+                speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
+            })
         end
-        sweepTarget = best or target
-        self.TeddyAirSweepTarget = sweepTarget
-        self.TeddyAirVisited[sweepTarget] = now
-        self.TeddyAirNextSweepAt = now + hold
+
+        PrepareCombatTarget(focus)
+        EquipCombatTool()
+        local attempted = Attack(focus, mobName)
+
+        local hp = tonumber(hum.Health) or 0
+        local prev = tonumber(self.TeddyAirFocusLastHealth)
+        local recentAt = CombatController.RecentTargets and CombatController.RecentTargets[focus] or nil
+        local causal = recentAt and now - recentAt <= causalWindow
+        if prev and hp < prev - 0.01 and causal then
+            pcall(function() self:ConfirmDamageProof(focus) end)
+        end
+        self.TeddyAirFocusLastHealth = hp
+
+        local proven = self:IsDamageProven(focus)
+        if proven then
+            self.TeddyAirTagged[root] = now
+            self.TeddyAirFocusPhase = "PULL"
+            self.TeddyAirFocusStartedAt = now
+            self.TeddyAirStackStableAt[root] = nil
+            phase = "PULL"
+        elseif now - (tonumber(self.TeddyAirFocusStartedAt) or now) >= focusTimeout then
+            -- Do not fake-tag a no-damage mob. Move on briefly, then revisit it later.
+            self.TeddyAirRetryAfter[root] = now + retryDelay
+            self.TeddyAirFocusModel = nil
+            self.TeddyAirFocusPhase = nil
+            self.TeddyAirFocusStartedAt = 0
+            self.TeddyAirFocusLastHealth = nil
+            self.TeddyAirFocusRoot = nil
+        end
+
+        if _G.BobonDiagnostics then
+            _G.BobonDiagnostics.Bring = ("TEDDY-HIT %d/%d"):format(stackedCount, #candidates)
+            _G.BobonDiagnostics.BringCandidates = #candidates
+            _G.BobonDiagnostics.BringMoved = stackedCount
+        end
+        _G.BobonStatus = ("%s: Teddy HP • HIT %s • pile %d/%d • %s")
+            :format(prefix, tostring(mobName), stackedCount, #candidates,
+                proven and "HP-PROVEN" or (attempted and "DAMAGE CHECK" or "PROBING"))
+        return true
     end
 
-    local sweepRoot = sweepTarget and sweepTarget:FindFirstChild("HumanoidRootPart")
-    if sweepRoot and sweepRoot.Parent and _G.State:CanRequestTravel() then
-        TravelManager:Request(sweepRoot, "Farm", {
-            arrivalThreshold = math.max(18,
-                tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 28),
+    -- PULL phase: real HP proof already exists. Stay near the same mob and repeatedly
+    -- move it underfoot until the root actually persists there; only then is it STACKED.
+    _G.State.ActionText = "Stacking Mob • " .. tostring(mobName)
+    if _G.State:CanRequestTravel() then
+        TravelManager:Request(root, "Farm", {
+            arrivalThreshold = math.max(16, tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 26),
             fallback = fallbackCF,
             combatHover = true,
             persistent = false,
@@ -8095,57 +8265,74 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
         })
     end
 
-    -- Moving under-foot pile. Explicit server-owned roots stay real; once the sweep
-    -- brings the player close enough for physics ownership, they are pulled underfoot.
     me = HRP() or me
-    local acquireRadius = math.max(35, tonumber(_G.Settings.TeddyAirAcquireRadius) or 120)
-    local targetRoot = target:FindFirstChild("HumanoidRootPart")
-    local pileY = targetRoot and targetRoot.Parent and targetRoot.Position.Y or fieldCenter.Y
-    local pilePos = Vector3.new(
+    pilePos = Vector3.new(
         me.Position.X,
-        pileY + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
+        me.Position.Y - hover + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
         me.Position.Z
     )
-    local moved = 0
-    for _, entry in ipairs(candidates) do
-        local root = entry.Root
-        if root and root.Parent then
-            local dist = (entry.Position - me.Position).Magnitude
-            local own = ClientOwnsMob(root)
-            local canPull = own == true
-                or (own == nil
-                    and _G.Settings.TeddyAirPullUnknownNear ~= false
-                    and dist <= acquireRadius)
-            if canPull then
-                local okMove = pcall(function()
-                    local rot = root.CFrame.Rotation
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = CFrame.new(pilePos) * rot
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                if okMove then
-                    self.TeddyAirVerified[root] = now
-                    moved = moved + 1
-                end
-            end
-        end
+    if not IsSubmergedPosition(pilePos) then
+        pilePos = Vector3.new(pilePos.X, math.max(_G.Settings.MinY or 10, pilePos.Y), pilePos.Z)
     end
 
-    -- Damage never waits for bring. CollectTargets still enforces the live attack range,
-    -- so flying across the field naturally sweeps damage through the whole spawn.
-    PrepareCombatTarget(target)
+    local near = (root.Position - me.Position).Magnitude <= acquireRadius
+    local own = ClientOwnsMob(root)
+    local canTry = near and (own ~= false or _G.Settings.TeddyAirPullUnknownNear ~= false)
+    if canTry then
+        pcall(function()
+            local rot = root.CFrame.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = CFrame.new(pilePos) * rot
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    local okPos, pos = pcall(function() return root.Position end)
+    local inPile = okPos and IsValidPos(pos) and (pos - pilePos).Magnitude <= verifyRadius
+    if inPile then
+        local since = tonumber(self.TeddyAirStackStableAt[root]) or now
+        if not self.TeddyAirStackStableAt[root] then self.TeddyAirStackStableAt[root] = now end
+        if now - since >= stableDelay then
+            self.TeddyAirStacked[root] = true
+            self.TeddyAirVerified[root] = now
+            self.TeddyAirRetryAfter[root] = nil
+            self.TeddyAirFocusModel = nil
+            self.TeddyAirFocusPhase = nil
+            self.TeddyAirFocusStartedAt = 0
+            self.TeddyAirFocusLastHealth = nil
+            self.TeddyAirFocusRoot = nil
+            stackedCount = stackedCount + 1
+        end
+    else
+        self.TeddyAirStackStableAt[root] = nil
+    end
+
+    -- Keep hitting while stacking; damage remains live and the already-stacked pile
+    -- stays underfoot instead of becoming a frozen visual-only group.
+    PrepareCombatTarget(focus)
     EquipCombatTool()
-    local attempted = Attack(target, mobName)
+    local attempted = Attack(focus, mobName)
+
+    if self.TeddyAirFocusModel and now - (tonumber(self.TeddyAirFocusStartedAt) or now) >= pullTimeout then
+        -- Pull could not persist. Never claim it as stacked; revisit after another sweep.
+        self.TeddyAirRetryAfter[root] = now + retryDelay
+        self.TeddyAirFocusModel = nil
+        self.TeddyAirFocusPhase = nil
+        self.TeddyAirFocusStartedAt = 0
+        self.TeddyAirFocusLastHealth = nil
+        self.TeddyAirFocusRoot = nil
+        self.TeddyAirStackStableAt[root] = nil
+    end
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TEDDY-AIR %d/%d"):format(moved, #candidates)
+        _G.BobonDiagnostics.Bring = ("TEDDY-PULL %d/%d"):format(stackedCount, #candidates)
         _G.BobonDiagnostics.BringCandidates = #candidates
-        _G.BobonDiagnostics.BringMoved = moved
+        _G.BobonDiagnostics.BringMoved = stackedCount
     end
-    _G.BobonStatus = ("%s: Teddy Air • %s • pile %d/%d • hit %s")
-        :format(prefix, tostring(mobName), moved, #candidates,
+    _G.BobonStatus = ("%s: Teddy HP • PULL %s • pile %d/%d • hit %s")
+        :format(prefix, tostring(mobName), stackedCount, #candidates,
             attempted and "ACTIVE" or "PROBING")
     return true
 end
