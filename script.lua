@@ -14193,6 +14193,11 @@ task.spawn(function() while SessionAlive() and task.wait(2) do pcall(function() 
 --  never spends fragments below the LockFragment reserve, never fires
 --  while Raiding/Farming is in progress.
 -- ──────────────────────────────────────────────────────────────────
+-- NOTE: wrapped in a do-block so these controllers consume ZERO main-chunk
+-- locals (Luau 200-local limit; see v21.24.3 BOOT-1). Cleanup reaches the
+-- WhiteScreen GUI through _G.BobonWhiteScreenGui.
+-- ──────────────────────────────────────────────────────────────────
+do
 local RaceRoller = { LastTry = 0 }
 function RaceRoller:Tick()
     if not _G.Settings.AutoRollRace then return false end
@@ -14277,9 +14282,11 @@ local function ApplyWhiteScreen()
         frame.ZIndex = 999
         frame.Parent = WhiteScreenGui
         WhiteScreenGui.Parent = parent
+        _G.BobonWhiteScreenGui = WhiteScreenGui
     end)
 end
-task.defer(ApplyWhiteScreen)
+    task.defer(ApplyWhiteScreen)
+end
 
 local function ApplyFPSBoost()
     if not _G.Settings.FPSBoostEnabled then return end
@@ -15697,8 +15704,8 @@ _G.BobonUnload = function()
     end)
     pcall(function() if BobonUIRoot and BobonUIRoot.Parent then BobonUIRoot:Destroy() end end)
     BobonUIRoot = nil
-    pcall(function() if WhiteScreenGui and WhiteScreenGui.Parent then WhiteScreenGui:Destroy() end end)
-    WhiteScreenGui = nil
+    pcall(function() if _G.BobonWhiteScreenGui and _G.BobonWhiteScreenGui.Parent then _G.BobonWhiteScreenGui:Destroy() end end)
+    _G.BobonWhiteScreenGui = nil
 end
 
 
