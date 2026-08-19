@@ -1,9 +1,20 @@
--- v22.18 DODGE + QUEST CONTINUITY HARDENING | TEDDY BRING v22.17 FROZEN
--- [DQ18-1] Teddy sequence/bring block is intentionally untouched.
--- [DQ18-2] Incoming damage/Stun/Busy never enables low-HP retreat, clears farm state, or triggers heavy recovery.
--- [DQ18-3] NPC skill dodge is target-locked, can side-step even when no combat travel thread is active, and keeps attacking.
--- [DQ18-4] Quest acquisition self-heals after knockback/control interference; temporary UI rebuilds no longer strand the bot.
--- [DQ18-5] StartQuest retries caused by Stun/Busy do not consume the normal retry budget.
+-- =================================================================
+--         BOBON HUB v22.19 QUEST-FIRST HARD REWRITE | TEDDY v22.17 LOCKED
+--         Base: v22.17 TEDDY SEQUENCE REBASE (bring block preserved)
+--  [Q19-1] Quest truth now comes only from the currently VISIBLE Main/Minimal
+--           quest wrapper. Hidden stale QuestTitle text can no longer keep farm alive.
+--  [Q19-2] Confirmed quest close immediately stops level farm and retargets the
+--           quest giver; UI lease/grace applies only to an UNMOUNTED/rebuilding UI.
+--  [Q19-3] Quest-giver travel uses QuestInteractDistance and persistent=false,
+--           fixing the old 35-stud persistent CFrame arrival that could never reach
+--           the 8-stud StartQuest gate.
+--  [Q19-4] Wrong/completed quests clear cached ActiveQuestMob and farm targets before
+--           any new attack tick; no optional boss/item detour is allowed in that gap.
+--  [Q19-5] StartQuest verification requires a real visible active wrapper; RequestQuest
+--           remains a bounded fallback. Retry never falls through to mob farming.
+--  [Q19-6] SharedTeddyRestack / TeddySequenceFarmTick / SharedFarmTick are copied
+--           byte-for-byte from v22.17 and are not modified by this quest rewrite.
+-- =================================================================
 -- =================================================================
 --         BOBON HUB v22.17 TEDDY SEQUENCE REBASE | STABLE-ANCHOR ACQUIRE
 --         Deep rebase from v22.16 after side-by-side Roblox(22) vs Teddy reference.
@@ -1276,15 +1287,7 @@ _G.Settings = {
     IgnoreRawDamageEffects = true,
     -- v22.6 separate low-health safety. It raises hover/blocks unsafe client-M1 fallback
     -- but preserves target/action continuity and never creates a movement owner of its own.
-    EmergencySafetyEnabled = false, -- v22.18 strict farm continuity: never retreat/pause because HP dropped
-    StrictFarmContinuity = true,
-    QuestSelfHealEnabled = true,
-    QuestInterferenceRetry = 0.45,
-    QuestVerifyTimeout = 1.40,
-    QuestUnknownAcceptLease = 2.25,
-    QuestAcquireStallTimeout = 5.0,
-    QuestAcquireProgressDistance = 3.0,
-    DodgeNoTravelSnap = true,
+    EmergencySafetyEnabled = true,
     -- Passive race abilities: cooldown-gated and movement-free.
     AutoRaceV3Ability     = true,
     AutoRaceV4Ability     = true,
@@ -1349,7 +1352,7 @@ _G.Settings = {
     QuestDelay          = 1.5,
     QuestRetryLimit     = 3,
     QuestRetryBackoff   = 6,
-    QuestAcceptGrace    = 6,
+    QuestAcceptGrace    = 2.0,
     RecoveryDelay       = 3,
     ActionLockTimeout   = 240,  -- v21.27 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
@@ -1623,13 +1626,13 @@ _G.Settings = {
     DodgeReplanInterval = 0.55,
     DodgeMonitorInterval= 0.05,
     DodgeHazardTTL      = 1.20,
-    DodgeHazardMargin   = 10,
-    DodgeHazardTrackRadius = 80,
+    DodgeHazardMargin   = 6,
+    DodgeHazardTrackRadius = 65,
     DodgeConfirmSamples = 2,
-    DodgeGlobalHazardRadius = 24,
+    DodgeGlobalHazardRadius = 18,
     DodgeTargetHazardRadius = 70,
-    QuestUILease        = 1.25,
-    QuestCloseConfirm   = 0.80,
+    QuestUILease        = 0.75,
+    QuestCloseConfirm   = 0.20,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
     SkipRouteFallbackTimeout = 90,
@@ -1779,12 +1782,6 @@ do
             -- v22.6: these are independent policies; changing Ignore Raw Damage no longer
             -- silently flips emergency hover or manufactures a raw-damage dodge.
             _G.Settings.EmergencySafetyEnabled = bool(core["Low Health Safety"], _G.Settings.EmergencySafetyEnabled)
-            -- v22.18: strict continuity wins over low-health safety during kaitun farm.
-            -- The config key is still parsed for compatibility, but incoming hits must not
-            -- change hover/range/target or block quest/farm progression.
-            if _G.Settings.StrictFarmContinuity ~= false then
-                _G.Settings.EmergencySafetyEnabled = false
-            end
             _G.Settings.DodgeKeepAttacking = bool(core["Dodge While Attacking"], _G.Settings.DodgeKeepAttacking)
             _G.Settings.DodgeSideStepOnly = bool(core["Side Step Dodge"], _G.Settings.DodgeSideStepOnly)
             _G.Settings.DodgeOnRawDamage = bool(core["Raw Damage Dodge"], _G.Settings.DodgeOnRawDamage)
@@ -1960,10 +1957,6 @@ _G.State = {
     QuestLastSeenAt   = 0,
     QuestClosedSince  = 0,
     QuestClosedStable = false,
-    QuestAcquireSince = 0,
-    QuestAcquireLastDistance = math.huge,
-    QuestAcquireProgressAt = 0,
-    QuestTentativeUntil = 0,
     ProgressionLock   = nil,
     WorkIntent        = "LEVEL_FARM",
     -- v21.35 scheduler/sea-transition diagnostics live on State to avoid extra
@@ -3037,13 +3030,6 @@ local function IsAlive() local h=Hum(); return h and h.Health > 0 end
 local function FarmSafetyActive()
     local state = _G.State
     if not state then return false end
-    -- v22.18: being hit is never allowed to change farm height/range or pause
-    -- attacks. Only actual death hands control to respawn recovery.
-    if _G.Settings and _G.Settings.StrictFarmContinuity ~= false then
-        state.FarmSafetyActive = false
-        state.FarmSafetyUntil = 0
-        return false
-    end
     -- v22.3: the requested kaitun policy is continuity-first. Low HP from PvP or
     -- ordinary contact is not allowed to alter combat range/hover or pause attacks.
     if _G.Settings and _G.Settings.EmergencySafetyEnabled == false then
@@ -3242,83 +3228,93 @@ local function TryClickDetector(root)
 end
 
 
+local function QuestGuiTreeVisible(node)
+    if not node then return false end
+    local cur = node
+    while cur and cur ~= LP do
+        if cur:IsA("GuiObject") and cur.Visible == false then return false end
+        if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
+        cur = cur.Parent
+    end
+    return true
+end
+
+-- Return the quest wrapper that is actually rendered right now.
+-- Hidden template/stale wrappers are intentionally NOT accepted as active.
+local function GetLiveQuestRoot()
+    local pgui = LP:FindFirstChild("PlayerGui")
+    if not pgui then return nil, "unmounted" end
+    local roots = {}
+    local main = pgui:FindFirstChild("Main")
+    local minimal = pgui:FindFirstChild("Main (minimal)")
+    if main then
+        local q = main:FindFirstChild("Quest", true)
+        if q then roots[#roots + 1] = q end
+    end
+    if minimal then
+        local q = minimal:FindFirstChild("Quest", true)
+        if q then roots[#roots + 1] = q end
+    end
+    if #roots == 0 then return nil, "unmounted" end
+    for _, q in ipairs(roots) do
+        if QuestGuiTreeVisible(q) then return q, "visible" end
+    end
+    return roots[1], "hidden"
+end
+
 local function HasQuest()
     local ok, r = pcall(function()
-        local pgui = LP:FindFirstChild("PlayerGui")
-        local main = pgui and pgui:FindFirstChild("Main")
-        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
-        local quest = (main and main:FindFirstChild("Quest", true))
-            or (minimal and minimal:FindFirstChild("Quest", true))
-        -- nil means the quest UI tree is not mounted yet.  Modern mobile/minimal
-        -- builds can keep an ACTIVE quest inside a hidden wrapper, so wrapper
-        -- visibility alone must never mean "quest finished".
+        local quest, mountState = GetLiveQuestRoot()
+        if mountState == "unmounted" then return nil end
+        if mountState == "hidden" then return false end
         if not quest then return nil end
 
-        local function IsDynamicQuestLabel(node)
-            if not node:IsA("TextLabel") then return false end
-            local text = tostring(node.Text or "")
-            local lower = string.lower(text)
-            if text == "" or lower == "quest" or lower == "quest details"
-                or lower == "objectives" or lower == "objective" then
-                return false
-            end
-            local nodeName = string.lower(node.Name)
-            if nodeName:find("title", 1, true)
-                or nodeName:find("task", 1, true)
-                or nodeName:find("objective", 1, true) then
-                return true
-            end
-            return lower:find("defeat", 1, true) ~= nil
-                or lower:find("kill", 1, true) ~= nil
-                or lower:find("collect", 1, true) ~= nil
-                or lower:find("bounty", 1, true) ~= nil
-                or lower:match("%d+%s*/%s*%d+") ~= nil
-        end
-
         local container = quest:FindFirstChild("Container") or quest
-        local title = container:FindFirstChild("QuestTitle", true)
-        local titleText = title and title:FindFirstChild("Title", true)
+        local sawLiveText = false
 
-        -- Explicit completion wins even when the wrapper is hidden/minimized.
-        -- Scan the stored labels, not only Visible labels; mobile UI can collapse
-        -- the quest panel while leaving the live objective text mounted.
         for _, node in ipairs(container:GetDescendants()) do
-            if node:IsA("TextLabel") then
+            if node:IsA("TextLabel") and QuestGuiTreeVisible(node) then
                 local labelText = tostring(node.Text or "")
-                local labelLower = string.lower(labelText)
-                if labelLower:find("quest completed", 1, true)
-                    or labelLower:find("quest complete", 1, true)
-                    or labelLower:find("completed", 1, true)
-                    or labelLower:find("finished", 1, true) then
+                local lower = string.lower(labelText)
+                if lower:find("quest completed", 1, true)
+                    or lower:find("quest complete", 1, true)
+                    or lower:find("completed", 1, true)
+                    or lower:find("finished", 1, true) then
                     return false
                 end
                 local current, total = labelText:match("(%d+)%s*/%s*(%d+)")
                 if current and total then
                     current, total = tonumber(current), tonumber(total)
-                    if current and total and total > 0 and current >= total then
-                        return false
+                    if current and total and total > 0 then
+                        if current >= total then return false end
+                        sawLiveText = true
+                    end
+                end
+                if labelText ~= "" then
+                    local nodeName = string.lower(tostring(node.Name or ""))
+                    if nodeName:find("title", 1, true)
+                        or nodeName:find("task", 1, true)
+                        or nodeName:find("objective", 1, true)
+                        or lower:find("defeat", 1, true)
+                        or lower:find("kill", 1, true)
+                        or lower:find("collect", 1, true) then
+                        sawLiveText = true
                     end
                 end
             end
         end
 
-        -- Canonical title is authoritative even if Quest.Visible == false.
-        if titleText and titleText:IsA("TextLabel") then
-            local text = tostring(titleText.Text or "")
-            local lower = string.lower(text)
-            if text ~= "" and lower ~= "quest" and lower ~= "quest details" then
-                return true
+        local title = container:FindFirstChild("QuestTitle", true)
+        local titleText = title and title:FindFirstChild("Title", true)
+        if titleText and titleText:IsA("TextLabel") and QuestGuiTreeVisible(titleText) then
+            local value = tostring(titleText.Text or "")
+            local lower = string.lower(value)
+            if value ~= "" and lower ~= "quest" and lower ~= "quest details" then
+                sawLiveText = true
             end
         end
 
-        -- Fallback objective labels are also allowed while the panel is collapsed.
-        for _, node in ipairs(container:GetDescendants()) do
-            if IsDynamicQuestLabel(node) then return true end
-        end
-
-        -- No active text remains.  A hidden empty wrapper is genuinely closed;
-        -- a visible-but-empty wrapper is usually rebuilding, so return nil.
-        if quest:IsA("GuiObject") and not quest.Visible then return false end
+        if sawLiveText then return true end
         return nil
     end)
     if not ok then return nil end
@@ -3392,40 +3388,22 @@ end
 -- [FIX-P2] Đọc quest text với nhiều fallback (TextLabel chính + QuestModel)
 -- Trả về text đọc được, hoặc nil nếu UI không đọc được.
 local function GetQuestText()
-    local ok, text = pcall(function()
-        local pgui = LP:FindFirstChild("PlayerGui")
-        local main = pgui and pgui:FindFirstChild("Main")
-        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
-        local quest = (main and main:FindFirstChild("Quest", true))
-            or (minimal and minimal:FindFirstChild("Quest", true))
-        if not quest then return nil end
+    local ok, result = pcall(function()
+        local quest, mountState = GetLiveQuestRoot()
+        if mountState ~= "visible" or not quest then return nil end
         local container = quest:FindFirstChild("Container") or quest
-        local title = container:FindFirstChild("QuestTitle", true)
-        local titleText = title and title:FindFirstChild("Title", true)
-        if titleText and titleText:IsA("TextLabel") and tostring(titleText.Text or "") ~= "" then
-            -- Include the task/counter labels too.  Some mobile/minimal builds keep
-            -- QuestTitle empty while the real mob/objective lives in another label,
-            -- so an empty title must fall through instead of being treated as closed.
-            local parts = {titleText.Text}
-            for _, d in ipairs(container:GetDescendants()) do
-                if d:IsA("TextLabel") and d ~= titleText and d.Text and d.Text ~= "" then
-                    parts[#parts + 1] = d.Text
-                end
-            end
-            return table.concat(parts, " ")
-        end
-        -- Đọc text thực tế từ UI; không dùng tên object QuestModel.
         local parts = {}
         for _, d in ipairs(container:GetDescendants()) do
-            if d:IsA("TextLabel") and d.Text and d.Text ~= "" then
-                parts[#parts + 1] = d.Text
+            if d:IsA("TextLabel") and QuestGuiTreeVisible(d) then
+                local value = tostring(d.Text or "")
+                if value ~= "" then parts[#parts + 1] = value end
             end
         end
         if #parts == 0 then return nil end
         return table.concat(parts, " ")
     end)
     if not ok then return nil end
-    return text
+    return result
 end
 
 
@@ -3433,132 +3411,106 @@ end
 -- Trả về: true = khớp, false = sai mob, nil = không đọc được UI.
 local function QuestMatches(mobName)
     if not mobName then return nil end
-    -- Once this session accepted (or adopted) an active quest, this canonical
-    -- name is authoritative. It also makes level-boundary changes explicit:
-    -- an old active quest returns false for the next QDB entry and is replaced.
-    local activeMob = _G.State and _G.State.ActiveQuestMob
-    if activeMob then
-        return string.lower(tostring(activeMob))
-            == string.lower(tostring(mobName))
-    end
+
     local text = GetQuestText()
-    if not text then return nil end
-    if string.find(string.lower(text), string.lower(mobName), 1, true) then
+    if text and string.find(string.lower(text), string.lower(mobName), 1, true) then
         return true
     end
-    -- Roblox can render the objective through a localization table (for
-    -- example Brute -> a Vietnamese name). An untranslated miss is therefore
-    -- unknown, not proof that the player holds the wrong quest.
+
+    if HasQuest() == true then
+        local activeMob = _G.State and _G.State.ActiveQuestMob
+        if activeMob then
+            return string.lower(tostring(activeMob))
+                == string.lower(tostring(mobName))
+        end
+        return nil
+    end
+
     return nil
 end
 
+
+local function RequestQuestGiverTravel(q, reason)
+    if not q or not q.QC then return false end
+    local threshold = math.max(4, tonumber(_G.Settings.QuestInteractDistance) or 8)
+    _G.State.FState = "QUEST_TRAVEL"
+    _G.BobonStatus = "Quest: Traveling to " .. tostring(q.M)
+    local ok = TravelManager:Request(q.QC, "Farm", {
+        arrivalThreshold = threshold,
+        combatHover = false,
+        persistent = false,
+        speed = math.max(tonumber(_G.Settings.FlySpeed) or 180, 240),
+    })
+    if not ok then DLog("QUEST", "Quest giver travel retry: " .. tostring(reason or "request")) end
+    return ok
+end
 
 -- [FIX-P3] Request quest tại giver với retry có giới hạn, không spam remote.
 -- Trả về true = "đã xử lý (đừng farm)", false = "chưa tới giver".
 local function HandleQuestAtGiver(q, atGiver)
     if not atGiver then return false end
     local now = tick()
-    local interfered = HasControlInterference()
-        or (now - (_G.State.LastIncomingDamage or 0) <= 0.85)
-    local requestDelay = interfered
-        and (_G.Settings.QuestInterferenceRetry or 0.45)
-        or (_G.Settings.QuestDelay or 1.5)
-
-    if now - (_G.State.LastQuestRequest or 0) < requestDelay then
-        _G.BobonStatus = interfered
-            and ("Quest: Retrying through interference • " .. q.M)
-            or ("Quest: Waiting for confirmation " .. q.M)
+    if now - _G.State.LastQuestRequest < _G.Settings.QuestDelay then
+        _G.BobonStatus = "Quest: Waiting for confirmation " .. q.M
         return true
     end
-
-    -- Stun/Busy/knockback retries must not burn the ordinary retry budget. The
-    -- remote is still attempted; if the server ignores it we simply try again.
-    if not interfered and _G.State.QuestRetries >= _G.Settings.QuestRetryLimit then
-        _G.BobonStatus = "Quest: Failed, retrying shortly"
-        if now - (_G.State.LastQuestRequest or 0) >= (_G.Settings.QuestRetryBackoff or 6) then
+    if _G.State.QuestRetries >= _G.Settings.QuestRetryLimit then
+        -- Quá số lần retry → backoff, không spam remote, không farm
+        _G.BobonStatus = "Quest: Failed, waiting to retry"
+        if now - _G.State.LastQuestRequest >= (_G.Settings.QuestRetryBackoff or 6) then
             _G.State.QuestRetries = 0
         end
         return true
     end
-
     _G.State.LastQuestRequest = now
-    if not interfered then
-        _G.State.QuestRetries = _G.State.QuestRetries + 1
-    end
-    DLog("QUEST", "StartQuest " .. q.Q .. " level " .. q.QL
-        .. (interfered and " [continuity-retry]" or ""))
-
+    _G.State.QuestRetries = _G.State.QuestRetries + 1
+    DLog("QUEST", "StartQuest " .. q.Q .. " level " .. q.QL)
+    -- Dọn quest cũ sai mob trước khi request quest mới; nếu không server sẽ
+    -- giữ quest cũ và controller tưởng rằng StartQuest bị lỗi.
     local currentMatch = QuestMatches(q.M)
     if currentMatch == false then
         _G.State.ActiveQuestMob = nil
         pcall(function() CommF_:InvokeServer("AbandonQuest") end)
-        task.wait(0.12)
+        task.wait(0.15)
     end
-
-    local function VerifyQuestTitle(timeout)
-        local deadline = tick() + math.max(0.5, tonumber(timeout) or 1.4)
-        local sawExplicitClosed = false
+    local function VerifyQuestTitle()
+        local deadline = tick() + 3
         repeat
-            local hq = HasQuest()
-            local match = QuestMatches(q.M)
-            if hq == true and match ~= false then return true, "UI" end
-            if match == false then return false, "MISMATCH" end
-            if hq == false then sawExplicitClosed = true end
-            task.wait(0.12)
+            -- Verify both the title and the wrapper.  A completed quest can
+            -- leave stale title text behind for a few frames; that must not
+            -- be mistaken for a newly accepted quest.
+            -- Quest title/UI can be rearranged between game updates.  The
+            -- wrapper being active is authoritative; only an explicit mob
+            -- mismatch rejects the quest.  `nil` means unreadable, not wrong.
+            if HasQuest() == true and QuestMatches(q.M) ~= false then return true end
+            task.wait(0.2)
         until tick() >= deadline
-        if not sawExplicitClosed and HasQuest() == nil then
-            return nil, "UI-UNREADABLE"
-        end
-        return false, sawExplicitClosed and "CLOSED" or "UNCONFIRMED"
+        return false
     end
-
-    local okStart, startResult = pcall(function()
-        return CommF_:InvokeServer("StartQuest", q.Q, q.QL)
+    -- Remote chuẩn của Blox Fruits là StartQuest. RequestQuest chỉ còn là
+    -- fallback cho các server/private build cũ.
+    local okRQ = pcall(function()
+        CommF_:InvokeServer("StartQuest", q.Q, q.QL)
     end)
-    task.wait(interfered and 0.12 or 0.25)
-    local accepted, verifyReason = VerifyQuestTitle(_G.Settings.QuestVerifyTimeout or 1.4)
-
-    if accepted ~= true then
-        local okFallback, fallbackResult = pcall(function()
-            return CommF_:InvokeServer("RequestQuest", q.Q, q.QL)
+    task.wait(0.35)
+    local accepted = VerifyQuestTitle()
+    if not accepted then
+        local okFallback = pcall(function()
+            CommF_:InvokeServer("RequestQuest", q.Q, q.QL)
         end)
-        okStart = okStart or okFallback
-        if fallbackResult ~= nil then startResult = fallbackResult end
-        accepted, verifyReason = VerifyQuestTitle(_G.Settings.QuestVerifyTimeout or 1.4)
+        okRQ = okRQ or okFallback
+        accepted = VerifyQuestTitle()
     end
-
-    if accepted == true then
+    if okRQ and accepted then
         _G.State.QuestRetries = 0
         _G.State.LastQuestAccepted = tick()
-        _G.State.QuestTentativeUntil = 0
         _G.State.ActiveQuestMob = q.M
-        _G.State.QuestAcquireSince = 0
-        _G.State.QuestAcquireProgressAt = tick()
         _G.BobonStatus = "Quest: Accepted " .. q.M
         DLog("QUEST", "Accepted: " .. q.M)
-    elseif accepted == nil and okStart then
-        -- Mobile/minimal UI can disappear while the server still accepted the
-        -- quest. Give it a short optimistic lease, then the main loop rechecks.
-        _G.State.QuestRetries = 0
-        _G.State.LastQuestAccepted = tick()
-        _G.State.QuestTentativeUntil = tick()
-            + (_G.Settings.QuestUnknownAcceptLease or 2.25)
-        _G.State.ActiveQuestMob = q.M
-        _G.BobonStatus = "Quest: Accepted • verifying UI " .. q.M
-        DLog("QUEST", "Tentative accept because UI unreadable: " .. q.M)
     else
-        if interfered then
-            -- Do not enter long backoff because a hit happened during StartQuest.
-            _G.State.QuestRetries = math.max(0, _G.State.QuestRetries - 1)
-            _G.BobonStatus = "Quest: Control interrupted • retrying " .. q.M
-            DLog("QUEST", "Interference retry: " .. tostring(verifyReason))
-        else
-            warn("[BobonHub] RequestQuest not confirmed (retry "
-                .. tostring(_G.State.QuestRetries) .. ")")
-            _G.BobonStatus = "Quest: Not confirmed • retrying " .. q.M
-            DLog("QUEST", "Not confirmed: " .. tostring(verifyReason)
-                .. " result=" .. tostring(startResult))
-        end
+        warn("[BobonHub] RequestQuest error (retry " .. _G.State.QuestRetries .. ")")
+        _G.BobonStatus = "Quest: Error, retrying " .. q.M
+        DLog("QUEST", "Remote error (retry " .. _G.State.QuestRetries .. ")")
     end
     return true
 end
@@ -9019,7 +8971,6 @@ TravelManager.AtCombatAnchor = false
 TravelManager.AtCombatTarget = nil
 TravelManager.DodgeOffset = Vector3.zero
 TravelManager.DodgeUntil = 0
-TravelManager.DodgeDirectBase = nil
 TravelManager.LastNearQuestSnap = 0
 TravelManager.LastExitOwner = nil
 TravelManager.LastExitReason = nil
@@ -9114,7 +9065,6 @@ function TravelManager:Stop(reason)
     self.AtCombatTarget = nil
     self.DodgeOffset = Vector3.zero
     self.DodgeUntil = 0
-    self.DodgeDirectBase = nil
     self.DodgeSpeed = 0
     self.DodgeSpeedUntil = 0
     if _G.State then
@@ -9133,55 +9083,23 @@ function TravelManager:IsAtCombatAnchor(target)
 end
 
 function TravelManager:ApplyDodgeOffset(offset, duration, emergencySpeed)
-    if typeof(offset) ~= "Vector3" then return false end
-    local inCombatTrip = _G.State.IsTraveling and self.CurrentOptions
-        and self.CurrentOptions.combatHover
-    local combatMode = _G.State and (_G.State.Mode == "Farming"
-        or _G.State.Mode == "Bossing" or _G.State.Mode == "GettingItem"
-        or _G.State.Mode == "Raiding")
-    if not inCombatTrip and not combatMode then return false end
-
-    local now = tick()
-    local alreadyDodging = now < (tonumber(self.DodgeUntil) or 0)
+    -- Skill dodge is allowed during the final combat approach too; waiting for
+    -- AtCombatAnchor was too late for charge/projectile/AoE casts. It still
+    -- requires an active combatHover trip, so puzzle/island travel is untouched.
+    if typeof(offset) ~= "Vector3" or not _G.State.IsTraveling
+        or not self.CurrentOptions or not self.CurrentOptions.combatHover then
+        return false
+    end
     self.DodgeOffset = offset
-    self.DodgeUntil = now + (duration or 0.35)
+    self.DodgeUntil = tick() + (duration or 0.35)
     self.DodgeSpeed = math.max(tonumber(emergencySpeed) or 0, tonumber(self.DodgeSpeed) or 0)
     self.DodgeSpeedUntil = self.DodgeUntil
-
-    if inCombatTrip then
-        self.DodgeDirectBase = nil
-        return true
-    end
-
-    -- v22.18: fixed-pile Teddy combat may have no active TravelManager thread at
-    -- the exact cast frame. Make a bounded side-step without claiming a new
-    -- movement owner. Keep ONE base position for this dodge so the 50ms monitor
-    -- cannot add another 22 studs every sample and send the player across the map.
-    if _G.Settings.DodgeNoTravelSnap ~= false then
-        local root = HRP()
-        if root then
-            if not alreadyDodging or not self.DodgeDirectBase then
-                self.DodgeDirectBase = root.Position
-            end
-            local destination = self.DodgeDirectBase + offset
-            if IsValidPos(destination) and IsAllowedWorldPosition(destination) then
-                local ok = pcall(function()
-                    root.CFrame = CFrame.new(destination) * root.CFrame.Rotation
-                end)
-                if ok then
-                    _G.State.LastMoveTime = os.time()
-                    return true
-                end
-            end
-        end
-    end
-    return false
+    return true
 end
 
 function TravelManager:ClearDodgeOffset()
     self.DodgeOffset = Vector3.zero
     self.DodgeUntil = 0
-    self.DodgeDirectBase = nil
     self.DodgeSpeed = 0
     self.DodgeSpeedUntil = 0
 end
@@ -9438,19 +9356,6 @@ function TravelManager:Request(targetCF, owner, options)
 
             -- Travel timeout (động theo khoảng cách khi long travel) [FIX-P1]
             if os.time() - travelStart > travelTimeout then
-                -- v22.18: knockback/Stun/Busy while Farm/Raid is moving is not a
-                -- navigation failure. Reset this travel budget and keep the same job.
-                if (owner == "Farm" or owner == "Raid")
-                    and _G.Settings.StrictFarmContinuity ~= false
-                    and HasRecentExternalInterference() then
-                    travelStart = os.time()
-                    lastPos = HRP() and HRP().Position or lastPos
-                    stuckTimer = 0
-                    _G.State.IsRecovering = false
-                    _G.State.LastMoveTime = os.time()
-                    DLog("CONTINUITY", "travel timeout ignored during external interference")
-                    continue
-                end
                 -- Farm timeout → về khu farm (fallback), không recover giữa biển [FIX-13]
                 if isCombatHover and HandleFarmInvalid("Timeout") then
                     continue
@@ -9784,16 +9689,6 @@ function TravelManager:Request(targetCF, owner, options)
                     stuckLimit = _G.Settings.CruiseStuckTimeout
                 end
                 if stuckTimer >= stuckLimit then
-                    if (owner == "Farm" or owner == "Raid")
-                        and _G.Settings.StrictFarmContinuity ~= false
-                        and HasRecentExternalInterference() then
-                        stuckTimer = 0
-                        lastPos = currentPos
-                        _G.State.IsRecovering = false
-                        _G.State.LastMoveTime = os.time()
-                        DLog("CONTINUITY", "travel stuck ignored during external interference")
-                        continue
-                    end
                     self.LastExitOwner = owner
                     self.LastExitReason = "Stuck"
                     self.LastExitToken = myToken
@@ -10065,12 +9960,7 @@ local function BindPlayerDamage(character, humanoid)
                 _G.State.DamageDodgeUntil = 0
             end
 
-            if _G.Settings.StrictFarmContinuity ~= false then
-                -- v22.18: raw HP loss is telemetry only. Never retreat, never lift the
-                -- hover, never release the target/action and never enter recovery.
-                _G.State.FarmSafetyActive = false
-                _G.State.FarmSafetyUntil = 0
-            elseif _G.Settings.EmergencySafetyEnabled ~= false then
+            if _G.Settings.EmergencySafetyEnabled ~= false then
                 local maxHealth = tonumber(humanoid.MaxHealth) or 0
                 local hpPct = maxHealth > 0 and (newHealth / maxHealth) * 100 or 100
                 if hpPct <= (_G.Settings.EmergencyHealthPercent or 55) then
@@ -10326,9 +10216,7 @@ local ATTACK_WORDS = {
 -- because ordinary NPC melee boxes and player VFX would create false dodges.
 local HARD_HAZARD_WORDS = {
     "projectile","beam","blast","explosion","shockwave","aoe",
-    "vortex","tornado","laser","eruption","slash","spike","meteor",
-    "flame","fire","magma","ice","thunder","lightning","quake",
-    "orb","ball","pillar","ring","wave","burst","roar","stomp",
+    "vortex","tornado","laser","eruption",
 }
 
 local function WordMatch(text, words)
@@ -10340,32 +10228,15 @@ local function WordMatch(text, words)
 end
 
 local function ActiveCombatModel()
+    if not _G.State.IsTraveling or not TravelManager.CurrentOptions
+        or not TravelManager.CurrentOptions.combatHover then
+        return nil
+    end
+    local ref = TravelManager.TargetRef
+    if typeof(ref) ~= "Instance" then return nil end
+    local model = ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")
     local enemies = workspace:FindFirstChild("Enemies")
-    if not enemies then return nil end
-
-    local model = nil
-    -- Prefer the exact TravelManager combat target when a combat trip exists.
-    if _G.State.IsTraveling and TravelManager.CurrentOptions
-        and TravelManager.CurrentOptions.combatHover then
-        local ref = TravelManager.TargetRef
-        if typeof(ref) == "Instance" then
-            model = ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")
-        end
-    end
-
-    -- v22.18: Teddy fixed-pile farm can be actively attacking while no travel
-    -- thread is running. Use ONLY Bobon's exact locked combat target as fallback;
-    -- unrelated nearby NPCs are still ignored.
-    if not model and _G.State
-        and (_G.State.Mode == "Farming" or _G.State.Mode == "Bossing"
-            or _G.State.Mode == "GettingItem" or _G.State.Mode == "Raiding") then
-        local ref = _G.State.CurrentTarget or _G.State.FarmTarget or _G.State.ClusterPrimary
-        if typeof(ref) == "Instance" then
-            model = ref:IsA("Model") and ref or ref:FindFirstAncestorOfClass("Model")
-        end
-    end
-
-    if not model or model.Parent ~= enemies then return nil end
+    if not model or not enemies or model.Parent ~= enemies then return nil end
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root then return nil end
@@ -10420,37 +10291,27 @@ local function FlatUnit(v, fallback)
 end
 
 local function TrackHazard(obj)
-    if not obj or IsOurCharacterDescendant(obj) or IsPlayerOwnedEffect(obj) then
+    if not obj or not obj:IsA("BasePart")
+        or IsOurCharacterDescendant(obj) or IsPlayerOwnedEffect(obj) then
         return
     end
-    local part = obj:IsA("BasePart") and obj or obj:FindFirstAncestorWhichIsA("BasePart")
-    if not part or IsOurCharacterDescendant(part) or IsPlayerOwnedEffect(part) then return end
-
     local target, targetRoot = ActiveCombatModel()
     local me = HRP()
     if not target or not targetRoot or not me then return end
 
-    local ok, pos, size = pcall(function() return part.Position, part.Size end)
+    local ok, pos, size = pcall(function() return obj.Position, obj.Size end)
     if not ok or not IsValidPos(pos) then return end
     if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 65) then return end
     if (pos - targetRoot.Position).Magnitude > (_G.Settings.DodgeTargetHazardRadius or 70) then return end
 
-    local label = tostring(obj.Name or "") .. " " .. tostring(part.Name or "")
-        .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
+    local label = tostring(obj.Name or "") .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
     if not WordMatch(label, HARD_HAZARD_WORDS) then return end
-
-    -- BaseParts need meaningful volume. Effect objects (Beam/Trail/ParticleEmitter/
-    -- Attachment) inherit the parent part's position and are already name-gated.
-    if obj:IsA("BasePart") and math.max(size.X,size.Y,size.Z) < 2 then return end
-    DodgeController.HazardParts[part] = tick() + (_G.Settings.DodgeHazardTTL or 1.2)
+    if math.max(size.X,size.Y,size.Z) < 2 then return end
+    DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 1.2)
 end
 
 local hazardConn = workspace.DescendantAdded:Connect(function(obj)
-    if not SessionAlive() then return end
-    if obj:IsA("BasePart") or obj:IsA("Attachment") or obj:IsA("ParticleEmitter")
-        or obj:IsA("Trail") or obj:IsA("Beam") then
-        pcall(TrackHazard, obj)
-    end
+    if SessionAlive() and obj:IsA("BasePart") then pcall(TrackHazard,obj) end
 end)
 BobonUIConnections[#BobonUIConnections+1] = hazardConn
 
@@ -10583,7 +10444,6 @@ local function ChooseOffset(targetRoot)
 end
 
 function DodgeController:Finish(reason)
-    local oldThreat = self.Threat
     self.Active=false
     self.Threat=nil
     self.ThreatRoot=nil
@@ -10593,7 +10453,7 @@ function DodgeController:Finish(reason)
     self.PendingCount=0
     _G.State.DodgeActive=false
     _G.State.DodgeThreatName=nil
-    if _G.State.DamageDodgeTarget == oldThreat then
+    if _G.State.DamageDodgeTarget == self.Threat then
         _G.State.DamageDodgeTarget = nil
         _G.State.DamageDodgeUntil = 0
     end
@@ -10804,13 +10664,6 @@ task.spawn(function()
                 and _G.State.Mode ~= "Recovering"
                 and _G.State.Mode ~= "Dead"
                 and _G.State.Mode ~= "Respawning" then
-                if _G.Settings.StrictFarmContinuity ~= false
-                    and HasRecentExternalInterference() then
-                    _G.State.IsRecovering = false
-                    _G.State.LastMoveTime = os.time()
-                    DLog("CONTINUITY", "suppressed heavy recovery caused by hit/control interference")
-                    return
-                end
                 RecoveryManager:Handle("StuckOrTimeout")
                 return
             end
@@ -17264,13 +17117,6 @@ task.spawn(function()
             elseif _G.State.IsTraveling and not _G.State.MovementOwner then
                 TravelManager:Stop("MissingMovementOwner")
             end
-            -- v22.18: a transient hit/control effect must never leave a stale heavy
-            -- recovery request that later steals the quest/farm loop.
-            if _G.Settings.StrictFarmContinuity ~= false
-                and _G.State.IsRecovering and HasRecentExternalInterference() then
-                _G.State.IsRecovering = false
-                _G.State.LastMoveTime = os.time()
-            end
 
             -- Team phải được xác nhận trước mọi remote/item/boss; nếu chưa có
             -- team thì không được bắt đầu một travel dang dở.
@@ -17297,7 +17143,8 @@ task.spawn(function()
                 end
                 _G.State.QuestClosedStable =
                     questNow - (_G.State.QuestClosedSince or questNow)
-                        >= (_G.Settings.QuestCloseConfirm or 0.80)
+                        >= (_G.Settings.QuestCloseConfirm or 0.20)
+                _G.State.ActiveQuestMob = nil
             else
                 -- unreadable/rebuilding UI is never evidence that the quest closed
                 _G.State.QuestClosedStable = false
@@ -17374,11 +17221,10 @@ task.spawn(function()
             -- contains an exact QDB mob name. A localized/unreadable wrapper
             -- is still safe to farm by level, but bring stays disabled until
             -- this session accepts the next quest and knows its exact mob.
-            if questState == false and _G.State.QuestClosedStable == true then
+            if questState == false then
                 FarmPositionController:ReleaseCluster()
                 _G.State.ActiveQuestMob = nil
             elseif questState == true then
-                _G.State.QuestTentativeUntil = 0
                 local resolvedMob = ResolveQuestMobFromText()
                 if resolvedMob then
                     local cachedMob = _G.State.ActiveQuestMob
@@ -17426,36 +17272,23 @@ task.spawn(function()
             -- title). Bản cũ đòi match == true nên nil khiến bot kẹt
             -- re-request quest vô hạn → không farm, không gom, không đánh.
             local hasQuest = questState == true and questMatch ~= false
-            -- v22.18: a successful StartQuest with a rebuilding/unmounted UI gets
-            -- a short lease. It prevents hit-induced UI flicker from stranding the
-            -- bot at the giver, but expires quickly if the quest truly was rejected.
-            if not hasQuest and questState == nil and questMatch ~= false
-                and _G.State.ActiveQuestMob
-                and questNow <= (tonumber(_G.State.QuestTentativeUntil) or 0) then
-                hasQuest = true
-            end
             -- v21.33: retain the canonical active quest across a brief wrapper blink.
             -- Without this lease the controller cleared Farm, opened a "safe item window",
             -- and could launch BossManager before the Quest UI rebuilt.
-            if not hasQuest and questState == false and questMatch ~= false
+            if not hasQuest and questState == nil and questMatch ~= false
                 and _G.State.ActiveQuestMob
                 and questNow - (_G.State.QuestLastSeenAt or 0)
-                    <= (_G.Settings.QuestUILease or 1.25) then
+                    <= (_G.Settings.QuestUILease or 0.75) then
                 hasQuest = true
             end
             -- Right after StartQuest, some UI builds briefly hide/rebuild the
             -- Quest wrapper. Do not cancel the accepted quest and fly back to
             -- the giver during that short transition.
-            if not hasQuest and questMatch ~= false
-                and _G.State.LastQuestAccepted > 0 then
-                local acceptGrace = _G.Settings.QuestAcceptGrace or 6
-                if (tonumber(_G.State.QuestTentativeUntil) or 0) > 0 then
-                    acceptGrace = math.min(acceptGrace,
-                        _G.Settings.QuestUnknownAcceptLease or 2.25)
-                end
-                if tick() - _G.State.LastQuestAccepted <= acceptGrace then
-                    hasQuest = true
-                end
+            if not hasQuest and questState == nil and questMatch ~= false
+                and _G.State.LastQuestAccepted > 0
+                and tick() - _G.State.LastQuestAccepted
+                    <= math.min(_G.Settings.QuestAcceptGrace or 2.0, 2.0) then
+                hasQuest = true
             end
             local questOk = hasQuest
             local questMobName = _G.State.ActiveQuestMob or q.M
@@ -17464,79 +17297,18 @@ task.spawn(function()
             -- không còn xác nhận được đều phải quay lại giver ngay trong tick
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
-                -- v21.35: Sea gates and permanent item work are scheduler-owned.
-                -- A confirmed closed quest is still the safe window for optional
-                -- user-enabled event/boss work that is intentionally not permanent.
-
-                -- A confirmed closed quest is the only safe window for
-                -- optional kaitun items/boss drops. The old placement was
-                -- below this return path, so Saber/Pole/BossManager were
-                -- logically unreachable and never ran at all.
-                -- The wrapper is authoritative here. A completed quest can
-                -- leave stale title text behind, so questMatch may still be
-                -- true even though there is no active quest.
-                local safeItemWindow = questState == false
-                    and _G.State.QuestClosedStable == true
-                    and _G.State.ActiveQuestMob == nil
-                if safeItemWindow then
-                    local okIndra, indraResult = pcall(function() return IndraController:TryRun() end)
-                    if okIndra and indraResult then return end
-                    local okRainbow, rainbowResult = pcall(function() return RainbowHakiController:TryRun() end)
-                    if okRainbow and rainbowResult then return end
-                    -- Permanent items and Fragment Raid are Priority Scheduler-owned.
-
-                    local okBoss, bossResult = pcall(function()
-                        return BossManager:TryFightBoss()
-                    end)
-                    if not okBoss then
-                        warn("[BobonHub] Module Error: BossManager: " .. tostring(bossResult))
-                    elseif bossResult then
-                        return
-                    end
-                end
-
+                -- Q19 QUEST-FIRST: confirmed quest close goes straight back to
+                -- the level quest giver. Optional work remains scheduler-owned.
                 FarmPositionController:ReleaseCluster()
                 _G.State:ClearTargets()
-                -- Request(q.QC) below atomically replans a stale Farm goal.
-                -- Do not destroy/recreate BodyMovers every 0.15 seconds.
                 _G.State:SetMode("GettingQuest")
                 _G.BobonStatus = "Quest: Refreshing " .. q.M
                 DLog("QUEST", "Quest missing/complete/wrong → refresh " .. q.M)
                 local hrp = HRP()
-                local giverDistance = hrp and (hrp.Position - q.QC.Position).Magnitude or math.huge
-                local atGiver = giverDistance <= (_G.Settings.QuestInteractDistance or 8)
-
-                -- v22.18 quest travel watchdog: a knockback/control effect may leave a
-                -- Farm travel thread alive but no longer progressing. Replan only the
-                -- quest trip; never enter heavy Recovery and never touch Teddy bring.
-                if _G.Settings.QuestSelfHealEnabled ~= false then
-                    local qNow = tick()
-                    if (_G.State.QuestAcquireSince or 0) <= 0 then
-                        _G.State.QuestAcquireSince = qNow
-                        _G.State.QuestAcquireLastDistance = giverDistance
-                        _G.State.QuestAcquireProgressAt = qNow
-                    end
-                    local lastDistance = tonumber(_G.State.QuestAcquireLastDistance) or math.huge
-                    if giverDistance + (_G.Settings.QuestAcquireProgressDistance or 3) < lastDistance then
-                        _G.State.QuestAcquireLastDistance = giverDistance
-                        _G.State.QuestAcquireProgressAt = qNow
-                    elseif not atGiver and qNow - (tonumber(_G.State.QuestAcquireProgressAt) or qNow)
-                        >= (_G.Settings.QuestAcquireStallTimeout or 5) then
-                        if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-                            TravelManager:Stop("QuestSelfHealReplan")
-                        end
-                        _G.State.IsRecovering = false
-                        _G.State.LastMoveTime = os.time()
-                        _G.State.QuestAcquireLastDistance = giverDistance
-                        _G.State.QuestAcquireProgressAt = qNow
-                        DLog("QUEST", "quest travel stalled -> replan without recovery")
-                    end
-                end
-
-                if HandleQuestAtGiver(q, atGiver) then
-                    return
-                end
-                TravelManager:Request(q.QC, "Farm")
+                local atGiver = hrp and (hrp.Position - q.QC.Position).Magnitude
+                    <= (_G.Settings.QuestInteractDistance or 8)
+                if HandleQuestAtGiver(q, atGiver) then return end
+                RequestQuestGiverTravel(q, "quest closed")
                 return
             end
 
@@ -17547,11 +17319,7 @@ task.spawn(function()
                 -- request gần đây → cho farm trong khoảng grace ngắn
                 if questOk == nil then
                     local gNow = tick()
-                    if HasRecentExternalInterference() then
-                        -- UI/control can rebuild after a hit; preserve the accepted quest
-                        -- and let the same farm target continue.
-                        _G.State.LastQuestRequest = gNow
-                    elseif gNow - _G.State.LastQuestRequest >= _G.Settings.QuestDelay then
+                    if gNow - _G.State.LastQuestRequest >= _G.Settings.QuestDelay then
                         -- Không đọc được UI lâu → về giver verify lại, KHÔNG farm
                         _G.State:SetMode("GettingQuest")
                         _G.BobonStatus = "Quest: Verifying " .. q.M
@@ -17559,50 +17327,24 @@ task.spawn(function()
                         if HandleQuestAtGiver(q, atGiver) then
                             return
                         else
-                            TravelManager:Request(q.QC, "Farm")
+                            RequestQuestGiverTravel(q, "verify unreadable")
                             return
                         end
                     end
                 end
                 _G.State.QuestRetries = 0
-                _G.State.QuestAcquireSince = 0
-                _G.State.QuestAcquireLastDistance = math.huge
-                _G.State.QuestAcquireProgressAt = tick()
             else
                 -- [FIX-10] Chưa có quest hoặc [FIX-9] quest sai mob:
                 -- CHỈ đi lấy/đổi quest, KHÔNG farm
                 _G.State:SetMode("GettingQuest")
                 DLog("QUEST", "Missing or wrong quest → going to giver for " .. q.M)
                 local hrp = HRP()
-                local giverDistance = hrp and (hrp.Position - q.QC.Position).Magnitude or math.huge
-                local atGiver = giverDistance <= (_G.Settings.QuestInteractDistance or 8)
+                local atGiver = hrp and (hrp.Position - q.QC.Position).Magnitude <= (_G.Settings.QuestInteractDistance or 8)
                 if HandleQuestAtGiver(q, atGiver) then
                     return
                 else
-                    if _G.Settings.QuestSelfHealEnabled ~= false then
-                        local qNow = tick()
-                        if (_G.State.QuestAcquireSince or 0) <= 0 then
-                            _G.State.QuestAcquireSince = qNow
-                            _G.State.QuestAcquireLastDistance = giverDistance
-                            _G.State.QuestAcquireProgressAt = qNow
-                        end
-                        local lastDistance = tonumber(_G.State.QuestAcquireLastDistance) or math.huge
-                        if giverDistance + (_G.Settings.QuestAcquireProgressDistance or 3) < lastDistance then
-                            _G.State.QuestAcquireLastDistance = giverDistance
-                            _G.State.QuestAcquireProgressAt = qNow
-                        elseif qNow - (tonumber(_G.State.QuestAcquireProgressAt) or qNow)
-                            >= (_G.Settings.QuestAcquireStallTimeout or 5) then
-                            if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-                                TravelManager:Stop("QuestVerifySelfHeal")
-                            end
-                            _G.State.IsRecovering = false
-                            _G.State.LastMoveTime = os.time()
-                            _G.State.QuestAcquireLastDistance = giverDistance
-                            _G.State.QuestAcquireProgressAt = qNow
-                        end
-                    end
                     _G.BobonStatus = "Quest: Traveling to " .. q.M
-                    TravelManager:Request(q.QC, "Farm")
+                    RequestQuestGiverTravel(q, "missing/wrong")
                     return
                 end
             end
