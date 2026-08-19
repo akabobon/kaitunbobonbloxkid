@@ -1,118 +1,8 @@
 -- =================================================================
---         BOBON HUB v22.20.2 EXEC-RECOVERY | MINIMAL EFFECT DODGE
---         Base: v22.19.1 EXEC-SAFE QUEST-FIRST
---  [D202-1] Rebased byte-for-byte from v22.19.1; no new controller/local/thread.
---  [D202-2] Teddy bring and quest-first logic remain untouched.
---  [D202-3] Dodge trigger is restricted to an already-spawned tracked skill hazard.
---  [D202-4] Raw damage, Stun/Busy, root velocity and animation alone cannot trigger dodge.
--- =================================================================
--- =================================================================
---         BOBON HUB v22.19.1 EXEC-SAFE QUEST-FIRST | TEDDY v22.17 LOCKED
---         Base: v22.17; NO new top-level locals (Luau chunk local-pressure safe)
---  [Q191-1] Quest completion/hidden wrapper stops farm immediately.
---  [Q191-2] Quest accept/rebuild grace applies only to unreadable UI, never confirmed closed UI.
---  [Q191-3] Quest giver travel uses <= QuestInteractDistance and persistent=false.
---  [Q191-4] No optional detour between quest completion and the next StartQuest.
---  [Q191-5] SharedTeddyRestack / TeddySequenceFarmTick / SharedFarmTick are untouched.
--- =================================================================
--- =================================================================
---         BOBON HUB v22.17 TEDDY SEQUENCE REBASE | STABLE-ANCHOR ACQUIRE
---         Deep rebase from v22.16 after side-by-side Roblox(22) vs Teddy reference.
---  [TS17-1] Teddy sequence is now explicit: SCAN -> ACQUIRE -> REAL HP TAG -> SNAP -> VERIFY -> KILL.
---  [TS17-2] The pile is FIXED at the farm-field anchor; it never follows the player during acquire.
---  [TS17-3] Already stacked mobs stay pinned while Farm flies to the next unstacked mob.
---  [TS17-4] A mob is not accepted into the pile merely because CFrame assignment returned; one-write persistence is verified.
---  [TS17-5] While acquiring the next mob, fast attack stays live and verified pile members remain eligible for fanout.
---  [TS17-6] Normal quest farm and early Skip Lv10-70 use the same Teddy sequence engine.
--- =================================================================
--- =================================================================
---         BOBON HUB v22.16 | TEDDY HP-PROOF ACQUIRE STACK + UI ALIGN
+--         BOBON HUB v22.8 | APPROVED CAT UI | REAL ACCOUNT STATUS
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.15 TEDDY HP-TAG STACK | Version: v22.16
+--         Base: v22.7 PUBLIC-SOURCE SAFE MERGE | Version: v22.8
 --
---
---
---
---  v22.16 HP-PROOF -> CLOSE ACQUIRE -> HARD STACK + UI ALIGN:
---  [TH16-1] After REAL HP loss, Farm closes to that exact mob before pull.
---  [TH16-2] Ownership API false/unknown no longer vetoes the pull attempt; only
---           real position persistence may promote a mob to STACKED.
---  [TH16-3] STACKED mobs use a moving under-foot BodyPosition hold at a short fixed depth;
---           pile depth is independent of travel hover. Server snap-back revokes STACKED.
---  [TH16-4] Teddy hold restores Humanoid/part state on release/route change.
---  [UI16-1] Rebalanced header/stat/runtime/checker geometry and removed stat gaps.
---  [UI16-2] Status Checker labels are forced to canonical English every refresh.
---  [UI16-3] Left toggle is a true circular mascot button; inner logo is circular.
---
---  v22.15 TEDDY HP-TAG -> STACK (REFERENCE USER FLOW):
---  [TH15-1] Fly to ONE live mob at a time and keep attacking that exact model until
---           a causal REAL Humanoid HP decrease is observed. No HP loss = no bring.
---  [TH15-2] After HP proof, enter PULL phase for that exact mob. Only then may its
---           root be moved into the moving under-foot pile.
---  [TH15-3] A mob is marked STACKED only after its root physically remains inside
---           the under-foot pile radius for a short persistence window. Visual-only
---           snap-back never counts as success.
---  [TH15-4] Already STACKED mobs are restacked under the player while the player
---           flies to the next unproven mob: hit -> real HP loss -> pull -> next.
---  [TH15-5] New respawns automatically re-enter the HIT phase. Skip Lv10-70 and
---           normal leveling share the exact same HP-tag Teddy engine.
---
---  v22.14 TEDDY AIR-SWEEP (REFERENCE Screen_Recording_20260818_004315_Roblox):
---  [TA-1] Stop parking above one fixed q.MC pile. The reference keeps flying around the live spawn field.
---  [TA-2] Attack stays active while Farm-owned travel is moving; no descend / wait-for-pile phase.
---  [TA-3] Every tick snapshots ALL matching live mobs and rotates the air sweep through live roots.
---  [TA-4] Physical bring is opportunistic only after the player is near / owns physics; never freezes Humanoid.
---  [TA-5] Movable mobs are pulled to a moving under-foot pile; explicit server-owned roots are never ghost-pinned.
---  [TA-6] Multi-target remote fanout admits fresh Teddy-air roots inside the true current attack range.
---  [TA-7] Skip Lv10-70 uses this exact same continuous Teddy air-sweep engine.
---
---  v22.13 TEDDY FULL-BATCH BRING (VIDEO Roblox(21) + old Teddy behavior):
---  [T23-1] Normal level farm + Sea1 skip no longer center the pile on the current
---          victim. One fixed field anchor survives target death exactly like the
---          earlier Teddy-style Bobon farm.
---  [T23-2] Snapshot ALL matching live mobs in the active field BEFORE moving any;
---          then restack the complete batch to the exact same anchor in one pass.
---  [T23-3] Heartbeat keeps the latest whole batch pinned to that anchor while a
---          0.03s rescan adds new respawns. No BodyPosition, ChangeState(14),
---          WalkSpeed=0, ownership gate, probe wave, or per-mob queue.
---  [T23-4] Primary is only the representative damage target. Switching/dying primary
---          never relocates or releases the pile.
---  [T23-5] Shared fan-out accepts only roots that the Teddy batch actually restacked
---          at the live anchor recently; no visual-only proximity admission.
---  [T23-6] SharedPrimaryNoDamage release loop is disabled for Teddy mode so a single
---          bad victim cannot tear down the whole pile every few seconds.
---
---  v22.12 CLASSIC BN BRING REBASE (replaces v22.11.1 direct magnet):
---  [V22.11.1-1] Built from the last execute-safe v22.10 base. No new top-level local
---                controller is added, avoiding a possible Luau chunk/local-register compile limit.
---  [V22.11.1-2] Early Skip Lv10-70 uses a compact same-frame direct magnet stored on
---                SkipRouteController instead of the strict HP-proof ACQUIRE/KILL bring.
---  [V22.11.1-3] Secondaries are repeatedly CFramed onto ONE real primary after requesting
---                simulation radius; no PlatformStand/Sit freeze and no BodyPosition objects.
---  [V22.11.1-4] Combat fan-out accepts only same-frame magnet-marked skip mobs, bypassing
---                the old isnetworkowner false/unknown gate that caused 1/6 -> 2/6 -> 0/6.
---  [V22.11.1-5] Normal quest/item/raid bring remains unchanged. Magnet failure is pcall-contained
---                so it cannot stop the whole kaitun/UI from loading.
---
---  v22.10 VIDEO 18/19 REVIEW FIXES:
---  [V22.10-1] Early skip is now ACQUIRE-FIRST / KILL-SECOND. It no longer attacks one
---              Sky Bandit/God's Guard while the rest of the floor is still being gathered.
---  [V22.10-2] Skip uses a longer dedicated acquire window and longer kill slice, reducing
---              the 3/6 -> 2/6 phase flicker seen in the supplied recordings.
---  [V22.10-3] Skip status now distinguishes Gathering pile vs Attacking pile using live
---              verified/total counts instead of the misleading "Gathering + attacking" text.
---  [V22.10-4] Intro moving-logo object is destroyed after landing and the intro container
---              is destroyed after fade, preventing a stale duplicate overlay.
---  [V22.10-5] Stats strip has an opaque backing plate so no bright game gaps show between cards.
---              Status Checker labels remain English.
---
---  v22.9 COMPACT UI + EARLY SKIP RESTORED:
---  [V22.9-1] Compacts/centers the four live stat cards, reduces internal whitespace,
---             makes cards/runtime nearly opaque so bright Roblox panels do not show through seams.
---  [V22.9-2] Normalizes localized empty-fruit text (including "Không có") to English "NONE".
---  [V22.9-3] Restores Sea 1 Lv10-70 skip startup without waiting for FastReady.
---             Normal verified combat bootstraps the route; fast combat takes over once HP-proven.
---  [V22.9-4] Skip still uses ClusterFarmController/Bring Mobs and keeps the existing no-progress fallback.
 --
 --  v22.8 APPROVED CAT UI + REAL STATUS:
 --  [V22.8-1] Replaces Ember HUD with the approved dark-glass/cyan BobonHub layout.
@@ -995,20 +885,6 @@
 --  [R-7] Fruit work never owns movement/ActionToken, so it cannot race farm/travel.
 
 
-
---  v22.12 CLASSIC BN BRING REBASE:
---  [BN12-1] Replaces the v22.5 HP-proof / ownership-probe SharedBring path with
---           a single classic BN-style physics hold: SimulationRadius + BodyPosition
---           + ChangeState(14) + WalkSpeed=0 + collision suppression.
---  [BN12-2] One real primary remains the combat anchor. Secondary mobs are held at
---           that anchor; no separate ACQUIRE/STACK controller is allowed to fight it.
---  [BN12-3] Secondary fan-out is admitted only after the root physically remains
---           inside the pile radius for a short stable window. No fake visual count.
---  [BN12-4] Early Skip Lv10-70 uses the exact same SharedBring engine as normal
---           quest farming; the old Skip DirectMagnet path is no longer called.
---  [BN12-5] All temporary WalkSpeed/AutoRotate/collision/BodyPosition state is
---           restored through SharedRelease/SharedRestoreOne when the farm changes.
-
 repeat task.wait() until game:IsLoaded()
 repeat task.wait() until game.Players.LocalPlayer
 -- Re-execution guard. Newer sessions invalidate every persistent loop from
@@ -1352,7 +1228,7 @@ _G.Settings = {
     QuestDelay          = 1.5,
     QuestRetryLimit     = 3,
     QuestRetryBackoff   = 6,
-    QuestAcceptGrace    = 1.25,
+    QuestAcceptGrace    = 6,
     RecoveryDelay       = 3,
     ActionLockTimeout   = 240,  -- v21.27 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
@@ -1384,57 +1260,12 @@ _G.Settings = {
     SharedBringRange     = 350,
     SharedBringFieldRange = 1200, -- active field only; avoids cross-island physics work
     SharedBringMaxMobs   = 0, -- 0 = all matching mobs in the active field
-    SharedBringInterval  = 0.03,
+    SharedBringInterval  = 0.05,
     SharedFarmHeight     = 25,
-    -- v22.14: moving Teddy air-sweep replaces the old fixed q.MC pile.
-    SharedTeddyMode      = true,
-    TeddyAirSweepMode    = false,
-    TeddySequenceMode    = true,
-    TeddySequenceAcquireHover = 12,
-    TeddySequenceAcquireRadius = 38,
-    TeddySequenceTagTimeout = 3.25,
-    TeddySequencePullTimeout = 1.20,
-    TeddySequenceStableDelay = 0.18,
-    TeddySequenceVerifyRadius = 13,
-    TeddySequenceRetryDelay = 0.28,
-    TeddySequencePileHover = 24,
-    TeddySequenceAttackRange = 120,
-    TeddyAirHoverHeight  = 28,
-    TeddyAirTagHoverHeight = 16,
-    TeddyAirAcquireHeight = 4,
-    TeddyAirSweepSpeed   = 430,
-    TeddyAirSweepHold    = 0.55,
-    TeddyAirAcquireRadius = 22,
-    TeddyAirFieldRange   = 1800,
-    TeddyAirVerifyTTL    = 0.80,
-    TeddyAirPileYOffset  = 0,
-    TeddyAirPileDepth = 8, -- moving pile stays close under the player, independent of travel hover height
-    TeddyAirPullUnknownNear = true,
-    TeddyAirRequireOwnerForPull = false,
-    TeddyAirUseBodyPosition = true,
-    TeddyAirHoldP = 7000,
-    TeddyAirHoldD = 240,
-    TeddyAirHoldMaxForce = 1000000000,
-    TeddyAirStackLeash = 42,
-    -- v22.15: exact per-mob HIT -> HP PROOF -> PULL -> STACK loop.
-    TeddyAirFocusTimeout  = 4.25,
-    TeddyAirPullTimeout   = 3.25,
-    TeddyAirPullVerifyRadius = 15,
-    TeddyAirPullStableDelay  = 0.14,
-    TeddyAirCausalDamageWindow = 1.00,
-    TeddyAirRetryDelay    = 0.35,
-    SharedTeddyScanInterval = 0.03,
-    SharedTeddyVerifyTTL = 0.35,
-    SharedTeddyVerifyRadius = 12,
-    SharedTeddyMaxDistance = 3000,
-    SharedFixedPile      = false,
+    SharedFixedPile      = false, -- v22 reference core: target is authoritative; fixed pile is optional legacy mode
     SharedPileEmptyHold  = 2.0,
     SharedBringP         = 3000,
     SharedBringD         = 100,
-    SharedClassicStableDelay = 0.14,
-    SharedClassicVerifyRadius = 14,
-    SharedClassicHardSnapDistance = 22,
-    SharedClassicState14 = true,
     SharedBringMaxForce  = 1000000,
     SharedAttackMaxTargets = 32,
     SharedBringFailureLimit = 50, -- diagnostic only while blacklist is disabled
@@ -1469,13 +1300,6 @@ _G.Settings = {
     -- Sea 1 optimized skip route (Fountain, bosses, Upper Sky/Galley).
     -- Enabled only after the combat adapter confirms real fast damage.
     SkipLevelRoute      = true,
-    -- v22.11.1 execute-safe early-skip direct magnet.
-    SkipDirectMagnetEnabled = false,
-    SkipDirectMagnetRange = 700,
-    SkipDirectMagnetFieldRange = 1300,
-    SkipDirectMagnetInterval = 0.03,
-    SkipDirectMagnetVerifyRadius = 55,
-    SkipDirectMagnetPinnedTTL = 0.18,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
     GatherMaxDistance   = 3000,
@@ -1536,9 +1360,6 @@ _G.Settings = {
     ClusterAcquireBeforeAttack = true,
     ClusterAcquirePhaseBudget = 4.0,
     ClusterKillPhaseSlice = 1.15,
-    -- v22.10: early-skip gets a longer gather window and a longer stable kill slice.
-    SkipAcquirePhaseBudget = 5.50,
-    SkipKillPhaseSlice = 2.20,
     ClusterAcquireTouchRadius = 95,
     -- v21.36: allow one proximity persistence probe even when an executor
     -- keeps reporting isnetworkowner=false. Snap-back + HP liveness still decide truth.
@@ -1614,25 +1435,25 @@ _G.Settings = {
     DodgeKeepAttacking  = true,
     DodgeSideStepOnly   = true,
     -- Target-lock side-step: same TravelManager owner, same target, same combat stream.
-    DodgeCooldown       = 0.85,
-    DodgeDistance       = 18,
+    DodgeCooldown       = 0.24,
+    DodgeDistance       = 22,
     DodgeHeight         = 0,
     DodgeRadius         = 42,
     DodgeEmergencySpeed = 380,
-    DodgeMinHold        = 0.10,
-    DodgeSafeConfirm    = 0.12,
-    DodgeMaxHold        = 0.40,
+    DodgeMinHold        = 0.30,
+    DodgeSafeConfirm    = 0.50,
+    DodgeMaxHold        = 2.50,
     DodgeDamageFallbackHold = 1.10,
-    DodgeReplanInterval = 999,
+    DodgeReplanInterval = 0.55,
     DodgeMonitorInterval= 0.05,
     DodgeHazardTTL      = 1.20,
     DodgeHazardMargin   = 6,
     DodgeHazardTrackRadius = 65,
-    DodgeConfirmSamples = 1,
+    DodgeConfirmSamples = 2,
     DodgeGlobalHazardRadius = 18,
     DodgeTargetHazardRadius = 70,
-    QuestUILease        = 0.65,
-    QuestCloseConfirm   = 0.20,
+    QuestUILease        = 1.25,
+    QuestCloseConfirm   = 0.80,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
     SkipRouteFallbackTimeout = 90,
@@ -1837,7 +1658,7 @@ end
 --   State consistency checks
 --   Centralized target/action management
 -- ══════════════════════════════════════════════════════════════════
-_G.BobonStatus = "Initializing Kaitun..."
+_G.BobonStatus = "Initializing..."
 _G.BobonDiagnostics = {
     Tool = "wait",
     Net = "wait",
@@ -2163,7 +1984,7 @@ local BobonUIRoot = nil
 local BobonUIConnections = {}
 
 -- ══════════════════════════════════════════════════════════════════
---       UI — BOBONHUB CAT GLASS HUD v6.1 | ENGLISH REAL ACCOUNT STATUS
+--       UI — BOBONHUB CAT GLASS HUD v6 | REAL ACCOUNT STATUS
 --   Approved layout: unified mascot logo, framed intro, letter reveal,
 --   slow panel load, live Status Farm/Status Item and real item checker.
 -- ══════════════════════════════════════════════════════════════════
@@ -2359,7 +2180,7 @@ do
         HUD.Parent = SG
         HUD.Visible = false
 
-        local Top = Card(HUD, "TopBar", UDim2.new(0.075,0,0.028,0), UDim2.new(0.85,0,0,112))
+        local Top = Card(HUD, "TopBar", UDim2.new(0.075,0,0.035,0), UDim2.new(0.85,0,0,106))
         Top.AnchorPoint = Vector2.new(0,0)
 
         local TopLogo = MakeLogo(Top, UDim2.new(0,72,0,72), UDim2.new(0,14,0.5,-36), 5)
@@ -2372,7 +2193,7 @@ do
         BrandAccent.Size = UDim2.new(0,72,0,34)
 
         local Divider = Instance.new("Frame")
-        Divider.Position = UDim2.new(0,318,0,15)
+        Divider.Position = UDim2.new(0,330,0,15)
         Divider.Size = UDim2.new(0,1,1,-30)
         Divider.BackgroundColor3 = CYAN
         Divider.BackgroundTransparency = 0.68
@@ -2380,47 +2201,37 @@ do
         Divider.Parent = Top
 
         local FarmCap = Text(Top, "STATUS FARM", 11, CYAN_SOFT, true)
-        FarmCap.Position = UDim2.new(0,340,0,13)
-        FarmCap.Size = UDim2.new(0,130,0,18)
-        local StatusFarm = Text(Top, "Initializing Kaitun...", 17, WHITE, true)
-        StatusFarm.Position = UDim2.new(0,340,0,31)
-        StatusFarm.Size = UDim2.new(1,-360,0,27)
+        FarmCap.Position = UDim2.new(0,352,0,15)
+        FarmCap.Size = UDim2.new(0,125,0,20)
+        local StatusFarm = Text(Top, "Initializing...", 17, WHITE, true)
+        StatusFarm.Position = UDim2.new(0,352,0,35)
+        StatusFarm.Size = UDim2.new(1,-372,0,24)
 
         local ItemCap = Text(Top, "STATUS ITEM", 11, CORAL, true)
-        ItemCap.Position = UDim2.new(0,340,0,62)
-        ItemCap.Size = UDim2.new(0,130,0,18)
-        local StatusItem = Text(Top, "Scanning Inventory...", 16, CORAL, true)
-        StatusItem.Position = UDim2.new(0,340,0,80)
-        StatusItem.Size = UDim2.new(1,-360,0,24)
+        ItemCap.Position = UDim2.new(0,352,0,62)
+        ItemCap.Size = UDim2.new(0,125,0,18)
+        local StatusItem = Text(Top, "Checking inventory...", 16, CORAL, true)
+        StatusItem.Position = UDim2.new(0,352,0,78)
+        StatusItem.Size = UDim2.new(1,-372,0,22)
 
         local StatsRow = Instance.new("Frame")
         StatsRow.Name = "StatsRow"
-        -- v22.9: compact, centered stat strip.  The old row left visible game/UI
-        -- gaps between translucent cards on wide screens.
-        StatsRow.Position = UDim2.new(0.14,0,0.205,0)
-        StatsRow.Size = UDim2.new(0.72,0,0,74)
-        -- v22.10: one dark backing plate removes the bright game seams between
-        -- the four rounded cards without adding fake whitespace.
-        StatsRow.BackgroundColor3 = DARK_CARD
+        StatsRow.Position = UDim2.new(0.13,0,0.205,0)
+        StatsRow.Size = UDim2.new(0.62,0,0,88)
         StatsRow.BackgroundTransparency = 1
-        StatsRow.BorderSizePixel = 0
         StatsRow.Parent = HUD
-        Corner(StatsRow, 16)
 
         local function StatCard(name, order, title)
-            local w = 0.2485
-            local gap = 0.002
+            local w = 0.235
+            local gap = 0.02
             local x = (order-1)*(w+gap)
             local c = Card(StatsRow, name, UDim2.new(x,0,0,0), UDim2.new(w,0,1,0))
-            -- Nearly opaque cards prevent bright Roblox panels showing through
-            -- the tiny seams and looking like white empty bars.
-            c.BackgroundTransparency = 0.04
-            local cap = Text(c, title, 10, CYAN_SOFT, true, Enum.TextXAlignment.Center)
-            cap.Position = UDim2.new(0,6,0,7)
-            cap.Size = UDim2.new(1,-12,0,16)
-            local val = Text(c, "-", 21, WHITE, true, Enum.TextXAlignment.Center)
-            val.Position = UDim2.new(0,6,0,25)
-            val.Size = UDim2.new(1,-12,0,30)
+            local cap = Text(c, title, 11, CYAN_SOFT, true, Enum.TextXAlignment.Center)
+            cap.Position = UDim2.new(0,8,0,12)
+            cap.Size = UDim2.new(1,-16,0,18)
+            local val = Text(c, "-", 23, WHITE, true, Enum.TextXAlignment.Center)
+            val.Position = UDim2.new(0,8,0,36)
+            val.Size = UDim2.new(1,-16,0,32)
             local scale = Instance.new("UIScale")
             scale.Scale = 1
             scale.Parent = c
@@ -2432,13 +2243,12 @@ do
         local FragCard, FragL, FragScale = StatCard("Fragments",3,"FRAGMENTS")
         local FruitCard, FruitL, FruitScale = StatCard("Fruit",4,"FRUIT")
 
-        local Runtime = Card(HUD, "Runtime", UDim2.new(0.41,0,0.314,0), UDim2.new(0.18,0,0,32))
-        Runtime.BackgroundTransparency = 0.04
-        local RuntimeL = Text(Runtime, "TIME  00:00:00", 12, CYAN_SOFT, true, Enum.TextXAlignment.Center)
+        local Runtime = Card(HUD, "Runtime", UDim2.new(0.39,0,0.335,0), UDim2.new(0.22,0,0,40))
+        local RuntimeL = Text(Runtime, "TIME  00:00:00", 13, CYAN_SOFT, true, Enum.TextXAlignment.Center)
         RuntimeL.Size = UDim2.fromScale(1,1)
 
-        local Checker = Card(HUD, "StatusChecker", UDim2.new(0.715,0,0.405,0), UDim2.new(0.255,0,0,286))
-        local CheckerTitle = Text(Checker, "STATUS CHECKER", 17, CYAN, true)
+        local Checker = Card(HUD, "StatusChecker", UDim2.new(0.70,0,0.39,0), UDim2.new(0.275,0,0,302))
+        local CheckerTitle = Text(Checker, "STATUS CHECKER", 18, CYAN, true)
         CheckerTitle.Position = UDim2.new(0,18,0,10)
         CheckerTitle.Size = UDim2.new(1,-36,0,28)
         local CheckerLine = Instance.new("Frame")
@@ -2470,8 +2280,8 @@ do
         local function BuildCheckerRow(row, index)
             local col = index <= 7 and 0 or 1
             local inCol = col == 0 and index or (index-7)
-            local x = col == 0 and 0.055 or 0.535
-            local y = 0.18 + (inCol-1)*0.108
+            local x = col == 0 and 0.05 or 0.53
+            local y = 0.17 + (inCol-1)*0.105
             local dot = Instance.new("Frame")
             dot.Size = UDim2.new(0,12,0,12)
             dot.Position = UDim2.new(x,0,y,2)
@@ -2479,9 +2289,9 @@ do
             dot.BorderSizePixel = 0
             dot.Parent = Checker
             Corner(dot, 12)
-            local label = Text(Checker, row.Label, 12, WHITE, false)
+            local label = Text(Checker, row.Label, 13, WHITE, false)
             label.Position = UDim2.new(x,20,y,-2)
-            label.Size = UDim2.new(0.43,-22,0,20)
+            label.Size = UDim2.new(0.42,-22,0,20)
             CheckerRows[index] = {Dot=dot, Label=label, State="missing"}
         end
         for i,row in ipairs(TrackedItems) do BuildCheckerRow(row,i) end
@@ -2489,8 +2299,8 @@ do
         local Toggle = Instance.new("TextButton")
         Toggle.Name = "BobonToggle"
         Toggle.AnchorPoint = Vector2.new(0,0.5)
-        Toggle.Position = UDim2.new(0,18,0.56,0)
-        Toggle.Size = UDim2.new(0,74,0,74)
+        Toggle.Position = UDim2.new(0,16,0.56,0)
+        Toggle.Size = UDim2.new(0,68,0,68)
         Toggle.BackgroundColor3 = DARK
         Toggle.BackgroundTransparency = 0.04
         Toggle.BorderSizePixel = 0
@@ -2499,20 +2309,14 @@ do
         Toggle.ZIndex = 100
         Toggle.Parent = SG
         Toggle.Visible = false
-        Corner(Toggle, 37)
+        Corner(Toggle, 34)
         local ToggleStroke = Stroke(Toggle, CYAN, 0.16, 2)
-        local ToggleAspect = Instance.new("UIAspectRatioConstraint")
-        ToggleAspect.AspectRatio = 1
-        ToggleAspect.Parent = Toggle
-        local ToggleLogo = MakeLogo(Toggle, UDim2.new(0,50,0,50), UDim2.new(0.5,-25,0.5,-25), 101)
+        local ToggleLogo = MakeLogo(Toggle, UDim2.new(0,54,0,54), UDim2.new(0.5,-27,0.5,-27), 101)
         ToggleLogo.BackgroundTransparency = 1
-        local ToggleLogoCorner = ToggleLogo:FindFirstChildOfClass("UICorner")
-        if ToggleLogoCorner then ToggleLogoCorner.CornerRadius = UDim.new(1,0) end
         local Chevron = Text(Toggle, "›", 24, CYAN, true, Enum.TextXAlignment.Center)
         Chevron.Position = UDim2.new(1,-18,0.5,-16)
         Chevron.Size = UDim2.new(0,16,0,32)
         Chevron.ZIndex = 104
-        Chevron.Visible = false
 
         -- Intro overlay. No circular halo remains after the animation: only this
         -- rounded glass frame surrounds the mascot, then the frame fades away.
@@ -2678,20 +2482,11 @@ do
                     local v = d:FindFirstChild(name)
                     if v then
                         local ok,val = pcall(function() return v.Value end)
-                        if ok and val ~= nil and tostring(val) ~= "" then
-                            local text = tostring(val)
-                            local low = string.lower(text)
-                            if low == "none" or low == "nil" or low == "n/a"
-                                or low == "no fruit" or low:find("không", 1, true)
-                                or low:find("khong", 1, true) then
-                                return "NONE"
-                            end
-                            return text
-                        end
+                        if ok and val ~= nil and tostring(val) ~= "" then return tostring(val) end
                     end
                 end
             end
-            return "NONE"
+            return "None"
         end
 
         local ItemKeywords = {
@@ -2726,24 +2521,15 @@ do
             local owner = tostring(state.ActionOwner or "")
 
             local farm
-            local rawLow = string.lower(raw)
-            local skipLive = tostring(state.FState or "") == "SKIP_FARM"
-                or rawLow:find("skip:",1,true) == 1
-                or rawLow:find("skip mode",1,true) ~= nil
             if state.DodgeActive then
-                farm = "Dodging • " .. tostring(state.DodgeThreatName or state.ActiveQuestMob or "target")
-            elseif skipLive then
-                -- v22.10: video 18 showed the HUD saying "Farming Bandit" while the
-                -- character was physically killing Sky Bandit. Skip state must win over
-                -- any stale ActiveQuestMob left by the normal quest selector.
-                farm = raw
-            elseif mode == "Recovering" or rawLow:find("recovery",1,true) or rawLow:find("recovering",1,true) then
+                farm = "Dodge • " .. tostring(state.DodgeThreatName or state.ActiveQuestMob or "target")
+            elseif mode == "Recovering" or raw:lower():find("recovery",1,true) or raw:lower():find("recovering",1,true) then
                 farm = raw
             elseif LooksItemStatus(raw) or LooksItemStatus(owner) then
                 if mode == "Farming" and state.ActiveQuestMob then
                     farm = "Farming " .. tostring(state.ActiveQuestMob)
                 elseif state.ActiveActionToken ~= 0 and owner ~= "" then
-                    farm = "Paused • " .. owner
+                    farm = "Paused for " .. owner
                 else
                     farm = string.upper(mode)
                 end
@@ -2752,7 +2538,7 @@ do
                 if fs:find("QUEST",1,true) then
                     farm = "Taking Quest • " .. tostring(state.ActiveQuestMob)
                 elseif fs:find("MOVE",1,true) or fs:find("ACQUIRE",1,true) then
-                    farm = "Moving To " .. tostring(state.ActiveQuestMob)
+                    farm = "Moving to " .. tostring(state.ActiveQuestMob)
                 else
                     farm = "Farming " .. tostring(state.ActiveQuestMob)
                 end
@@ -2770,7 +2556,7 @@ do
                 for i,row in ipairs(TrackedItems) do
                     if ownedMap[i] == false then missing = row.Label break end
                 end
-                item = missing and ("Missing Item • " .. missing) or "All Required Items Completed ✓"
+                item = missing and ("Missing • " .. missing) or "All tracked completed ✓"
             end
             return farm, item
         end
@@ -2839,7 +2625,7 @@ do
                     obj.BackgroundTransparency = math.min(1, obj.BackgroundTransparency + 0.25)
                     task.delay((i-1)*0.04, function()
                         if obj.Parent then
-                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=(obj==StatsRow and 1 or (obj==Runtime and 0.04 or 0.16))}):Play() end)
+                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=0.16}):Play() end)
                         end
                     end)
                 end
@@ -2858,9 +2644,9 @@ do
         BobonUIConnections[#BobonUIConnections+1] = Toggle.MouseButton1Click:Connect(function()
             SetVisible(not visible)
             pcall(function()
-                TS:Create(Toggle, TweenInfo.new(0.08, Enum.EasingStyle.Back), {Size=UDim2.new(0,80,0,80)}):Play()
+                TS:Create(Toggle, TweenInfo.new(0.08, Enum.EasingStyle.Back), {Size=UDim2.new(0,74,0,74)}):Play()
                 task.delay(0.09,function()
-                    if Toggle.Parent then TS:Create(Toggle, TweenInfo.new(0.13, Enum.EasingStyle.Quad), {Size=UDim2.new(0,74,0,74)}):Play() end
+                    if Toggle.Parent then TS:Create(Toggle, TweenInfo.new(0.13, Enum.EasingStyle.Quad), {Size=UDim2.new(0,68,0,68)}):Play() end
                 end)
             end)
         end)
@@ -2934,10 +2720,7 @@ do
                     Position=targetPos,Size=UDim2.new(0,72,0,72)
                 }):Play()
                 task.wait(0.82)
-                -- v22.10: destroy the travelling copy after it lands. Keeping a
-                -- hidden duplicate alive caused some executors to leave a stale
-                -- image object over the status text.
-                if IntroLogo and IntroLogo.Parent then IntroLogo:Destroy() end
+                IntroLogo.Visible=false
                 TopLogo.Visible=true
 
                 Intro.BackgroundTransparency=0
@@ -2951,12 +2734,11 @@ do
                     obj.Position=p+UDim2.new(0,0,0,16)
                     if obj:IsA("Frame") then obj.BackgroundTransparency=1 end
                     TS:Create(obj,TweenInfo.new(0.45,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
-                        Position=p,BackgroundTransparency=obj==StatsRow and 0.04 or 0.16
+                        Position=p,BackgroundTransparency=obj==StatsRow and 1 or 0.16
                     }):Play()
                     task.wait(0.22)
                 end
-                -- v22.10: remove the finished intro tree completely.
-                if Intro and Intro.Parent then Intro:Destroy() end
+                Intro.Visible=false
             end)
         end)
 
@@ -2975,22 +2757,19 @@ do
 
                     if lastLv~=lv then LevelL.Text=Fmt(lv); Pulse(LevelScale); lastLv=lv end
                     if lastBeli~=beli then BeliL.Text="$ "..Fmt(beli); Pulse(BeliScale); lastBeli=beli end
-                    if lastFrag~=frag then FragL.Text=Fmt(frag); Pulse(FragScale); lastFrag=frag end
+                    if lastFrag~=frag then FragL.Text="◈ "..Fmt(frag); Pulse(FragScale); lastFrag=frag end
                     if lastFruit~=fruit then FruitL.Text=fruit; Pulse(FruitScale); lastFruit=fruit end
 
                     HUDInventoryRows(false)
                     local raw=tostring(_G.BobonStatus or "")
                     local owner=tostring(state.ActionOwner or "")
                     for i,row in ipairs(TrackedItems) do
-                        local ui=CheckerRows[i]
-                        if ui and ui.Label and ui.Label.Text ~= row.Label then
-                            ui.Label.Text = row.Label -- force canonical English labels
-                        end
                         local owned=OwnsTracked(row)
                         ownedMap[i]=owned
                         local active=not owned and IsTrackedActive(row,raw,owner)
                         local targetColor=owned and GREEN or (active and YELLOW or RED)
                         local targetState=owned and "owned" or (active and "active" or "missing")
+                        local ui=CheckerRows[i]
                         if ui and ui.State~=targetState then
                             ui.State=targetState
                             pcall(function()
@@ -3235,63 +3014,76 @@ local function HasQuest()
         local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
         local quest = (main and main:FindFirstChild("Quest", true))
             or (minimal and minimal:FindFirstChild("Quest", true))
+        -- nil means the quest UI tree is not mounted yet.  Modern mobile/minimal
+        -- builds can keep an ACTIVE quest inside a hidden wrapper, so wrapper
+        -- visibility alone must never mean "quest finished".
         if not quest then return nil end
 
-        -- Nested helper: does NOT consume another top-level Luau local.
-        local function Rendered(node)
-            if not node then return false end
-            local cur = node
-            while cur and cur ~= pgui do
-                if cur:IsA("GuiObject") and cur.Visible == false then return false end
-                if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
-                cur = cur.Parent
+        local function IsDynamicQuestLabel(node)
+            if not node:IsA("TextLabel") then return false end
+            local text = tostring(node.Text or "")
+            local lower = string.lower(text)
+            if text == "" or lower == "quest" or lower == "quest details"
+                or lower == "objectives" or lower == "objective" then
+                return false
             end
-            return true
-        end
-
-        -- A just-accepted quest may rebuild its wrapper briefly. Treat that tiny
-        -- transition as unreadable (nil), not as active and not as completed.
-        if not Rendered(quest) then
-            if _G.State and (_G.State.LastQuestAccepted or 0) > 0
-                and tick() - (_G.State.LastQuestAccepted or 0)
-                    <= math.min(_G.Settings.QuestAcceptGrace or 1.25, 1.25) then
-                return nil
+            local nodeName = string.lower(node.Name)
+            if nodeName:find("title", 1, true)
+                or nodeName:find("task", 1, true)
+                or nodeName:find("objective", 1, true) then
+                return true
             end
-            return false
+            return lower:find("defeat", 1, true) ~= nil
+                or lower:find("kill", 1, true) ~= nil
+                or lower:find("collect", 1, true) ~= nil
+                or lower:find("bounty", 1, true) ~= nil
+                or lower:match("%d+%s*/%s*%d+") ~= nil
         end
 
         local container = quest:FindFirstChild("Container") or quest
-        local sawObjective = false
+        local title = container:FindFirstChild("QuestTitle", true)
+        local titleText = title and title:FindFirstChild("Title", true)
+
+        -- Explicit completion wins even when the wrapper is hidden/minimized.
+        -- Scan the stored labels, not only Visible labels; mobile UI can collapse
+        -- the quest panel while leaving the live objective text mounted.
         for _, node in ipairs(container:GetDescendants()) do
-            if node:IsA("TextLabel") and Rendered(node) then
-                local text = tostring(node.Text or "")
-                local lower = string.lower(text)
-                if lower:find("quest completed", 1, true)
-                    or lower:find("quest complete", 1, true)
-                    or lower:find("completed", 1, true)
-                    or lower:find("finished", 1, true) then
+            if node:IsA("TextLabel") then
+                local labelText = tostring(node.Text or "")
+                local labelLower = string.lower(labelText)
+                if labelLower:find("quest completed", 1, true)
+                    or labelLower:find("quest complete", 1, true)
+                    or labelLower:find("completed", 1, true)
+                    or labelLower:find("finished", 1, true) then
                     return false
                 end
-                local current, total = text:match("(%d+)%s*/%s*(%d+)")
-                current, total = tonumber(current), tonumber(total)
-                if current and total and total > 0 then
-                    if current >= total then return false end
-                    sawObjective = true
-                end
-                if text ~= "" then
-                    local nn = string.lower(tostring(node.Name or ""))
-                    if nn:find("title", 1, true)
-                        or nn:find("task", 1, true)
-                        or nn:find("objective", 1, true)
-                        or lower:find("defeat", 1, true)
-                        or lower:find("kill", 1, true)
-                        or lower:find("collect", 1, true) then
-                        sawObjective = true
+                local current, total = labelText:match("(%d+)%s*/%s*(%d+)")
+                if current and total then
+                    current, total = tonumber(current), tonumber(total)
+                    if current and total and total > 0 and current >= total then
+                        return false
                     end
                 end
             end
         end
-        if sawObjective then return true end
+
+        -- Canonical title is authoritative even if Quest.Visible == false.
+        if titleText and titleText:IsA("TextLabel") then
+            local text = tostring(titleText.Text or "")
+            local lower = string.lower(text)
+            if text ~= "" and lower ~= "quest" and lower ~= "quest details" then
+                return true
+            end
+        end
+
+        -- Fallback objective labels are also allowed while the panel is collapsed.
+        for _, node in ipairs(container:GetDescendants()) do
+            if IsDynamicQuestLabel(node) then return true end
+        end
+
+        -- No active text remains.  A hidden empty wrapper is genuinely closed;
+        -- a visible-but-empty wrapper is usually rebuilding, so return nil.
+        if quest:IsA("GuiObject") and not quest.Visible then return false end
         return nil
     end)
     if not ok then return nil end
@@ -3372,22 +3164,26 @@ local function GetQuestText()
         local quest = (main and main:FindFirstChild("Quest", true))
             or (minimal and minimal:FindFirstChild("Quest", true))
         if not quest then return nil end
-        local function Rendered(node)
-            local cur = node
-            while cur and cur ~= pgui do
-                if cur:IsA("GuiObject") and cur.Visible == false then return false end
-                if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
-                cur = cur.Parent
-            end
-            return true
-        end
-        if not Rendered(quest) then return nil end
         local container = quest:FindFirstChild("Container") or quest
+        local title = container:FindFirstChild("QuestTitle", true)
+        local titleText = title and title:FindFirstChild("Title", true)
+        if titleText and titleText:IsA("TextLabel") and tostring(titleText.Text or "") ~= "" then
+            -- Include the task/counter labels too.  Some mobile/minimal builds keep
+            -- QuestTitle empty while the real mob/objective lives in another label,
+            -- so an empty title must fall through instead of being treated as closed.
+            local parts = {titleText.Text}
+            for _, d in ipairs(container:GetDescendants()) do
+                if d:IsA("TextLabel") and d ~= titleText and d.Text and d.Text ~= "" then
+                    parts[#parts + 1] = d.Text
+                end
+            end
+            return table.concat(parts, " ")
+        end
+        -- Đọc text thực tế từ UI; không dùng tên object QuestModel.
         local parts = {}
         for _, d in ipairs(container:GetDescendants()) do
-            if d:IsA("TextLabel") and Rendered(d) then
-                local value = tostring(d.Text or "")
-                if value ~= "" then parts[#parts + 1] = value end
+            if d:IsA("TextLabel") and d.Text and d.Text ~= "" then
+                parts[#parts + 1] = d.Text
             end
         end
         if #parts == 0 then return nil end
@@ -3397,24 +3193,30 @@ local function GetQuestText()
     return text
 end
 
+
 -- [FIX-P2] Kiểm tra quest hiện tại có đúng mob q.M hay không.
 -- Trả về: true = khớp, false = sai mob, nil = không đọc được UI.
 local function QuestMatches(mobName)
     if not mobName then return nil end
-    local state = HasQuest()
-    if state == false then return false end
+    -- Once this session accepted (or adopted) an active quest, this canonical
+    -- name is authoritative. It also makes level-boundary changes explicit:
+    -- an old active quest returns false for the next QDB entry and is replaced.
+    local activeMob = _G.State and _G.State.ActiveQuestMob
+    if activeMob then
+        return string.lower(tostring(activeMob))
+            == string.lower(tostring(mobName))
+    end
     local text = GetQuestText()
-    if text and string.find(string.lower(text), string.lower(mobName), 1, true) then
+    if not text then return nil end
+    if string.find(string.lower(text), string.lower(mobName), 1, true) then
         return true
     end
-    if state == true then
-        local activeMob = _G.State and _G.State.ActiveQuestMob
-        if activeMob then
-            return string.lower(tostring(activeMob)) == string.lower(tostring(mobName))
-        end
-    end
+    -- Roblox can render the objective through a localization table (for
+    -- example Brute -> a Vietnamese name). An untranslated miss is therefore
+    -- unknown, not proof that the player holds the wrong quest.
     return nil
 end
+
 
 -- [FIX-P3] Request quest tại giver với retry có giới hạn, không spam remote.
 -- Trả về true = "đã xử lý (đừng farm)", false = "chưa tới giver".
@@ -4015,12 +3817,6 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
     local sharedFarmActive = _G.Settings.SharedSourceFarmMode ~= false
         and _G.State and _G.State.Mode == "Farming"
         and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
-    -- v22.11.1: early skip uses a same-frame direct-magnet mark instead of
-    -- ClusterFarmController ownership/proof admission. Kept inside this function
-    -- so no extra top-level local is allocated in the giant Luau chunk.
-    local skipPinned = _G.BobonSkipMagnetPinnedModels
-    local skipMagnetActive = _G.State and _G.State.Mode == "Farming"
-        and _G.State.ClusterMode == "SKIP" and type(skipPinned) == "table"
     local shadowQuest = questGatherActive and not sharedFarmActive and ClusterFarmController
         and ClusterFarmController:IsShadowCombatActive()
 
@@ -4106,12 +3902,7 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
                     add(enemy, true)
                 else
                     local allowExtra = true
-                    if skipMagnetActive and enemy ~= preferred then
-                        -- Same-frame direct magnet: bypass false/unknown ownership reports.
-                        -- TTL is intentionally short; every usable secondary must be refreshed
-                        -- by SkipRouteController:DirectMagnet continuously.
-                        allowExtra = (skipPinned[enemy] or 0) > tick()
-                    elseif sharedFarmActive and enemy ~= preferred then
+                    if sharedFarmActive and enemy ~= preferred then
                         -- v22.5 no-ghost rule: visual proximity is not authority. Secondary
                         -- fan-out requires real network ownership, causal HP proof, or a
                         -- short active probe launched by SharedBring.
@@ -6959,22 +6750,14 @@ function ClusterFarmController:UpdatePhase()
             acquireEpoch = tonumber(state.ClusterPhaseStartedAt) or now
             state.ClusterWaveStartedAt = acquireEpoch
         end
-        local acquireBudget = state.ClusterMode == "SKIP"
-            and (_G.Settings.SkipAcquirePhaseBudget or 5.50)
-            or (_G.Settings.ClusterAcquirePhaseBudget or 4.0)
-        if now - acquireEpoch >= acquireBudget then
+        if now - acquireEpoch >= (_G.Settings.ClusterAcquirePhaseBudget or 4.0) then
             state.ClusterPhase = "KILL"
             state.ClusterPhaseStartedAt = now
         end
     elseif state.ClusterPhase == "KILL" then
-        local killSlice
-        if verified <= 0 then
-            killSlice = _G.Settings.ClusterUnstackedKillSlice or 3.25
-        elseif state.ClusterMode == "SKIP" then
-            killSlice = _G.Settings.SkipKillPhaseSlice or 2.20
-        else
-            killSlice = _G.Settings.ClusterKillPhaseSlice or 1.15
-        end
+        local killSlice = verified <= 0
+            and (_G.Settings.ClusterUnstackedKillSlice or 3.25)
+            or (_G.Settings.ClusterKillPhaseSlice or 1.15)
         if verified < total and now - (state.ClusterPhaseStartedAt or now)
             >= killSlice then
             state.ClusterPhase = "ACQUIRE"
@@ -7610,8 +7393,6 @@ function ClusterFarmController:SharedRelease(reason)
             local root = mob:FindFirstChild("HumanoidRootPart")
             local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
             if bp then pcall(function() bp:Destroy() end) end
-            local teddyHold = root and root:FindFirstChild("BobonTeddyStackHold")
-            if teddyHold then pcall(function() teddyHold:Destroy() end) end
             pcall(function()
                 mob:SetAttribute("BobonBringExpectedAt", nil)
                 mob:SetAttribute("BobonBringExpectedPos", nil)
@@ -7628,20 +7409,6 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedHPProvenUntil = setmetatable({}, {__mode="k"})
     self.SharedHPProvenAt = setmetatable({}, {__mode="k"})
     self.SharedProbeState = setmetatable({}, {__mode="k"})
-    self.SharedClassicStableAt = setmetatable({}, {__mode="k"})
-    self.SharedClassicCurrentPile = nil
-    self.SharedTeddyBatch = {}
-    self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
-    self.SharedTeddyLastScanAt = 0
-    self.SharedTeddyActive = false
-    self.SharedTeddyPendingAt = setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
-    self.SharedTeddyRetryAfter = setmetatable({}, {__mode="k"})
-    self.SharedTeddyAcquireModel = nil
-    self.SharedTeddyAcquireRoot = nil
-    self.SharedTeddyAcquireStartedAt = 0
-    self.SharedTeddyAcquireLastHealth = nil
-    self.SharedTeddyAcquireTaggedAt = 0
     self.SharedNextProbeWaveAt = 0
     self.SharedPrimaryWatchTarget = nil
     self.SharedPrimaryWatchHealth = nil
@@ -7655,18 +7422,6 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedEmptySince = 0
     self.SharedLastBringAt = 0
     self.SharedBringCount = 0
-    self.TeddyAirTagged = setmetatable({}, {__mode="k"})
-    self.TeddyAirStacked = setmetatable({}, {__mode="k"})
-    self.TeddyAirStackStableAt = setmetatable({}, {__mode="k"})
-    self.TeddyAirRetryAfter = setmetatable({}, {__mode="k"})
-    self.TeddyAirVerified = setmetatable({}, {__mode="k"})
-    self.TeddyAirVisited = setmetatable({}, {__mode="k"})
-    self.TeddyAirFocusModel = nil
-    self.TeddyAirFocusPhase = nil
-    self.TeddyAirFocusStartedAt = 0
-    self.TeddyAirFocusLastHealth = nil
-    self.TeddyAirFocusRoot = nil
-    self.TeddyAirMobName = nil
     if _G.State then
         _G.State.ClusterMode = "OFF"
         _G.State.ClusterPrimary = nil
@@ -7769,29 +7524,9 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
     self.SharedMobName = mobName
     local root = target and target:FindFirstChild("HumanoidRootPart")
 
-    -- v22.13 TEDDY: one field anchor survives every primary death.  Prefer the
-    -- canonical quest/skip field center (fallbackCF) just like the old Teddy farm.
-    -- The live target is only a representative victim and never owns the pile.
-    if _G.Settings.SharedTeddyMode ~= false then
-        if self.SharedPileCFrame and IsValidPos(self.SharedPileCFrame.Position) then
-            return self.SharedPileCFrame
-        end
-        local chosen = nil
-        if fallbackCF and typeof(fallbackCF) == "CFrame" and IsValidPos(fallbackCF.Position) then
-            chosen = CFrame.new(fallbackCF.Position)
-        elseif fallbackCF and typeof(fallbackCF) == "Vector3" and IsValidPos(fallbackCF) then
-            chosen = CFrame.new(fallbackCF)
-        elseif root and root.Parent and IsValidPos(root.Position) then
-            chosen = CFrame.new(root.Position)
-        end
-        if chosen then
-            self.SharedPileCFrame = chosen
-            self.SharedPileStartedAt = tick()
-            self.SharedTeddyActive = true
-        end
-        return self.SharedPileCFrame
-    end
-
+    -- v22 reference core: the live quest victim is the authoritative combat anchor.
+    -- Bring may pull other same-name mobs toward this point, but the farm never waits
+    -- for a fixed visual pile to become valid before it attacks.
     if _G.Settings.ReferenceCoreMode == true or _G.Settings.SharedFixedPile == false then
         self.SharedPileCFrame = nil
         self.SharedPileStartedAt = 0
@@ -7808,519 +7543,268 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
     return self.SharedPileCFrame
 end
 
-function ClusterFarmController:SharedTeddyRestack(forceScan)
-    -- v22.17 Teddy sequence:
-    --   * fixed field anchor
-    --   * whole-spawn snapshot
-    --   * ONLY HP-tagged + physically acquired roots are snapped
-    --   * one-write persistence verification before they become attack-eligible
-    --   * verified roots are then held at the same anchor on Heartbeat
-    if _G.Settings.SharedTeddyMode == false then return 0, 0 end
-    if not self.SharedTeddyActive or not self.SharedPileCFrame or not self.SharedMobName then
-        return 0, 0
-    end
-    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
-        return 0, 0
-    end
-
-    local folder = workspace:FindFirstChild("Enemies")
-    local me = HRP()
-    if not folder or not me then return 0, 0 end
-
-    local now = tick()
-    local anchor = self.SharedPileCFrame.Position
-    local maxDistance = math.max(150,
-        tonumber(_G.Settings.SharedTeddyMaxDistance)
-        or tonumber(_G.Settings.GatherMaxDistance) or 3000)
-    local scanEvery = math.max(0.02,
-        tonumber(_G.Settings.SharedTeddyScanInterval) or 0.03)
-    local verifyRadius = math.max(6,
-        tonumber(_G.Settings.TeddySequenceVerifyRadius)
-        or tonumber(_G.Settings.SharedTeddyVerifyRadius) or 13)
-    local stableDelay = math.max(0.10,
-        tonumber(_G.Settings.TeddySequenceStableDelay) or 0.18)
-    local acquireRadius = math.max(16,
-        tonumber(_G.Settings.TeddySequenceAcquireRadius) or 38)
-    local pullTimeout = math.max(0.55,
-        tonumber(_G.Settings.TeddySequencePullTimeout) or 1.20)
-    local retryDelay = math.max(0.15,
-        tonumber(_G.Settings.TeddySequenceRetryDelay) or 0.28)
-
-    pcall(function() ExpandSimulationRadius() end)
-
-    self.SharedTeddyBatch = self.SharedTeddyBatch or {}
-    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-
-    -- Snapshot the full active field before moving anything.
-    if forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery then
-        self.SharedTeddyLastScanAt = now
-        local snapshot = {}
-        for _, mob in ipairs(folder:GetChildren()) do
-            if IsEnemyNamed(mob, self.SharedMobName) then
-                local hum = mob:FindFirstChildOfClass("Humanoid")
-                local root = mob:FindFirstChild("HumanoidRootPart")
-                if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                    local okPos, pos = pcall(function() return root.Position end)
-                    if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                        and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
-                        and (pos - anchor).Magnitude <= maxDistance then
-                        snapshot[#snapshot + 1] = {
-                            Model = mob,
-                            Humanoid = hum,
-                            Root = root,
-                            Position = pos,
-                        }
-                    end
-                end
-            end
-        end
-        self.SharedTeddyBatch = snapshot
-    end
-
-    local kept, verifiedCount = {}, 0
-    local acquireModel = self.SharedTeddyAcquireModel
-    local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
-
-    local function singleSnap(root)
-        return pcall(function()
-            local rot = root.CFrame.Rotation
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(anchor) * rot
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end)
-    end
-
-    for _, entry in ipairs(self.SharedTeddyBatch) do
-        local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
-        if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent
-            and not root.Anchored and IsEnemyNamed(mob, self.SharedMobName) then
-
-            kept[#kept + 1] = entry
-            local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) then
-                local atAnchor = (pos - anchor).Magnitude <= verifyRadius
-                local verifiedAt = self.SharedTeddyVerified[root]
-                local pendingAt = self.SharedTeddyPendingAt[root]
-
-                if verifiedAt then
-                    -- Already accepted: keep it pinned. If the server yanks it far away,
-                    -- revoke it and reacquire instead of leaving a visual ghost in the pile.
-                    if (pos - anchor).Magnitude > verifyRadius * 3.0 then
-                        self.SharedTeddyVerified[root] = nil
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTeddyQualified[root] = nil
-                        self.SharedTeddyRetryAfter[root] = now + retryDelay
-                    else
-                        singleSnap(root)
-                        self.SharedTeddyVerified[root] = now
-                        verifiedCount = verifiedCount + 1
-                    end
-
-                elseif pendingAt then
-                    -- IMPORTANT: do NOT rewrite during the persistence window.
-                    -- A real Teddy-style stack must survive server correction after one write.
-                    if atAnchor and now - pendingAt >= stableDelay then
-                        self.SharedTeddyVerified[root] = now
-                        self.SharedTeddyPendingAt[root] = nil
-                        verifiedCount = verifiedCount + 1
-                    elseif not atAnchor and now - pendingAt >= stableDelay then
-                        self.SharedTeddyPendingAt[root] = nil
-                        if now - pendingAt >= pullTimeout then
-                            self.SharedTeddyQualified[root] = nil
-                            self.SharedTeddyRetryAfter[root] = now + retryDelay
-                        end
-                    elseif now - pendingAt >= pullTimeout then
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTeddyQualified[root] = nil
-                        self.SharedTeddyRetryAfter[root] = now + retryDelay
-                    end
-
-                else
-                    -- A fresh mob is allowed to move only after the acquire phase caused
-                    -- real HP loss AND Farm is physically close enough (or owns the root).
-                    local qualified = self.SharedTeddyQualified[root]
-                    local closeToPlayer = (pos - me.Position).Magnitude <= acquireRadius
-                    local owns = ClientOwnsMob(root)
-                    local isAcquire = acquireRoot == root
-                    if qualified and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
-                        and (owns == true or (isAcquire and closeToPlayer)) then
-                        if singleSnap(root) then
-                            self.SharedTeddyPendingAt[root] = now
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    self.SharedTeddyBatch = kept
-    self.SharedBringCount = verifiedCount
-    self.SharedClassicCurrentPile = anchor
-
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TEDDY-SEQ %d/%d"):format(verifiedCount, #kept)
-        _G.BobonDiagnostics.BringCandidates = #kept
-        _G.BobonDiagnostics.BringMoved = verifiedCount
-        _G.BobonDiagnostics.BringFailed = math.max(0, #kept - verifiedCount)
-    end
-    return verifiedCount, #kept
-end
-
-function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    if _G.Settings.SharedSourceFarmMode == false then return false end
-    if type(mobName) ~= "string" or mobName == "" then return false end
-    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
-
-    local prefix = tostring(statusPrefix or "Farm")
-    self:SharedEnsurePile(mobName, nil, fallbackCF)
-    if not self.SharedPileCFrame then return false end
-    self.SharedTeddyActive = true
-
-    local verified, total = self:SharedTeddyRestack(true)
-    local batch = self.SharedTeddyBatch or {}
-    local me = HRP()
-    if not me then return true end
-
-    if total <= 0 then
-        self.SharedTeddyAcquireModel = nil
-        self.SharedTeddyAcquireRoot = nil
-        self.SharedTeddyAcquireLastHealth = nil
-        self.SharedTeddyAcquireStartedAt = 0
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Waiting Mob • " .. mobName
-        if fallbackCF and _G.State:CanRequestTravel() then
-            local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
-            TravelManager:Request(baseCF * CFrame.new(0,
-                tonumber(_G.Settings.TeddySequencePileHover) or 24, 0), "Farm", {
-                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
-                fallback = fallbackCF,
-                combatHover = true,
-                persistent = false,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-        _G.BobonStatus = prefix .. ": Teddy • waiting " .. mobName
-        return true
-    end
-
-    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
-
-    local now = tick()
-    local acquire = self.SharedTeddyAcquireModel
-    local acquireHum = acquire and acquire:FindFirstChildOfClass("Humanoid")
-    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
-
-    local function isLiveEntry(model)
-        if not model or not model.Parent then return false end
-        local h = model:FindFirstChildOfClass("Humanoid")
-        local r = model:FindFirstChild("HumanoidRootPart")
-        return h and h.Health > 0 and r and r.Parent and IsEnemyNamed(model, mobName)
-    end
-
-    if not isLiveEntry(acquire) or (acquireRoot and self.SharedTeddyVerified[acquireRoot]) then
-        self.SharedTeddyAcquireModel = nil
-        self.SharedTeddyAcquireRoot = nil
-        self.SharedTeddyAcquireStartedAt = 0
-        self.SharedTeddyAcquireLastHealth = nil
-        self.SharedTeddyAcquireTaggedAt = 0
-        acquire, acquireHum, acquireRoot = nil, nil, nil
-    end
-
-    -- Pick one real, unstacked mob and keep it until it either joins the pile or dies.
-    if not acquire then
-        local best, bestDist = nil, math.huge
-        for _, entry in ipairs(batch) do
-            local root = entry.Root
-            if root and root.Parent and not self.SharedTeddyVerified[root]
-                and not self.SharedTeddyPendingAt[root]
-                and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
-                local okPos, pos = pcall(function() return root.Position end)
-                if okPos and IsValidPos(pos) then
-                    local dist = (pos - me.Position).Magnitude
-                    if dist < bestDist then
-                        best, bestDist = entry.Model, dist
-                    end
-                end
-            end
-        end
-        if best then
-            acquire = best
-            acquireHum = best:FindFirstChildOfClass("Humanoid")
-            acquireRoot = best:FindFirstChild("HumanoidRootPart")
-            self.SharedTeddyAcquireModel = best
-            self.SharedTeddyAcquireRoot = acquireRoot
-            self.SharedTeddyAcquireStartedAt = now
-            self.SharedTeddyAcquireLastHealth = acquireHum and acquireHum.Health or nil
-            self.SharedTeddyAcquireTaggedAt = 0
-        end
-    end
-
-    -- While acquiring the next mob, keep the old pile fixed and continue fast damage.
-    if acquire and acquireHum and acquireHum.Health > 0 and acquireRoot and acquireRoot.Parent then
-        _G.State.FarmTarget = acquire
-        _G.State.CurrentTarget = acquire
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Acquire Mob • " .. mobName
-
-        local acquireHover = math.max(8, tonumber(_G.Settings.TeddySequenceAcquireHover) or 12)
-        local targetCF = acquireRoot.CFrame * CFrame.new(0, acquireHover, 0)
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(targetCF, "Farm", {
-                arrivalThreshold = math.max(5, tonumber(_G.Settings.TeddySequenceAcquireRadius) or 38),
-                fallback = fallbackCF or self.SharedPileCFrame,
-                combatHover = true,
-                persistent = true,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-
-        me = HRP() or me
-        local dist = (me.Position - acquireRoot.Position).Magnitude
-        local attackRange = math.max(45,
-            tonumber(_G.Settings.TeddySequenceAttackRange)
-            or tonumber(_G.Settings.FastAttackRange) or 120)
-        local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
-        local attempted = false
-        local taggedBefore = self.SharedTeddyQualified[acquireRoot] ~= nil
-
-        -- Phase TAG: hit THIS exact mob only until one real HP delta is seen.
-        -- After the tag succeeds, stop damaging it so fast attack cannot kill it
-        -- before the physical acquire/snap finishes.
-        if not taggedBefore and dist <= attackRange and farmHolds then
-            PrepareCombatTarget(acquire)
-            EquipCombatTool()
-            attempted = Attack(acquire, mobName)
-            if attempted then _G.State.FState = "SHARED_ATTACK" end
-        elseif taggedBefore and farmHolds then
-            -- Teddy reference keeps damage flowing while moving to the tagged mob.
-            -- Damage the already verified pile, NOT the tagged-but-unstacked victim.
-            local pilePrimary, pileBest = nil, math.huge
-            for _, entry in ipairs(batch) do
-                local r = entry.Root
-                if r and r.Parent and self.SharedTeddyVerified[r] then
-                    local dd = (r.Position - self.SharedPileCFrame.Position).Magnitude
-                    if dd < pileBest then
-                        pilePrimary, pileBest = entry.Model, dd
-                    end
-                end
-            end
-            if pilePrimary then
-                PrepareCombatTarget(pilePrimary)
-                EquipCombatTool()
-                attempted = Attack(pilePrimary, mobName)
-                if attempted then _G.State.FState = "SHARED_ATTACK" end
-            end
-        end
-
-        local lastHP = tonumber(self.SharedTeddyAcquireLastHealth)
-        local hp = acquireHum.Health
-        if lastHP and hp < lastHP - 0.01 then
-            self.SharedTeddyQualified[acquireRoot] = now
-            self.SharedTeddyAcquireTaggedAt = now
-        end
-        self.SharedTeddyAcquireLastHealth = hp
-
-        -- Once real HP loss has been observed, stay close for the ownership handoff.
-        -- SharedTeddyRestack performs ONE snap and then verifies persistence without rewriting.
-        local tagged = self.SharedTeddyQualified[acquireRoot] ~= nil
-        if tagged then
-            self:SharedTeddyRestack(false)
-        end
-
-        local tagTimeout = math.max(1.0, tonumber(_G.Settings.TeddySequenceTagTimeout) or 3.25)
-        if now - (tonumber(self.SharedTeddyAcquireStartedAt) or now) >= tagTimeout
-            and not tagged then
-            self.SharedTeddyRetryAfter[acquireRoot] =
-                now + math.max(0.15, tonumber(_G.Settings.TeddySequenceRetryDelay) or 0.28)
-            self.SharedTeddyAcquireModel = nil
-            self.SharedTeddyAcquireRoot = nil
-            self.SharedTeddyAcquireStartedAt = 0
-            self.SharedTeddyAcquireLastHealth = nil
-            self.SharedTeddyAcquireTaggedAt = 0
-        end
-
-        local phase = tagged and "STACK" or "TAG"
-        _G.BobonStatus = ("%s: Teddy • %s %s • pile %d/%d • hit %s")
-            :format(prefix, phase, mobName, verified, total,
-                attempted and "ACTIVE" or "PROBING")
-        return true
-    end
-
-    -- Every current mob is either verified or waiting for its one-write persistence check.
-    -- Park over the fixed pile and kill; new spawns automatically reopen ACQUIRE.
-    local primary, bestDist = nil, math.huge
-    for _, entry in ipairs(batch) do
-        local root = entry.Root
-        if root and root.Parent and self.SharedTeddyVerified[root] then
-            local d = (root.Position - self.SharedPileCFrame.Position).Magnitude
-            if d < bestDist then
-                primary, bestDist = entry.Model, d
-            end
-        end
-    end
-
-    if primary then
-        _G.State.FarmTarget = primary
-        _G.State.CurrentTarget = primary
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_ATTACK"
-        _G.State.ActionText = "Attack Pile • " .. mobName
-
-        local pileHover = math.max(12, tonumber(_G.Settings.TeddySequencePileHover) or 24)
-        local hoverCF = self.SharedPileCFrame * CFrame.new(0, pileHover, 0)
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(hoverCF, "Farm", {
-                arrivalThreshold = _G.Settings.FarmArrivalThreshold or 15,
-                fallback = fallbackCF or self.SharedPileCFrame,
-                combatHover = true,
-                persistent = true,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-
-        PrepareCombatTarget(primary)
-        EquipCombatTool()
-        local attempted = Attack(primary, mobName)
-        _G.BobonStatus = ("%s: Teddy • KILL pile %d/%d • %s")
-            :format(prefix, verified, total, attempted and "ACTIVE" or "PROBING")
-        return true
-    end
-
-    _G.State.FState = "SHARED_BRING_FARM"
-    _G.BobonStatus = ("%s: Teddy • VERIFY pile %d/%d"):format(prefix, verified, total)
-    return true
-end
-
-
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return 0 end
     if type(mobName) ~= "string" or mobName == "" then return 0 end
+    if not pileCF then return 0 end
 
     if self.SharedMobName and string.lower(self.SharedMobName) ~= string.lower(mobName) then
         self:SharedRelease("QuestMobChanged")
     end
     self.SharedMobName = mobName
 
-    if _G.Settings.SharedTeddyMode ~= false then
-        -- Ignore the moving primary CFrame. The fixed field anchor comes from
-        -- fallbackCF and survives target death.
-        self:SharedEnsurePile(mobName, primaryTarget, fallbackCF or pileCF)
-        if not self.SharedPileCFrame then return 0 end
-        self.SharedTeddyActive = true
-        local moved = self:SharedTeddyRestack(true)
-        return moved
-    end
-
-    -- Legacy v22.12 BN path retained as fallback when Teddy mode is disabled.
     local now = tick()
-    local interval = math.max(0.04, tonumber(_G.Settings.SharedBringInterval) or 0.08)
-    if now - (self.SharedLastBringAt or 0) < interval then
+    if now - (self.SharedLastBringAt or 0) < (_G.Settings.SharedBringInterval or 0.05) then
         return self.SharedBringCount or 0
     end
     self.SharedLastBringAt = now
-    pcall(function() ExpandSimulationRadius() end)
+    ExpandSimulationRadius()
+
+    self.SharedSoftProof = self.SharedSoftProof or setmetatable({}, {__mode="k"})
+    self.SharedSoftBlockedUntil = self.SharedSoftBlockedUntil or setmetatable({}, {__mode="k"})
+    self.SharedSoftVerifiedUntil = self.SharedSoftVerifiedUntil or setmetatable({}, {__mode="k"})
+    self.SharedHPProvenUntil = self.SharedHPProvenUntil or setmetatable({}, {__mode="k"})
+    self.SharedHPProvenAt = self.SharedHPProvenAt or setmetatable({}, {__mode="k"})
+    self.SharedProbeState = self.SharedProbeState or setmetatable({}, {__mode="k"})
+    self.SharedNextProbeWaveAt = tonumber(self.SharedNextProbeWaveAt) or 0
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    if not folder or not me or not pileCF then return 0 end
-    local pilePos = pileCF.Position
-    local fieldCenter = fallbackCF and fallbackCF.Position or pilePos
-    local localRange = math.max(120, tonumber(_G.Settings.SharedBringRange) or 350)
-    local fieldRange = math.max(localRange, tonumber(_G.Settings.SharedBringFieldRange) or 1200)
+    if not folder or not me then return 0 end
+
+    local localRange = tonumber(_G.Settings.SharedBringRange) or 350
+    local fieldRange = tonumber(_G.Settings.SharedBringFieldRange) or 1200
     local maxMobs = math.floor(tonumber(_G.Settings.SharedBringMaxMobs) or 0)
     local maxForce = tonumber(_G.Settings.SharedBringMaxForce) or 1000000
     local pGain = tonumber(_G.Settings.SharedBringP) or 3000
     local dGain = tonumber(_G.Settings.SharedBringD) or 100
-    self.SharedClassicStableAt = self.SharedClassicStableAt or setmetatable({}, {__mode="k"})
-    self.SharedClassicCurrentPile = pilePos
-    local candidates, stable = 0, 0
+    local proofDelay = math.max(0.10, tonumber(_G.Settings.SoftBringProofDelay) or 0.18)
+    local verifiedTTL = math.max(0.5, tonumber(_G.Settings.SoftBringVerifiedTTL) or 2.5)
+    local retryDelay = math.max(0.5, tonumber(_G.Settings.SoftBringRetryDelay) or 1.5)
+    local snapDistance = math.max(8, math.min(35, tonumber(_G.Settings.SharedBringSnapDistance) or 18))
+    local probeWaveSize = math.max(1, math.floor(tonumber(_G.Settings.SharedProbeWaveSize) or 3))
+    local probeLaunchInterval = math.max(0.10, tonumber(_G.Settings.SharedProbeLaunchInterval) or 0.15)
+    local probeAttackWindow = math.max(proofDelay, tonumber(_G.Settings.SharedProbeAttackWindow) or 0.45)
+    local probeTimeout = math.max(probeAttackWindow, tonumber(_G.Settings.SharedProbeTimeout) or 0.75)
+    local hpProofTTL = math.max(0.35, tonumber(_G.Settings.SharedHPProofTTL) or 1.25)
+    local hpMissGrace = math.max(0.35, tonumber(_G.Settings.SharedHPProofMissGrace) or 0.85)
+    local pilePos = pileCF.Position
+    local fieldCenter = fallbackCF and fallbackCF.Position or pilePos
+
+    local candidates, moved, ownedCount, unknownCount, serverOwnedCount, failed = 0, 0, 0, 0, 0, 0
+    local hpProvenCount, probingCount = 0, 0
+    local launchWave = now >= (self.SharedNextProbeWaveAt or 0)
+    local launchedThisWave = 0
+
+    local function releaseMover(mob, root)
+        local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
+        if bp then pcall(function() bp:Destroy() end) end
+        -- Restore any properties left by v22.0/v21.x immediately. This is important
+        -- when the same live NPC survives re-execution or becomes the primary target.
+        self:SharedRestoreOne(mob)
+    end
+
+    local function applySoftMover(mob, root, hardSnap)
+        -- SOFT means: never ChangeState(14), never WalkSpeed=0, never disable
+        -- CanTouch/CanQuery on the NPC. Only the root collision is suppressed while
+        -- a physics-proven root is being pulled, so combat/health state stays live.
+        self:SharedRemember(root, "Part")
+        pcall(function()
+            root.CanCollide = false
+        end)
+
+        local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+        local newMover = bp == nil
+        if not bp then
+            bp = Instance.new("BodyPosition")
+            bp.Name = "BobonSharedEnemyFlyPosition"
+            bp.Parent = root
+        end
+        local ok = pcall(function()
+            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+            bp.P = pGain
+            bp.D = dGain
+            bp.Position = pilePos
+            -- v22.5: hard-snap only on first acquisition. Rewriting root.CFrame every
+            -- 50ms can outrun server ownership/physics replication and create visual ghosts.
+            if hardSnap and newMover then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.new(pilePos)
+            end
+        end)
+        if ok then moved = moved + 1 end
+        return ok
+    end
 
     for _, mob in ipairs(folder:GetChildren()) do
         if IsEnemyNamed(mob, mobName) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local pos = root.Position
-                local inField = IsValidPos(pos)
-                    and ((pos-fieldCenter).Magnitude <= fieldRange
-                        or (pos-pilePos).Magnitude <= localRange
-                        or (pos-me.Position).Magnitude <= localRange)
-                if inField and (maxMobs <= 0 or candidates < maxMobs) then
+            if hum and hum.Health > 0 and root and root.Parent then
+                local okPos, pos = pcall(function() return root.Position end)
+                local inField = okPos and IsValidPos(pos)
+                    and ((pos - fieldCenter).Magnitude <= fieldRange
+                        or (pos - me.Position).Magnitude <= localRange
+                        or (pos - pilePos).Magnitude <= fieldRange)
+                if inField then
                     candidates = candidates + 1
-                    if mob == primaryTarget then
-                        stable = stable + 1
-                    else
-                        pcall(function()
-                            local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
-                            if not bp then
-                                bp = Instance.new("BodyPosition")
-                                bp.Name = "BobonSharedEnemyFlyPosition"
-                                bp.Parent = root
+                    if maxMobs <= 0 or candidates <= maxMobs then
+                        local isPrimary = primaryTarget ~= nil and mob == primaryTarget
+                        if isPrimary then
+                            -- The victim being attacked is NEVER a magnet body. Keep its
+                            -- Humanoid fully live and let combat/watchers observe real HP.
+                            releaseMover(mob, root)
+                            self.SharedSoftProof[root] = nil
+                            self.SharedSoftBlockedUntil[root] = nil
+                            self.SharedSoftVerifiedUntil[root] = nil
+                        elseif _G.Settings.SafeSoftBring == false then
+                            -- Compatibility only. Even in legacy mode v22.1 refuses to
+                            -- PlatformStand/WalkSpeed-freeze the mob.
+                            applySoftMover(mob, root, true)
+                        else
+                            local blockedUntil = self.SharedSoftBlockedUntil[root] or 0
+                            if blockedUntil > now then
+                                releaseMover(mob, root)
+                            else
+                                local ownership = ClientOwnsMob(root)
+                                if ownership == true then
+                                    ownedCount = ownedCount + 1
+                                    self.SharedSoftProof[root] = nil
+                                    self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
+                                    applySoftMover(mob, root, true)
+                                elseif ownership == false then
+                                    -- Explicit server ownership: do NOT create a local ghost pile.
+                                    serverOwnedCount = serverOwnedCount + 1
+                                    self.SharedSoftProof[root] = nil
+                                    self.SharedSoftVerifiedUntil[root] = nil
+                                    self.SharedSoftBlockedUntil[root] = now + retryDelay
+                                    releaseMover(mob, root)
+                                else
+                                    unknownCount = unknownCount + 1
+                                    local hpUntil = self.SharedHPProvenUntil[root] or 0
+                                    local hpAt = self.SharedHPProvenAt[root] or 0
+                                    if hpUntil > now then
+                                        -- Real HP delta on this exact Humanoid is the strongest proof that
+                                        -- the server accepts combat while it is staged. Keep it softly held.
+                                        hpProvenCount = hpProvenCount + 1
+                                        self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
+                                        self.SharedProbeState[root] = nil
+                                        applySoftMover(mob, root, false)
+                                    else
+                                        local probe = self.SharedProbeState[root]
+                                        if probe then
+                                            probingCount = probingCount + 1
+                                            local age = now - (probe.At or now)
+                                            local okNow, currentPos = pcall(function() return root.Position end)
+                                            local persisted = okNow and IsValidPos(currentPos)
+                                                and (currentPos - (probe.Expected or pilePos)).Magnitude <= snapDistance
+                                            local hpFresh = hpAt >= (probe.At or now) and hpAt > 0
+                                            if hpFresh then
+                                                self.SharedHPProvenUntil[root] = now + hpProofTTL
+                                                self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
+                                                self.SharedProbeState[root] = nil
+                                                hpProvenCount = hpProvenCount + 1
+                                                applySoftMover(mob, root, false)
+                                            elseif (age >= proofDelay and not persisted) or age >= probeTimeout then
+                                                -- Visual pull without causal HP proof is a ghost candidate.
+                                                -- Release immediately instead of re-writing it forever.
+                                                failed = failed + 1
+                                                self.SharedProbeState[root] = nil
+                                                self.SharedSoftProof[root] = nil
+                                                self.SharedSoftVerifiedUntil[root] = nil
+                                                self.SharedHPProvenUntil[root] = nil
+                                                self.SharedSoftBlockedUntil[root] = now + math.max(retryDelay, hpMissGrace)
+                                                releaseMover(mob, root)
+                                            else
+                                                -- During the bounded probe window: no BodyPosition. The one-shot
+                                                -- staged root may receive a causal fan-out hit; HP delta promotes it.
+                                                releaseMover(mob, root)
+                                            end
+                                        elseif _G.Settings.SoftBringRequireProof == false then
+                                            applySoftMover(mob, root, false)
+                                        elseif launchWave and launchedThisWave < probeWaveSize then
+                                            -- v22.5: launch only a small unknown-owner wave per settle interval.
+                                            -- This prevents an entire camp from being CFramed in the same replication frame.
+                                            releaseMover(mob, root)
+                                            local okProbe = pcall(function()
+                                                root.CFrame = CFrame.new(pilePos)
+                                            end)
+                                            if okProbe then
+                                                launchedThisWave = launchedThisWave + 1
+                                                probingCount = probingCount + 1
+                                                self.SharedProbeState[root] = {
+                                                    At = now,
+                                                    Expected = pilePos,
+                                                    StartHealth = hum.Health,
+                                                }
+                                            else
+                                                failed = failed + 1
+                                                self.SharedSoftBlockedUntil[root] = now + retryDelay
+                                            end
+                                        end
+                                    end
+                                end
                             end
-                            bp.MaxForce = Vector3.new(maxForce,maxForce,maxForce)
-                            bp.P = pGain
-                            bp.D = dGain
-                            bp.Position = pilePos
-                        end)
-                        stable = stable + 1
+                        end
                     end
                 end
             end
         end
     end
-    self.SharedBringCount = stable
-    return stable
+
+    if launchWave and launchedThisWave > 0 then
+        self.SharedNextProbeWaveAt = now + probeLaunchInterval
+    end
+    self.SharedBringCount = moved
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = "SOFT-BRING"
+        _G.BobonDiagnostics.BringCandidates = candidates
+        _G.BobonDiagnostics.BringMoved = moved
+        _G.BobonDiagnostics.BringOwned = ownedCount
+        _G.BobonDiagnostics.BringUnknown = unknownCount
+        _G.BobonDiagnostics.BringServerOwned = serverOwnedCount
+        _G.BobonDiagnostics.BringHPProven = hpProvenCount
+        _G.BobonDiagnostics.BringProbing = probingCount
+        _G.BobonDiagnostics.BringFailed = failed
+        _G.BobonDiagnostics.BringBlacklisted = 0
+    end
+    return moved
 end
 
 function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     if not model or not model.Parent then return false end
     if primaryTarget and model == primaryTarget then return true end
-
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
 
-    if _G.Settings.TeddyAirSweepMode ~= false then
-        local at = self.TeddyAirVerified and self.TeddyAirVerified[root]
-        local ttl = math.max(0.15, tonumber(_G.Settings.TeddyAirVerifyTTL) or 0.55)
-        return at ~= nil and tick() - at <= ttl
-    end
+    local own = ClientOwnsMob(root)
+    if own == true then return true end
 
-    if _G.Settings.SharedTeddyMode ~= false then
-        local at = self.SharedTeddyVerified and self.SharedTeddyVerified[root]
-        local anchorCF = self.SharedPileCFrame
-        if not at or not anchorCF then return false end
-        local ttl = math.max(0.10, tonumber(_G.Settings.SharedTeddyVerifyTTL) or 0.35)
-        if tick() - at > ttl then return false end
-        local ok, pos = pcall(function() return root.Position end)
-        if not ok or not IsValidPos(pos) then return false end
-        local radius = math.max(5, tonumber(_G.Settings.SharedTeddyVerifyRadius) or 12)
-        return (pos - anchorCF.Position).Magnitude <= radius
-    end
-
-    local pilePos = self.SharedClassicCurrentPile
-    local since = self.SharedClassicStableAt and self.SharedClassicStableAt[root]
-    if not pilePos or not since then return false end
-    local ok, pos = pcall(function() return root.Position end)
-    if not ok or not IsValidPos(pos) then return false end
-    local verifyRadius = math.max(6, tonumber(_G.Settings.SharedClassicVerifyRadius) or 14)
-    local stableDelay = math.max(0.08, tonumber(_G.Settings.SharedClassicStableDelay) or 0.14)
-    if (pos - pilePos).Magnitude > verifyRadius then
-        self.SharedClassicStableAt[root] = nil
+    local now = tick()
+    self.SharedHPProvenUntil = self.SharedHPProvenUntil or setmetatable({}, {__mode="k"})
+    self.SharedHPProvenAt = self.SharedHPProvenAt or setmetatable({}, {__mode="k"})
+    self.SharedProbeState = self.SharedProbeState or setmetatable({}, {__mode="k"})
+    if own == false then
+        -- v22.6 strict server-owner rule: stale visual/HP authority can never outlive
+        -- an explicit ownership=false observation. Attack the mob later at its real position.
+        self.SharedHPProvenUntil[root] = nil
+        self.SharedHPProvenAt[root] = nil
+        self.SharedProbeState[root] = nil
         return false
     end
-    return tick() - since >= stableDelay
+    if (self.SharedHPProvenUntil[root] or 0) > now then return true end
+
+    local probe = self.SharedProbeState[root]
+    if probe and now - (probe.At or now) <= (_G.Settings.SharedProbeAttackWindow or 0.45) then
+        local ok, pos = pcall(function() return root.Position end)
+        local expected = probe.Expected
+        local snapDistance = math.max(8, math.min(35, tonumber(_G.Settings.SharedBringSnapDistance) or 18))
+        return ok and IsValidPos(pos) and expected and (pos - expected).Magnitude <= snapDistance
+    end
+    return false
 end
 
 function ClusterFarmController:SharedPrimaryNoDamage(target, attackWindow)
@@ -8358,410 +7842,8 @@ function ClusterFarmController:SharedPrimaryNoDamage(target, attackWindow)
     return now - since >= timeout
 end
 
-
-function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefix)
-    if _G.Settings.TeddyAirSweepMode == false then return false end
-    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
-    if type(mobName) ~= "string" or mobName == "" then return false end
-
-    local folder = workspace:FindFirstChild("Enemies")
-    local me = HRP()
-    if not folder or not me then return true end
-    local now = tick()
-    local prefix = tostring(statusPrefix or "Farm")
-    if self.TeddyAirMobName and string.lower(tostring(self.TeddyAirMobName)) ~= string.lower(mobName) then self:SharedRelease("TeddyMobChanged") end
-    self.TeddyAirMobName = mobName
-    local fieldCenter
-    if typeof(fallbackCF) == "CFrame" then
-        fieldCenter = fallbackCF.Position
-    elseif typeof(fallbackCF) == "Vector3" then
-        fieldCenter = fallbackCF
-    else
-        fieldCenter = me.Position
-    end
-
-    pcall(function() ExpandSimulationRadius() end)
-
-    self.TeddyAirTagged = self.TeddyAirTagged or setmetatable({}, {__mode="k"})
-    self.TeddyAirStacked = self.TeddyAirStacked or setmetatable({}, {__mode="k"})
-    self.TeddyAirStackStableAt = self.TeddyAirStackStableAt or setmetatable({}, {__mode="k"})
-    self.TeddyAirRetryAfter = self.TeddyAirRetryAfter or setmetatable({}, {__mode="k"})
-    self.TeddyAirVerified = self.TeddyAirVerified or setmetatable({}, {__mode="k"})
-    self.TeddyAirVisited = self.TeddyAirVisited or setmetatable({}, {__mode="k"})
-
-    local fieldRange = math.max(250, tonumber(_G.Settings.TeddyAirFieldRange) or 1800)
-    local candidates = {}
-    local candidateSet = setmetatable({}, {__mode="k"})
-    for _, mob in ipairs(folder:GetChildren()) do
-        if IsEnemyNamed(mob, mobName) then
-            local hum = mob:FindFirstChildOfClass("Humanoid")
-            local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local okPos, pos = pcall(function() return root.Position end)
-                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                    and IsSubmergedPosition(pos) == IsSubmergedPosition(fieldCenter)
-                    and (pos - fieldCenter).Magnitude <= fieldRange then
-                    candidates[#candidates + 1] = {
-                        Model = mob,
-                        Humanoid = hum,
-                        Root = root,
-                        Position = pos,
-                    }
-                    candidateSet[mob] = true
-                end
-            end
-        end
-    end
-    self.TeddyAirCandidates = candidates
-
-    local function destroyTeddyHold(r)
-        if not r then return end
-        local h = r:FindFirstChild("BobonTeddyStackHold")
-        if h then pcall(function() h:Destroy() end) end
-    end
-    local function ensureTeddyHold(r,pos)
-        if _G.Settings.TeddyAirUseBodyPosition == false or not r or not r.Parent then return nil end
-        local h = r:FindFirstChild("BobonTeddyStackHold")
-        if h and not h:IsA("BodyPosition") then pcall(function() h:Destroy() end); h=nil end
-        if not h then h=Instance.new("BodyPosition"); h.Name="BobonTeddyStackHold"; h.Parent=r end
-        h.MaxForce=Vector3.new(holdForce,holdForce,holdForce); h.P=holdP; h.D=holdD; h.Position=pos
-        return h
-    end
-    local function prepTeddyStack(model,hum,r)
-        self:SharedRemember(hum,"Humanoid"); self:SharedRemember(r,"Part")
-        pcall(function() hum.WalkSpeed=0; hum.AutoRotate=false; r.CanCollide=false end)
-        for _,part in ipairs(model:GetDescendants()) do
-            if part:IsA("BasePart") then self:SharedRemember(part,"Part"); pcall(function() part.CanCollide=false end) end
-        end
-    end
-
-    -- Drop stale focus immediately; weak-key stack tables clean themselves on destroy.
-    local focus = self.TeddyAirFocusModel
-    if focus and (not focus.Parent or not candidateSet[focus]) then
-        self.TeddyAirFocusModel = nil
-        self.TeddyAirFocusPhase = nil
-        self.TeddyAirFocusStartedAt = 0
-        self.TeddyAirFocusLastHealth = nil
-        self.TeddyAirFocusRoot = nil
-        focus = nil
-    end
-
-    if #candidates == 0 then
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "TEDDY_HP_WAIT"
-        _G.State.ActionText = "Waiting Mob • " .. tostring(mobName)
-        self.TeddyAirFocusModel = nil
-        self.TeddyAirFocusPhase = nil
-        if fallbackCF and _G.State:CanRequestTravel() then
-            local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
-            TravelManager:Request(baseCF * CFrame.new(0,
-                tonumber(_G.Settings.TeddyAirHoverHeight) or 28, 0), "Farm", {
-                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
-                fallback = fallbackCF,
-                combatHover = false,
-                persistent = false,
-                speed = _G.Settings.TeddyAirSweepSpeed or 430,
-            })
-        end
-        _G.BobonStatus = prefix .. ": Teddy • waiting " .. tostring(mobName)
-        return true
-    end
-
-    local hover = math.max(12, tonumber(_G.Settings.TeddyAirHoverHeight) or 28)
-    local tagHover = math.max(8, tonumber(_G.Settings.TeddyAirTagHoverHeight) or 16)
-    local acquireHeight = math.max(1.5, tonumber(_G.Settings.TeddyAirAcquireHeight) or 4)
-    local verifyRadius = math.max(6, tonumber(_G.Settings.TeddyAirPullVerifyRadius) or 15)
-    local stableDelay = math.max(0.06, tonumber(_G.Settings.TeddyAirPullStableDelay) or 0.14)
-    local acquireRadius = math.max(8, tonumber(_G.Settings.TeddyAirAcquireRadius) or 22)
-    local causalWindow = math.max(0.25, tonumber(_G.Settings.TeddyAirCausalDamageWindow) or 1.00)
-    local focusTimeout = math.max(1.25, tonumber(_G.Settings.TeddyAirFocusTimeout) or 4.25)
-    local pullTimeout = math.max(0.75, tonumber(_G.Settings.TeddyAirPullTimeout) or 3.25)
-    local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyAirRetryDelay) or 0.35)
-    local leash = math.max(verifyRadius * 2, tonumber(_G.Settings.TeddyAirStackLeash) or 42)
-    local holdP = math.max(1000, tonumber(_G.Settings.TeddyAirHoldP) or 7000)
-    local holdD = math.max(50, tonumber(_G.Settings.TeddyAirHoldD) or 240)
-    local holdForce = math.max(1000000, tonumber(_G.Settings.TeddyAirHoldMaxForce) or 1000000000)
-    local pileDepth = math.max(3, tonumber(_G.Settings.TeddyAirPileDepth) or 8)
-
-    -- One moving pile directly below the player. Previously stacked mobs follow it
-    -- while Farm flies to the next unproven victim.
-    me = HRP() or me
-    local pilePos = Vector3.new(
-        me.Position.X,
-        me.Position.Y - pileDepth + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
-        me.Position.Z
-    )
-    if not IsSubmergedPosition(pilePos) then
-        pilePos = Vector3.new(pilePos.X, math.max(_G.Settings.MinY or 10, pilePos.Y), pilePos.Z)
-    end
-
-    local stackedCount = 0
-    for _, entry in ipairs(candidates) do
-        local root = entry.Root
-        if root and root.Parent and self.TeddyAirStacked[root] then
-            local okBefore, before = pcall(function() return root.Position end)
-            if not okBefore or not IsValidPos(before) then
-                self.TeddyAirStacked[root]=nil; self.TeddyAirVerified[root]=nil; destroyTeddyHold(root)
-            else
-                local drift=(before-pilePos).Magnitude
-                if drift > leash then
-                    self.TeddyAirStacked[root]=nil; self.TeddyAirVerified[root]=nil
-                    self.TeddyAirRetryAfter[root]=now+retryDelay
-                    destroyTeddyHold(root); self:SharedRestoreOne(entry.Model)
-                else
-                    pcall(function()
-                        ensureTeddyHold(root,pilePos)
-                        root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
-                        if drift > verifyRadius*0.70 then root.CFrame=CFrame.new(pilePos)*root.CFrame.Rotation end
-                    end)
-                    local okPos,pos=pcall(function() return root.Position end)
-                    if okPos and IsValidPos(pos) and (pos-pilePos).Magnitude <= verifyRadius*1.6 then
-                        self.TeddyAirVerified[root]=now; stackedCount=stackedCount+1
-                    end
-                end
-            end
-        end
-    end
-
-    -- Pick one NOT-YET-STACKED mob and commit to it. No rotating every 0.55s:
-    -- the bot must cause real HP loss first, then pull that exact mob into the pile.
-    focus = self.TeddyAirFocusModel
-    if not focus then
-        local best, bestScore = nil, math.huge
-        for _, entry in ipairs(candidates) do
-            local root = entry.Root
-            if root and root.Parent and not self.TeddyAirStacked[root]
-                and now >= (tonumber(self.TeddyAirRetryAfter[root]) or 0) then
-                local dist = (entry.Position - me.Position).Magnitude
-                local visited = tonumber(self.TeddyAirVisited[entry.Model]) or 0
-                local score = dist + math.min(500, math.max(0, now - visited) * -8)
-                if score < bestScore then
-                    best = entry.Model
-                    bestScore = score
-                end
-            end
-        end
-        if best then
-            focus = best
-            self.TeddyAirFocusModel = best
-            self.TeddyAirFocusPhase = "HIT"
-            self.TeddyAirFocusStartedAt = now
-            local bh = best:FindFirstChildOfClass("Humanoid")
-            self.TeddyAirFocusLastHealth = bh and bh.Health or nil
-            self.TeddyAirFocusRoot = best:FindFirstChild("HumanoidRootPart")
-            self.TeddyAirVisited[best] = now
-        end
-    end
-
-    -- If every current mob is already stacked, stay above the moving pile and keep
-    -- attacking a real live representative. A fresh respawn will become the next HIT focus.
-    if not focus then
-        local target, bestDist = nil, math.huge
-        for _, entry in ipairs(candidates) do
-            if self.TeddyAirStacked[entry.Root] then
-                local dist = (entry.Root.Position - me.Position).Magnitude
-                if dist < bestDist then target, bestDist = entry.Model, dist end
-            end
-        end
-        target = target or candidates[1].Model
-        _G.State.FarmTarget = target
-        _G.State.CurrentTarget = target
-        _G.State.ClusterMode = "OFF"
-        _G.State.ClusterPrimary = nil
-        _G.State.FState = "TEDDY_STACK_KILL"
-        _G.State.ActionText = "Attacking Pile • " .. tostring(mobName)
-        PrepareCombatTarget(target)
-        EquipCombatTool()
-        local attempted = Attack(target, mobName)
-        if _G.BobonDiagnostics then
-            _G.BobonDiagnostics.Bring = ("TEDDY-STACK %d/%d"):format(stackedCount, #candidates)
-            _G.BobonDiagnostics.BringCandidates = #candidates
-            _G.BobonDiagnostics.BringMoved = stackedCount
-        end
-        _G.BobonStatus = ("%s: Teddy • pile %d/%d • hit %s")
-            :format(prefix, stackedCount, #candidates, attempted and "ACTIVE" or "PROBING")
-        return true
-    end
-
-    local hum = focus:FindFirstChildOfClass("Humanoid")
-    local root = focus:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health <= 0 or not root or not root.Parent then
-        self.TeddyAirFocusModel = nil
-        self.TeddyAirFocusPhase = nil
-        self.TeddyAirFocusStartedAt = 0
-        self.TeddyAirFocusLastHealth = nil
-        self.TeddyAirFocusRoot = nil
-        return true
-    end
-
-    _G.State.FarmTarget = focus
-    _G.State.CurrentTarget = focus
-    _G.State.ClusterMode = "OFF"
-    _G.State.ClusterPrimary = nil
-    _G.State.FState = "SHARED_ATTACK"
-
-    local phase = tostring(self.TeddyAirFocusPhase or "HIT")
-    if phase == "HIT" then
-        _G.State.ActionText = "Tagging Mob • " .. tostring(mobName)
-
-        -- Fly above this exact mob and keep real attack dispatch on it.
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,tagHover,0)), "Farm", {
-                arrivalThreshold = math.max(8, tagHover*0.65),
-                fallback = fallbackCF, combatHover = false, persistent = false,
-                speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
-            })
-        end
-
-        PrepareCombatTarget(focus)
-        EquipCombatTool()
-        local attempted = Attack(focus, mobName)
-
-        local hp = tonumber(hum.Health) or 0
-        local prev = tonumber(self.TeddyAirFocusLastHealth)
-        local recentAt = CombatController.RecentTargets and CombatController.RecentTargets[focus] or nil
-        local causal = recentAt and now - recentAt <= causalWindow
-        if prev and hp < prev - 0.01 and causal then
-            pcall(function() self:ConfirmDamageProof(focus) end)
-        end
-        self.TeddyAirFocusLastHealth = hp
-
-        local proven = self:IsDamageProven(focus)
-        if proven then
-            self.TeddyAirTagged[root] = now
-            self.TeddyAirFocusPhase = "ACQUIRE"
-            self.TeddyAirFocusStartedAt = now
-            self.TeddyAirStackStableAt[root] = nil
-            phase = "ACQUIRE"
-        elseif now - (tonumber(self.TeddyAirFocusStartedAt) or now) >= focusTimeout then
-            -- Do not fake-tag a no-damage mob. Move on briefly, then revisit it later.
-            self.TeddyAirRetryAfter[root] = now + retryDelay
-            self.TeddyAirFocusModel = nil
-            self.TeddyAirFocusPhase = nil
-            self.TeddyAirFocusStartedAt = 0
-            self.TeddyAirFocusLastHealth = nil
-            self.TeddyAirFocusRoot = nil
-        end
-
-        if _G.BobonDiagnostics then
-            _G.BobonDiagnostics.Bring = ("TEDDY-HIT %d/%d"):format(stackedCount, #candidates)
-            _G.BobonDiagnostics.BringCandidates = #candidates
-            _G.BobonDiagnostics.BringMoved = stackedCount
-        end
-        _G.BobonStatus = ("%s: Teddy • HIT %s • pile %d/%d • %s")
-            :format(prefix, tostring(mobName), stackedCount, #candidates,
-                proven and "HP-PROVEN" or (attempted and "DAMAGE CHECK" or "PROBING"))
-        return true
-    end
-
-    -- PULL phase: real HP proof already exists. Stay near the same mob and repeatedly
-    -- move it underfoot until the root actually persists there; only then is it STACKED.
-    _G.State.ActionText = "Stacking Mob • " .. tostring(mobName)
-    if _G.State:CanRequestTravel() then
-        TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,acquireHeight,0)), "Farm", {
-            arrivalThreshold = math.max(5, acquireHeight+2),
-            fallback = fallbackCF, combatHover = false, persistent = false,
-            speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
-        })
-    end
-
-    me = HRP() or me
-    pilePos = Vector3.new(
-        me.Position.X,
-        me.Position.Y - pileDepth + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
-        me.Position.Z
-    )
-    if not IsSubmergedPosition(pilePos) then
-        pilePos = Vector3.new(pilePos.X, math.max(_G.Settings.MinY or 10, pilePos.Y), pilePos.Z)
-    end
-
-    local near = (root.Position - me.Position).Magnitude <= acquireRadius
-    local own = ClientOwnsMob(root)
-    if near then
-        pcall(function() ExpandSimulationRadius() end)
-        self:SharedRemember(root,"Part")
-        pcall(function() root.CanCollide=false end)
-        pcall(function()
-            local rot=root.CFrame.Rotation
-            root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
-            root.CFrame=CFrame.new(pilePos)*rot
-            if own ~= false or _G.Settings.TeddyAirRequireOwnerForPull == false then ensureTeddyHold(root,pilePos) end
-            root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
-        end)
-    end
-
-    local okPos, pos = pcall(function() return root.Position end)
-    local inPile = okPos and IsValidPos(pos) and (pos - pilePos).Magnitude <= verifyRadius
-    if inPile then
-        prepTeddyStack(focus,hum,root)
-        local since = tonumber(self.TeddyAirStackStableAt[root]) or now
-        if not self.TeddyAirStackStableAt[root] then self.TeddyAirStackStableAt[root] = now end
-        if now - since >= stableDelay then
-            self.TeddyAirStacked[root] = true
-            self.TeddyAirVerified[root] = now
-            self.TeddyAirRetryAfter[root] = nil
-            ensureTeddyHold(root,pilePos)
-            self.TeddyAirFocusModel = nil
-            self.TeddyAirFocusPhase = nil
-            self.TeddyAirFocusStartedAt = 0
-            self.TeddyAirFocusLastHealth = nil
-            self.TeddyAirFocusRoot = nil
-            stackedCount = stackedCount + 1
-        end
-    else
-        self.TeddyAirStackStableAt[root] = nil
-    end
-
-    -- Keep hitting while stacking; damage remains live and the already-stacked pile
-    -- stays underfoot instead of becoming a frozen visual-only group.
-    PrepareCombatTarget(focus)
-    EquipCombatTool()
-    local attempted = Attack(focus, mobName)
-
-    if self.TeddyAirFocusModel and now - (tonumber(self.TeddyAirFocusStartedAt) or now) >= pullTimeout then
-        -- Pull could not persist. Never claim it as stacked; revisit after another sweep.
-        self.TeddyAirRetryAfter[root] = now + retryDelay
-        self.TeddyAirFocusModel = nil
-        self.TeddyAirFocusPhase = nil
-        self.TeddyAirFocusStartedAt = 0
-        self.TeddyAirFocusLastHealth = nil
-        self.TeddyAirFocusRoot = nil
-        self.TeddyAirStackStableAt[root] = nil
-        destroyTeddyHold(root)
-        self:SharedRestoreOne(focus)
-    end
-
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TEDDY-ACQUIRE %d/%d"):format(stackedCount, #candidates)
-        _G.BobonDiagnostics.BringCandidates = #candidates
-        _G.BobonDiagnostics.BringMoved = stackedCount
-    end
-    _G.BobonStatus = ("%s: Teddy • ACQUIRE %s • pile %d/%d • hit %s")
-        :format(prefix, tostring(mobName), stackedCount, #candidates,
-            attempted and "ACTIVE" or "PROBING")
-    return true
-end
-
 function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     if _G.Settings.SharedSourceFarmMode == false then return false end
-    if _G.Settings.TeddySequenceMode ~= false then
-        return self:TeddySequenceFarmTick(mobName, fallbackCF, "Farm")
-    end
-    if _G.Settings.TeddyAirSweepMode ~= false then
-        return self:TeddyAirFarmTick(mobName, fallbackCF, "Farm")
-    end
-    -- Teddy mode establishes the fixed field anchor and magnetizes the full spawn
-    -- before choosing a representative damage target.
-    if _G.Settings.SharedTeddyMode ~= false then
-        self:SharedEnsurePile(mobName, nil, fallbackCF)
-        if self.SharedPileCFrame then
-            self.SharedTeddyActive = true
-            pcall(function() self:SharedTeddyRestack(true) end)
-        end
-    end
-
     local target = self:SharedSelectTarget(mobName)
 
     if not target then
@@ -8794,7 +7876,10 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     end
 
     self.SharedEmptySince = 0
-    if _G.Settings.ReferenceCoreMode == true and _G.Settings.SharedTeddyMode == false then
+    if _G.Settings.ReferenceCoreMode == true then
+        -- A mob that was a secondary magnet victim on the previous kill may now
+        -- become the authoritative target. Remove its old BodyPosition/freeze first;
+        -- the server is then free to expose its real position while combat keeps going.
         self:SharedRestoreOne(target)
     end
     local hum = target:FindFirstChildOfClass("Humanoid")
@@ -8820,8 +7905,7 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     end
 
     local hoverHeight = tonumber(_G.Settings.SharedFarmHeight) or 25
-    local targetPosition = (_G.Settings.SharedTeddyMode ~= false and self.SharedPileCFrame)
-        and self.SharedPileCFrame.Position or root.Position
+    local targetPosition = root.Position
     local hoverCF = CFrame.new(targetPosition) * CFrame.new(0, hoverHeight, 0)
     if _G.State:CanRequestTravel() then
         TravelManager:Request(hoverCF, "Farm", {
@@ -8844,8 +7928,7 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
         local attempted = Attack(target, mobName)
         _G.State.FState = "SHARED_ATTACK"
 
-        if _G.Settings.SharedTeddyMode == false
-            and attempted and self:SharedPrimaryNoDamage(target, true) then
+        if attempted and self:SharedPrimaryNoDamage(target, true) then
             -- A real primary at its real position has stopped producing HP deltas. Release
             -- all visual secondary movers first, then invalidate the stale combat backend.
             -- The next tick keeps the same quest and re-enters fast target handoff cleanly.
@@ -8868,12 +7951,7 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
         self:SharedPrimaryNoDamage(nil, false)
     end
 
-    if _G.Settings.SharedTeddyMode ~= false then
-        local total = tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates)
-            or tonumber(bringCount) or 0
-        _G.BobonStatus = ("Farm: Teddy pile • %s • %d/%d")
-            :format(tostring(mobName), tonumber(bringCount) or 0, total)
-    elseif _G.Settings.ReferenceCoreMode == true then
+    if _G.Settings.ReferenceCoreMode == true then
         _G.BobonStatus = ("Killing Mob: %s • bring %d (optional)")
             :format(tostring(mobName), tonumber(bringCount) or 0)
     else
@@ -8899,10 +7977,7 @@ local ClusterHeartbeatConnection
 pcall(function()
     ClusterHeartbeatConnection = RunService.Heartbeat:Connect(function()
         if not SessionAlive() then return end
-        if _G.Settings.SharedTeddyMode ~= false
-            and ClusterFarmController.SharedTeddyActive == true then
-            pcall(function() ClusterFarmController:SharedTeddyRestack(false) end)
-        elseif _G.State and _G.State.ClusterMode ~= "OFF" then
+        if _G.State and _G.State.ClusterMode ~= "OFF" then
             pcall(function() ClusterFarmController:RestackVerifiedOnly() end)
         end
     end)
@@ -10334,11 +9409,27 @@ local function TargetThreat()
     local dist=(root.Position-me.Position).Magnitude
     if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
 
-    -- v22.20.2: HARD trigger only. Damage taken, Stun/Busy, NPC/root velocity
-    -- and an animation by itself are ignored so Teddy acquire/stack is never
-    -- interrupted by ordinary combat or replication corrections.
+    if _G.Settings.DodgeOnRawDamage == true
+        and _G.State.DamageDodgeTarget == target
+        and tick() <= (tonumber(_G.State.DamageDodgeUntil) or 0) then
+        return target,root,"damage-confirmed"
+    end
+
+    local anim,why=NamedAttackAnimation(hum)
+    if anim then return target,root,why end
+
+    -- Do not infer a skill from root velocity alone. Bring/network correction can
+    -- move an NPC quickly and used to create a false "charge" dodge. Real charge
+    -- skills are still caught by their animation/cast name or spawned hazard.
+    for _,obj in ipairs(target:GetDescendants()) do
+        if obj:IsA("BasePart") and WordMatch(obj.Name,HARD_HAZARD_WORDS)
+            and HazardTouchesPoint(obj,me.Position) then
+            return target,root,"target-hitbox"
+        end
+    end
+
     if ActiveHazardNear(me,root) then
-        return target,root,"spawned-skill-hazard"
+        return target,root,"spawned-hazard"
     end
     return nil,nil,nil
 end
@@ -10938,7 +10029,6 @@ end
 local SkipRouteController = {
     Enabled = true,
     CurrentKey = nil,
-    LastMagnetTick = 0,
     -- [D-4] Theo dõi hiệu quả của route: level tại lúc chọn route + thời
     -- điểm bắt đầu. Level không tăng trong SkipRouteFallbackTimeout giây
     -- → coi skip không hiệu quả → tắt hẳn, farm quest bình thường.
@@ -10971,8 +10061,6 @@ function SkipRouteController:Reset(reason)
         end
         FarmPositionController:ReleaseCluster()
         _G.State:ClearTargets()
-        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
-        self.LastMagnetTick = 0
         self.CurrentKey = nil
     end
 end
@@ -10992,136 +10080,12 @@ function SkipRouteController:FindTarget(route)
     return nil, nil
 end
 
-function SkipRouteController:DirectMagnet(route, primary)
-    if _G.Settings.SkipDirectMagnetEnabled == false then return 1, 1 end
-    if not route or not primary or not primary.Parent then return 0, 0 end
-
-    local folder = workspace:FindFirstChild("Enemies")
-    local primaryHum = primary:FindFirstChildOfClass("Humanoid")
-    local primaryRoot = primary:FindFirstChild("HumanoidRootPart")
-    local me = HRP()
-    if not folder or not primaryHum or primaryHum.Health <= 0
-        or not primaryRoot or not primaryRoot.Parent or not me then
-        return 0, 0
-    end
-
-    if type(_G.BobonSkipMagnetPinnedModels) ~= "table" then
-        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
-    end
-    local marks = _G.BobonSkipMagnetPinnedModels
-    local now = tick()
-    local interval = math.max(0.01, tonumber(_G.Settings.SkipDirectMagnetInterval) or 0.03)
-    local ttl = math.max(0.08, tonumber(_G.Settings.SkipDirectMagnetPinnedTTL) or 0.18)
-    local verifyRadius = math.max(20, tonumber(_G.Settings.SkipDirectMagnetVerifyRadius) or 55)
-    local localRange = math.max(150, tonumber(_G.Settings.SkipDirectMagnetRange) or 700)
-    local fieldRange = math.max(localRange, tonumber(_G.Settings.SkipDirectMagnetFieldRange) or 1300)
-
-    local anchorPos = primaryRoot.Position
-    local fieldPos = route.Fallback and route.Fallback.Position or anchorPos
-    local total, pinned = 0, 0
-
-    -- Count helper is intentionally repeated rather than creating a new top-level helper.
-    local function allowedMob(mob)
-        for _, wanted in ipairs(route.Names or {}) do
-            if IsEnemyNamed(mob, wanted) then return true end
-        end
-        return false
-    end
-
-    -- Throttle writes, but keep reporting live counts between writes.
-    if now - (self.LastMagnetTick or 0) < interval then
-        for _, mob in ipairs(folder:GetChildren()) do
-            if allowedMob(mob) then
-                local hum = mob:FindFirstChildOfClass("Humanoid")
-                local root = mob:FindFirstChild("HumanoidRootPart")
-                if hum and hum.Health > 0 and root and root.Parent then
-                    local ok, pos = pcall(function() return root.Position end)
-                    if ok and IsValidPos(pos)
-                        and ((pos-fieldPos).Magnitude <= fieldRange
-                            or (pos-anchorPos).Magnitude <= localRange
-                            or (pos-me.Position).Magnitude <= localRange) then
-                        total = total + 1
-                        if mob == primary or (marks[mob] or 0) > now then
-                            pinned = pinned + 1
-                        end
-                    end
-                end
-            end
-        end
-        return pinned, total
-    end
-    self.LastMagnetTick = now
-
-    -- Compatibility path used by classic public magnets. Any unsupported executor
-    -- primitive is contained here and cannot terminate the kaitun.
-    pcall(function() ExpandSimulationRadius() end)
-    pcall(function()
-        if sethiddenproperty then
-            sethiddenproperty(LP, "SimulationRadius", math.huge)
-        end
-    end)
-
-    for _, mob in ipairs(folder:GetChildren()) do
-        if allowedMob(mob) then
-            local hum = mob:FindFirstChildOfClass("Humanoid")
-            local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local okPre, prePos = pcall(function() return root.Position end)
-                local inField = okPre and IsValidPos(prePos)
-                    and ((prePos-fieldPos).Magnitude <= fieldRange
-                        or (prePos-anchorPos).Magnitude <= localRange
-                        or (prePos-me.Position).Magnitude <= localRange)
-                if inField then
-                    total = total + 1
-                    if mob == primary then
-                        marks[mob] = now + ttl
-                        pinned = pinned + 1
-                    else
-                        -- No PlatformStand, no Sit, no BodyPosition: repeated CFrame only.
-                        -- This avoids the statue/ghost state produced by frozen server-owned mobs.
-                        pcall(function()
-                            root.CanCollide = false
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                            root.CFrame = CFrame.new(anchorPos)
-                        end)
-
-                        local okPost, postPos = pcall(function() return root.Position end)
-                        if okPost and IsValidPos(postPos)
-                            and (postPos-anchorPos).Magnitude <= verifyRadius then
-                            marks[mob] = now + ttl
-                            pinned = pinned + 1
-                        else
-                            marks[mob] = nil
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if _G.State then
-        _G.State.ClusterPhase = "KILL"
-        _G.State.ClusterPhaseVerified = pinned
-        _G.State.ClusterPhaseTotal = total
-        _G.State.ClusterLastCandidateCount = total
-        _G.State.ClusterPrimary = primary
-    end
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("SKIP-MAGNET %d/%d"):format(pinned,total)
-        _G.BobonDiagnostics.BringCandidates = total
-        _G.BobonDiagnostics.BringMoved = pinned
-    end
-    return pinned, total
-end
-
 function SkipRouteController:Run()
-    -- v22.11.1: execute-safe direct magnet. This controller is deliberately
-    -- compact and pcall-contained; if magnet writes are unsupported, normal
-    -- movement/combat still continue instead of killing the whole script.
-    local fastReady = CombatController:IsFastReady()
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.SkipBackend = fastReady and "FAST" or "BOOTSTRAP"
+    -- Teddy-style early skip needs a verified fast backend. If damage cannot be
+    -- proven, normal quest farming remains the safe bootstrap/fallback.
+    if not CombatController:IsFastReady() then
+        self:Reset("fast attack not health-verified")
+        return false
     end
 
     local route = self:GetRoute()
@@ -11135,8 +10099,10 @@ function SkipRouteController:Run()
         self.CurrentKey = route.Key
         self.RouteStartTime = os.time()
         self.RouteStartLevel = Level()
-        DLog("SKIP", "Safe direct-magnet route selected: " .. tostring(route.Key))
+        DLog("SKIP", "Teddy route selected: " .. route.Key)
     elseif Level() > (self.RouteStartLevel or 0) then
+        -- Any real level progress refreshes the watchdog without destroying the
+        -- persistent cluster. Floor transition is handled by CurrentKey above.
         self.RouteStartLevel = Level()
         self.RouteStartTime = os.time()
     end
@@ -11144,10 +10110,11 @@ function SkipRouteController:Run()
     if self.RouteStartTime and os.time() - self.RouteStartTime
         > (_G.Settings.SkipRouteFallbackTimeout or 90) then
         self:Reset("skip made no level progress")
-        DLog("SKIP", "Safe direct magnet stalled -> normal quest fallback")
+        DLog("SKIP", "Teddy skip stalled → normal quest fallback")
         return false
     end
 
+    -- The showcase farms these high-level mobs without the normal low-level quest.
     if HasQuest() == true then
         pcall(function() CommF_:InvokeServer("AbandonQuest") end)
         _G.State.ActiveQuestMob = nil
@@ -11155,128 +10122,120 @@ function SkipRouteController:Run()
 
     _G.State:SetMode("Farming")
     _G.State.FState = "SKIP_FARM"
+    _G.BobonStatus = "Level Farming | Skip Mode | "
+        .. (route.Key == "TeddyFloor1" and "Floor 1" or "Floor 2")
 
-    -- v22.17: early skip uses the exact same Teddy sequence engine as normal farm.
-    -- No separate magnet and no moving pile.
-    if _G.Settings.TeddySequenceMode ~= false then
-        local skipName = route.Names and route.Names[1] or tostring(route.Display)
-        _G.State.ActiveQuestMob = skipName
-        return ClusterFarmController:TeddySequenceFarmTick(skipName, route.Fallback, "Skip")
-    end
-    if _G.Settings.TeddyAirSweepMode ~= false then
-        local skipName = route.Names and route.Names[1] or tostring(route.Display)
-        _G.State.ActiveQuestMob = skipName
-        return ClusterFarmController:TeddyAirFarmTick(skipName, route.Fallback, "Skip")
+    -- Keep one persistent spawn anchor and refresh the complete same-name batch.
+    ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
+    ClusterFarmController:Tick()
+
+    local hoverHeight = _G.Settings.FarmHeight or 22
+    local hoverCF = ClusterFarmController:GetHoverCFrame(hoverHeight)
+
+    -- v21.7 CRITICAL FIX:
+    -- Acquire BEFORE requesting the persistent hover anchor. The old order did:
+    --   hoverCF request -> mob request -> next tick hoverCF request
+    -- so the same Farm owner atomically retargeted away from the mob every tick.
+    -- Both Floor 1 and Floor 2 therefore showed found>0, owned=0, stacked=0 and
+    -- appeared to teleport to the island then stand forever.
+    local acquireTarget = ClusterFarmController:GetAcquireTarget()
+    local acquireRoot = acquireTarget
+        and acquireTarget:FindFirstChild("HumanoidRootPart")
+    local acquiring = acquireRoot ~= nil
+        and _G.State:IsTargetValid(acquireTarget)
+        and ClusterFarmController:IsModelAllowed(acquireTarget)
+
+    local primary = ClusterFarmController:SelectPrimary()
+    local target = nil
+    local targetRoot = nil
+
+    if acquiring then
+        -- The acquisition trip owns this tick. Do NOT overwrite it with hoverCF.
+        _G.State.FState = "SKIP_FARM"
+        _G.State.FarmTarget = acquireTarget
+        _G.State.CurrentTarget = acquireTarget
+        target = acquireTarget
+        targetRoot = acquireRoot
+        PrepareCombatTarget(acquireTarget)
+
+        local stacked = ClusterFarmController:GetVerifiedCount()
+        local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
+        _G.BobonStatus = ("Skip: Gathering + attacking %s (%d/%d)")
+            :format(tostring(route.Display or route.Names[1]), stacked, total)
+
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(acquireRoot, "Farm", {
+                arrivalThreshold = _G.Settings.ClusterAcquireArrivalThreshold
+                    or _G.Settings.FarmArrivalThreshold,
+                fallback = hoverCF or route.Fallback,
+                combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
+            })
+        end
+
+    elseif primary then
+        -- No more immediate acquire target: settle above the verified stack.
+        _G.State.FState = "SKIP_FARM"
+        _G.State.FarmTarget = primary
+        _G.State.CurrentTarget = primary
+        target = primary
+        targetRoot = primary:FindFirstChild("HumanoidRootPart")
+        PrepareCombatTarget(primary)
+
+        if hoverCF and _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                fallback = route.Fallback,
+                combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
+                persistent = true,
+            })
+        end
+
+    else
+        -- v21.13: no immediate nearest-mob chase here. RestackBatch gets the first
+        -- chance to remote-pull the whole floor; GetAcquireTarget becomes the single
+        -- bounded fallback only if zero mobs can be proven at the anchor.
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        if hoverCF and _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                fallback = route.Fallback,
+                combatHover = true,
+                speed = _G.Settings.SkipTravelSpeed or 320,
+                persistent = true,
+            })
+        end
+        _G.BobonStatus = "Skip: Remote gathering " .. tostring(route.Display)
+        return true
     end
 
-    -- Preserve a real primary until death so the pile does not jump between mobs.
-    local target, targetName = nil, nil
-    local old = _G.State.FarmTarget
-    if old and old.Parent and _G.State:IsTargetValid(old) then
-        for _, wanted in ipairs(route.Names or {}) do
-            if IsEnemyNamed(old, wanted) then
-                target, targetName = old, wanted
-                break
+    -- HYBRID ATTACK: while acquiring, damage the exact real floor mob as soon as
+    -- it is inside the verified fast-attack range. Once settled, require the
+    -- normal combat anchor. CollectTargets will also include every verified
+    -- same-name mob already stacked at the anchor.
+    local me = HRP()
+    if target and targetRoot and me and _G.State:IsTargetValid(target) then
+        local okPos, targetPos = pcall(function() return targetRoot.Position end)
+        if okPos and IsValidPos(targetPos) then
+            local range = _G.Settings.FastAttackRange or _G.Settings.AttackRange or 100
+            local distance = (me.Position - targetPos).Magnitude
+            local farmHolds = not _G.State.IsTraveling
+                or _G.State.MovementOwner == "Farm"
+            local canHit = distance <= range and farmHolds
+                and (acquiring or TravelManager:IsAtCombatAnchor())
+
+            if canHit then
+                EquipCombatTool()
+                Attack(target, route.Names[1])
             end
         end
     end
-    if not target then
-        target, targetName = self:FindTarget(route)
-    end
 
-    if not target then
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
-        _G.BobonStatus = "Skip: Waiting " .. tostring(route.Display)
-        if route.Fallback and _G.State:CanRequestTravel() then
-            TravelManager:Request(route.Fallback * CFrame.new(0, _G.Settings.FarmHeight or 22, 0), "Farm", {
-                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
-                fallback = route.Fallback,
-                combatHover = true,
-                persistent = false,
-                speed = _G.Settings.SkipTravelSpeed or 360,
-            })
-        end
-        return true
-    end
-
-    local hum = target:FindFirstChildOfClass("Humanoid")
-    local root = target:FindFirstChild("HumanoidRootPart")
-    local me = HRP()
-    if not hum or hum.Health <= 0 or not root or not root.Parent or not me then
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        return true
-    end
-
-    _G.State.FarmTarget = target
-    _G.State.CurrentTarget = target
-    _G.State.ActiveQuestMob = targetName or (route.Names and route.Names[1])
-
-    -- v22.12: Skip no longer has a separate magnet implementation. It uses the
-    -- exact same classic BN SharedBring engine as normal level farm.
-    local pinned, total = 1, 1
-    _G.State.FState = "SHARED_BRING_FARM"
-    if _G.Settings.GatherMobs ~= false then
-        local okBring, countOrErr = pcall(function()
-            return ClusterFarmController:SharedBring(
-                targetName or route.Names[1],
-                root.CFrame,
-                route.Fallback,
-                target
-            )
-        end)
-        if okBring then
-            pinned = tonumber(countOrErr) or 1
-            total = tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates) or pinned
-        else
-            DLog("SKIP-BN", "contained error: " .. tostring(countOrErr))
-        end
-    end
-
-    local display = tostring(route.Display or targetName or (route.Names and route.Names[1]) or "Skip Mob")
-    if total > 1 and pinned < total then
-        _G.BobonStatus = ("Skip: BN bring %s (%d/%d)"):format(display,pinned,total)
-    else
-        _G.BobonStatus = ("Skip: Attacking pile %s (%d/%d)"):format(display,pinned,total)
-    end
-
-    PrepareCombatTarget(target)
-
-    local hoverHeight = tonumber(_G.Settings.FarmHeight) or 22
-    local skipAnchorPos = (_G.Settings.SharedTeddyMode ~= false and ClusterFarmController.SharedPileCFrame)
-        and ClusterFarmController.SharedPileCFrame.Position or root.Position
-    local hoverCF = CFrame.new(skipAnchorPos) * CFrame.new(0, hoverHeight, 0)
-    if _G.State:CanRequestTravel() then
-        TravelManager:Request(hoverCF, "Farm", {
-            arrivalThreshold = _G.Settings.FarmArrivalThreshold,
-            fallback = route.Fallback,
-            combatHover = true,
-            persistent = true,
-            speed = _G.Settings.SkipTravelSpeed or 360,
-        })
-    end
-
-    me = HRP()
-    if not me or not root.Parent then return true end
-    local okPos, targetPos = pcall(function() return root.Position end)
-    if not okPos or not IsValidPos(targetPos) then return true end
-
-    local range = fastReady
-        and (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
-        or math.max(_G.Settings.AttackRange or 20, 40)
-    local distance = (me.Position-targetPos).Magnitude
-    local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
-    if distance <= range and farmHolds then
-        _G.State.FState = "SHARED_ATTACK"
-        EquipCombatTool()
-        Attack(target, route.Names[1])
-    else
-        _G.State.FState = "SHARED_BRING_FARM"
-    end
     return true
 end
+
 
 -- ══════════════════════════════════════════════════════════════════
 --          FIGHTING STYLE PROGRESSION v17 — FARM-COOPERATIVE
@@ -17098,7 +16057,7 @@ task.spawn(function()
                 end
                 _G.State.QuestClosedStable =
                     questNow - (_G.State.QuestClosedSince or questNow)
-                        >= (_G.Settings.QuestCloseConfirm or 0.20)
+                        >= (_G.Settings.QuestCloseConfirm or 0.80)
             else
                 -- unreadable/rebuilding UI is never evidence that the quest closed
                 _G.State.QuestClosedStable = false
@@ -17229,19 +16188,19 @@ task.spawn(function()
             -- v21.33: retain the canonical active quest across a brief wrapper blink.
             -- Without this lease the controller cleared Farm, opened a "safe item window",
             -- and could launch BossManager before the Quest UI rebuilt.
-            if not hasQuest and questState == nil and questMatch ~= false
+            if not hasQuest and questState == false and questMatch ~= false
                 and _G.State.ActiveQuestMob
                 and questNow - (_G.State.QuestLastSeenAt or 0)
-                    <= (_G.Settings.QuestUILease or 0.65) then
+                    <= (_G.Settings.QuestUILease or 1.25) then
                 hasQuest = true
             end
             -- Right after StartQuest, some UI builds briefly hide/rebuild the
             -- Quest wrapper. Do not cancel the accepted quest and fly back to
             -- the giver during that short transition.
-            if not hasQuest and questState == nil and questMatch ~= false
+            if not hasQuest and questMatch ~= false
                 and _G.State.LastQuestAccepted > 0
                 and tick() - _G.State.LastQuestAccepted
-                    <= math.min(_G.Settings.QuestAcceptGrace or 1.25, 1.25) then
+                    <= (_G.Settings.QuestAcceptGrace or 6) then
                 hasQuest = true
             end
             local questOk = hasQuest
@@ -17251,28 +16210,50 @@ task.spawn(function()
             -- không còn xác nhận được đều phải quay lại giver ngay trong tick
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
-                -- HARD QUEST-FIRST: a confirmed closed/wrong quest cannot fall
-                -- through to farm, boss, item, or stale travel in this tick.
+                -- v21.35: Sea gates and permanent item work are scheduler-owned.
+                -- A confirmed closed quest is still the safe window for optional
+                -- user-enabled event/boss work that is intentionally not permanent.
+
+                -- A confirmed closed quest is the only safe window for
+                -- optional kaitun items/boss drops. The old placement was
+                -- below this return path, so Saber/Pole/BossManager were
+                -- logically unreachable and never ran at all.
+                -- The wrapper is authoritative here. A completed quest can
+                -- leave stale title text behind, so questMatch may still be
+                -- true even though there is no active quest.
+                local safeItemWindow = questState == false
+                    and _G.State.QuestClosedStable == true
+                    and _G.State.ActiveQuestMob == nil
+                if safeItemWindow then
+                    local okIndra, indraResult = pcall(function() return IndraController:TryRun() end)
+                    if okIndra and indraResult then return end
+                    local okRainbow, rainbowResult = pcall(function() return RainbowHakiController:TryRun() end)
+                    if okRainbow and rainbowResult then return end
+                    -- Permanent items and Fragment Raid are Priority Scheduler-owned.
+
+                    local okBoss, bossResult = pcall(function()
+                        return BossManager:TryFightBoss()
+                    end)
+                    if not okBoss then
+                        warn("[BobonHub] Module Error: BossManager: " .. tostring(bossResult))
+                    elseif bossResult then
+                        return
+                    end
+                end
+
                 FarmPositionController:ReleaseCluster()
                 _G.State:ClearTargets()
-                _G.State.ActiveQuestMob = nil
-                if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-                    TravelManager:Stop("QuestClosedRefresh")
-                end
+                -- Request(q.QC) below atomically replans a stale Farm goal.
+                -- Do not destroy/recreate BodyMovers every 0.15 seconds.
                 _G.State:SetMode("GettingQuest")
-                _G.State.FState = "QUEST_REFRESH"
                 _G.BobonStatus = "Quest: Refreshing " .. q.M
+                DLog("QUEST", "Quest missing/complete/wrong → refresh " .. q.M)
                 local hrp = HRP()
-                local atGiver = hrp and (hrp.Position - q.QC.Position).Magnitude
-                    <= (_G.Settings.QuestInteractDistance or 8)
-                if HandleQuestAtGiver(q, atGiver) then return end
-                _G.State.FState = "QUEST_TRAVEL"
-                _G.BobonStatus = "Quest: Traveling to " .. q.M
-                TravelManager:Request(q.QC, "Farm", {
-                    arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
-                    combatHover = false,
-                    persistent = false,
-                })
+                local atGiver = hrp and (hrp.Position - q.QC.Position).Magnitude <= (_G.Settings.QuestInteractDistance or 8)
+                if HandleQuestAtGiver(q, atGiver) then
+                    return
+                end
+                TravelManager:Request(q.QC, "Farm")
                 return
             end
 
@@ -17291,11 +16272,7 @@ task.spawn(function()
                         if HandleQuestAtGiver(q, atGiver) then
                             return
                         else
-                            TravelManager:Request(q.QC, "Farm", {
-                                arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
-                                combatHover = false,
-                                persistent = false,
-                            })
+                            TravelManager:Request(q.QC, "Farm")
                             return
                         end
                     end
@@ -17312,11 +16289,7 @@ task.spawn(function()
                     return
                 else
                     _G.BobonStatus = "Quest: Traveling to " .. q.M
-                    TravelManager:Request(q.QC, "Farm", {
-                                arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
-                                combatHover = false,
-                                persistent = false,
-                            })
+                    TravelManager:Request(q.QC, "Farm")
                     return
                 end
             end
