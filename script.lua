@@ -1,11 +1,10 @@
 -- =================================================================
---         BOBON HUB v22.20.1 EXEC-FIX | EFFECT-ONLY DODGE | TEDDY LOCKED
+--         BOBON HUB v22.20.2 EXEC-RECOVERY | MINIMAL EFFECT DODGE
 --         Base: v22.19.1 EXEC-SAFE QUEST-FIRST
---  [D201-1] Rebuilt from the last execute-safe base; no malformed dodge state machine.
---  [D201-2] Raw damage, Stun/Busy, ordinary M1 and animation alone NEVER trigger dodge.
---  [D201-3] Dodge requires a real named skill/slash effect spawned by the active NPC,
---           either overlapping the player or physically travelling toward the player.
---  [D201-4] Teddy bring / quest-first blocks are not modified.
+--  [D202-1] Rebased byte-for-byte from v22.19.1; no new controller/local/thread.
+--  [D202-2] Teddy bring and quest-first logic remain untouched.
+--  [D202-3] Dodge trigger is restricted to an already-spawned tracked skill hazard.
+--  [D202-4] Raw damage, Stun/Busy, root velocity and animation alone cannot trigger dodge.
 -- =================================================================
 -- =================================================================
 --         BOBON HUB v22.19.1 EXEC-SAFE QUEST-FIRST | TEDDY v22.17 LOCKED
@@ -1615,23 +1614,23 @@ _G.Settings = {
     DodgeKeepAttacking  = true,
     DodgeSideStepOnly   = true,
     -- Target-lock side-step: same TravelManager owner, same target, same combat stream.
-    DodgeCooldown       = 0.30,
+    DodgeCooldown       = 0.85,
     DodgeDistance       = 18,
     DodgeHeight         = 0,
-    DodgeRadius         = 46,
+    DodgeRadius         = 42,
     DodgeEmergencySpeed = 380,
-    DodgeMinHold        = 0.12,
-    DodgeSafeConfirm    = 0.18,
-    DodgeMaxHold        = 0.90,
+    DodgeMinHold        = 0.10,
+    DodgeSafeConfirm    = 0.12,
+    DodgeMaxHold        = 0.40,
     DodgeDamageFallbackHold = 1.10,
     DodgeReplanInterval = 999,
-    DodgeMonitorInterval= 0.04,
-    DodgeHazardTTL      = 0.90,
+    DodgeMonitorInterval= 0.05,
+    DodgeHazardTTL      = 1.20,
     DodgeHazardMargin   = 6,
-    DodgeHazardTrackRadius = 72,
+    DodgeHazardTrackRadius = 65,
     DodgeConfirmSamples = 1,
-    DodgeGlobalHazardRadius = 34,
-    DodgeTargetHazardRadius = 55,
+    DodgeGlobalHazardRadius = 18,
+    DodgeTargetHazardRadius = 70,
     QuestUILease        = 0.65,
     QuestCloseConfirm   = 0.20,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
@@ -10189,7 +10188,6 @@ local ATTACK_WORDS = {
 local HARD_HAZARD_WORDS = {
     "projectile","beam","blast","explosion","shockwave","aoe",
     "vortex","tornado","laser","eruption",
-    "slash","slice","cleave","swordwave","blade wave","cutwave","cut wave",
 }
 
 local function WordMatch(text, words)
@@ -10274,19 +10272,13 @@ local function TrackHazard(obj)
 
     local ok, pos, size = pcall(function() return obj.Position, obj.Size end)
     if not ok or not IsValidPos(pos) then return end
-    if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 72) then return end
+    if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 65) then return end
+    if (pos - targetRoot.Position).Magnitude > (_G.Settings.DodgeTargetHazardRadius or 70) then return end
 
     local label = tostring(obj.Name or "") .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
     if not WordMatch(label, HARD_HAZARD_WORDS) then return end
-    if math.max(size.X,size.Y,size.Z) < 0.5 then return end
-
-    -- Strict source rule: only an effect attached to the active mob, or born close
-    -- to that mob, is allowed to arm dodge. Random world/player effects are ignored.
-    local fromTarget = obj:IsDescendantOf(target)
-    local sourceDistance = (pos - targetRoot.Position).Magnitude
-    if not fromTarget and sourceDistance > 45 then return end
-
-    DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 0.90)
+    if math.max(size.X,size.Y,size.Z) < 2 then return end
+    DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 1.2)
 end
 
 local hazardConn = workspace.DescendantAdded:Connect(function(obj)
@@ -10316,61 +10308,37 @@ end
 
 local function ActiveHazardNear(me, targetRoot)
     if not me or not targetRoot then return nil end
-    local now = tick()
-    for part, expires in pairs(DodgeController.HazardParts) do
-        if not part.Parent or now > expires then
-            DodgeController.HazardParts[part] = nil
+    local now=tick()
+    local best
+    for part,expires in pairs(DodgeController.HazardParts) do
+        if not part.Parent or now>expires then
+            DodgeController.HazardParts[part]=nil
         else
-            local ok, pos, size, velocity = pcall(function()
-                return part.Position, part.Size, part.AssemblyLinearVelocity
-            end)
+            local ok,pos=pcall(function() return part.Position end)
             if ok and IsValidPos(pos)
-                and (pos - targetRoot.Position).Magnitude <= (_G.Settings.DodgeTargetHazardRadius or 55) then
-
-                -- Already touching/covering our hover position = definite skill danger.
-                if HazardTouchesPoint(part, me.Position) then
-                    return part
-                end
-
-                -- A real emitted projectile/slash travelling toward the player.
-                -- Bring/root correction never enters here because only tracked named
-                -- skill-effect parts are evaluated, never the NPC HumanoidRootPart.
-                local toMe = me.Position - pos
-                local distance = toMe.Magnitude
-                local speed = velocity.Magnitude
-                if distance <= (_G.Settings.DodgeGlobalHazardRadius or 34)
-                    and speed >= 10 and distance > 0.05 then
-                    local dir = velocity.Unit
-                    local dot = dir:Dot(toMe.Unit)
-                    if dot >= 0.45 then
-                        local forward = toMe:Dot(dir)
-                        local eta = forward / math.max(speed, 0.01)
-                        local lateral = (toMe - dir * math.max(forward, 0)).Magnitude
-                        local hitRadius = math.max(size.X,size.Y,size.Z) * 0.5
-                            + (_G.Settings.DodgeHazardMargin or 6) + 3
-                        if forward >= 0 and eta <= 0.55 and lateral <= hitRadius then
-                            return part
-                        end
-                    end
-                end
+                and (pos-me.Position).Magnitude <= (_G.Settings.DodgeGlobalHazardRadius or 18)
+                and (pos-targetRoot.Position).Magnitude <= (_G.Settings.DodgeTargetHazardRadius or 70)
+                and HazardTouchesPoint(part,me.Position) then
+                best=part
+                break
             end
         end
     end
-    return nil
+    return best
 end
 
 local function TargetThreat()
-    local target, root, hum = ActiveCombatModel()
-    local me = HRP()
+    local target,root,hum=ActiveCombatModel()
+    local me=HRP()
     if not target or not root or not hum or not me then return nil,nil,nil end
-    local dist = (root.Position - me.Position).Magnitude
-    if dist > (_G.Settings.DodgeRadius or 46) then return nil,nil,nil end
+    local dist=(root.Position-me.Position).Magnitude
+    if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
 
-    -- HARD RULE: damage taken, Stun/Busy, NPC velocity and attack animation alone
-    -- are never dodge evidence. Only a real emitted skill effect can move Farm.
-    local hazard = ActiveHazardNear(me, root)
-    if hazard then
-        return target, root, "skill-effect:" .. tostring(hazard.Name or hazard.ClassName)
+    -- v22.20.2: HARD trigger only. Damage taken, Stun/Busy, NPC/root velocity
+    -- and an animation by itself are ignored so Teddy acquire/stack is never
+    -- interrupted by ordinary combat or replication corrections.
+    if ActiveHazardNear(me,root) then
+        return target,root,"spawned-skill-hazard"
     end
     return nil,nil,nil
 end
