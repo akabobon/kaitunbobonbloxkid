@@ -1,7 +1,24 @@
 -- =================================================================
---         BOBON HUB v22.12 | CLASSIC BN BRING REBASE
+--         BOBON HUB v22.13 | TEDDY FULL-BATCH BRING
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.11.1 EXEC FIX | Version: v22.12
+--         Base: v22.12 CLASSIC BN BRING REBASE | Version: v22.13
+--
+--
+--  v22.13 TEDDY FULL-BATCH BRING (VIDEO Roblox(21) + old Teddy behavior):
+--  [T23-1] Normal level farm + Sea1 skip no longer center the pile on the current
+--          victim. One fixed field anchor survives target death exactly like the
+--          earlier Teddy-style Bobon farm.
+--  [T23-2] Snapshot ALL matching live mobs in the active field BEFORE moving any;
+--          then restack the complete batch to the exact same anchor in one pass.
+--  [T23-3] Heartbeat keeps the latest whole batch pinned to that anchor while a
+--          0.03s rescan adds new respawns. No BodyPosition, ChangeState(14),
+--          WalkSpeed=0, ownership gate, probe wave, or per-mob queue.
+--  [T23-4] Primary is only the representative damage target. Switching/dying primary
+--          never relocates or releases the pile.
+--  [T23-5] Shared fan-out accepts only roots that the Teddy batch actually restacked
+--          at the live anchor recently; no visual-only proximity admission.
+--  [T23-6] SharedPrimaryNoDamage release loop is disabled for Teddy mode so a single
+--          bad victim cannot tear down the whole pile every few seconds.
 --
 --  v22.12 CLASSIC BN BRING REBASE (replaces v22.11.1 direct magnet):
 --  [V22.11.1-1] Built from the last execute-safe v22.10 base. No new top-level local
@@ -1305,9 +1322,15 @@ _G.Settings = {
     SharedBringRange     = 350,
     SharedBringFieldRange = 1200, -- active field only; avoids cross-island physics work
     SharedBringMaxMobs   = 0, -- 0 = all matching mobs in the active field
-    SharedBringInterval  = 0.08,
+    SharedBringInterval  = 0.03,
     SharedFarmHeight     = 25,
-    SharedFixedPile      = false, -- v22 reference core: target is authoritative; fixed pile is optional legacy mode
+    -- v22.13: exact Teddy-style full-field batch magnet.
+    SharedTeddyMode      = true,
+    SharedTeddyScanInterval = 0.03,
+    SharedTeddyVerifyTTL = 0.35,
+    SharedTeddyVerifyRadius = 12,
+    SharedTeddyMaxDistance = 3000,
+    SharedFixedPile      = true,
     SharedPileEmptyHold  = 2.0,
     SharedBringP         = 3000,
     SharedBringD         = 100,
@@ -7522,6 +7545,10 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedProbeState = setmetatable({}, {__mode="k"})
     self.SharedClassicStableAt = setmetatable({}, {__mode="k"})
     self.SharedClassicCurrentPile = nil
+    self.SharedTeddyBatch = {}
+    self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
+    self.SharedTeddyLastScanAt = 0
+    self.SharedTeddyActive = false
     self.SharedNextProbeWaveAt = 0
     self.SharedPrimaryWatchTarget = nil
     self.SharedPrimaryWatchHealth = nil
@@ -7637,9 +7664,29 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
     self.SharedMobName = mobName
     local root = target and target:FindFirstChild("HumanoidRootPart")
 
-    -- v22 reference core: the live quest victim is the authoritative combat anchor.
-    -- Bring may pull other same-name mobs toward this point, but the farm never waits
-    -- for a fixed visual pile to become valid before it attacks.
+    -- v22.13 TEDDY: one field anchor survives every primary death.  Prefer the
+    -- canonical quest/skip field center (fallbackCF) just like the old Teddy farm.
+    -- The live target is only a representative victim and never owns the pile.
+    if _G.Settings.SharedTeddyMode ~= false then
+        if self.SharedPileCFrame and IsValidPos(self.SharedPileCFrame.Position) then
+            return self.SharedPileCFrame
+        end
+        local chosen = nil
+        if fallbackCF and typeof(fallbackCF) == "CFrame" and IsValidPos(fallbackCF.Position) then
+            chosen = CFrame.new(fallbackCF.Position)
+        elseif fallbackCF and typeof(fallbackCF) == "Vector3" and IsValidPos(fallbackCF) then
+            chosen = CFrame.new(fallbackCF)
+        elseif root and root.Parent and IsValidPos(root.Position) then
+            chosen = CFrame.new(root.Position)
+        end
+        if chosen then
+            self.SharedPileCFrame = chosen
+            self.SharedPileStartedAt = tick()
+            self.SharedTeddyActive = true
+        end
+        return self.SharedPileCFrame
+    end
+
     if _G.Settings.ReferenceCoreMode == true or _G.Settings.SharedFixedPile == false then
         self.SharedPileCFrame = nil
         self.SharedPileStartedAt = 0
@@ -7656,43 +7703,130 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
     return self.SharedPileCFrame
 end
 
+function ClusterFarmController:SharedTeddyRestack(forceScan)
+    if _G.Settings.SharedTeddyMode == false then return 0, 0 end
+    if not self.SharedTeddyActive or not self.SharedPileCFrame or not self.SharedMobName then
+        return 0, 0
+    end
+    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
+        return 0, 0
+    end
+
+    local folder = workspace:FindFirstChild("Enemies")
+    if not folder then return 0, 0 end
+
+    local now = tick()
+    local anchor = self.SharedPileCFrame.Position
+    local maxDistance = math.max(100,
+        tonumber(_G.Settings.SharedTeddyMaxDistance)
+        or tonumber(_G.Settings.GatherMaxDistance) or 3000)
+    local scanEvery = math.max(0.015,
+        tonumber(_G.Settings.SharedTeddyScanInterval) or 0.03)
+
+    pcall(function() ExpandSimulationRadius() end)
+
+    self.SharedTeddyBatch = self.SharedTeddyBatch or {}
+    self.SharedTeddyVerified = self.SharedTeddyVerified
+        or setmetatable({}, {__mode="k"})
+
+    -- TEDDY rule: snapshot the WHOLE active spawn before moving anything.
+    if forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery then
+        self.SharedTeddyLastScanAt = now
+        local snapshot = {}
+        for _, mob in ipairs(folder:GetChildren()) do
+            if IsEnemyNamed(mob, self.SharedMobName) then
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                local root = mob:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                    local okPos, pos = pcall(function() return root.Position end)
+                    if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+                        and IsSubmergedPosition(pos) == IsSubmergedPosition(anchor)
+                        and (pos - anchor).Magnitude <= maxDistance then
+                        snapshot[#snapshot + 1] = {
+                            Model = mob,
+                            Humanoid = hum,
+                            Root = root,
+                        }
+                    end
+                end
+            end
+        end
+        self.SharedTeddyBatch = snapshot
+    end
+
+    -- One tight pass: every member goes to the exact SAME anchor.
+    local kept, moved = {}, 0
+    for _, entry in ipairs(self.SharedTeddyBatch) do
+        local mob = entry.Model
+        local hum = mob and mob:FindFirstChildOfClass("Humanoid")
+        local root = mob and mob:FindFirstChild("HumanoidRootPart")
+        if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent
+            and not root.Anchored and IsEnemyNamed(mob, self.SharedMobName) then
+            local ok = pcall(function()
+                local rot = root.CFrame.Rotation
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = CFrame.new(anchor) * rot
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+            if ok then
+                self.SharedTeddyVerified[root] = now
+                kept[#kept + 1] = entry
+                moved = moved + 1
+            end
+        end
+    end
+    self.SharedTeddyBatch = kept
+    self.SharedBringCount = moved
+    self.SharedClassicCurrentPile = anchor
+
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = ("TEDDY-ALL %d/%d"):format(moved, #kept)
+        _G.BobonDiagnostics.BringCandidates = #kept
+        _G.BobonDiagnostics.BringMoved = moved
+        _G.BobonDiagnostics.BringFailed = 0
+        _G.BobonDiagnostics.BringOwned = 0
+        _G.BobonDiagnostics.BringUnknown = 0
+        _G.BobonDiagnostics.BringServerOwned = 0
+        _G.BobonDiagnostics.BringHPProven = 0
+        _G.BobonDiagnostics.BringProbing = 0
+    end
+    return moved, #kept
+end
+
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return 0 end
-    if type(mobName) ~= "string" or mobName == "" or not pileCF then return 0 end
+    if type(mobName) ~= "string" or mobName == "" then return 0 end
 
     if self.SharedMobName and string.lower(self.SharedMobName) ~= string.lower(mobName) then
         self:SharedRelease("QuestMobChanged")
     end
     self.SharedMobName = mobName
 
+    if _G.Settings.SharedTeddyMode ~= false then
+        -- Ignore the moving primary CFrame. The fixed field anchor comes from
+        -- fallbackCF and survives target death.
+        self:SharedEnsurePile(mobName, primaryTarget, fallbackCF or pileCF)
+        if not self.SharedPileCFrame then return 0 end
+        self.SharedTeddyActive = true
+        local moved = self:SharedTeddyRestack(true)
+        return moved
+    end
+
+    -- Legacy v22.12 BN path retained as fallback when Teddy mode is disabled.
     local now = tick()
     local interval = math.max(0.04, tonumber(_G.Settings.SharedBringInterval) or 0.08)
     if now - (self.SharedLastBringAt or 0) < interval then
         return self.SharedBringCount or 0
     end
     self.SharedLastBringAt = now
-
-    -- Classic BN/public-magnet basis: request simulation first, then keep a soft
-    -- physics hold on every same-name secondary at ONE real primary anchor.
-    -- There is deliberately no ownership gate, HP lease, probe wave, or acquire phase.
     pcall(function() ExpandSimulationRadius() end)
-    pcall(function()
-        if type(sethiddenproperty) == "function" then
-            sethiddenproperty(LP, "SimulationRadius", math.huge)
-            pcall(function() sethiddenproperty(LP, "MaximumSimulationRadius", math.huge) end)
-        end
-    end)
-    pcall(function()
-        if type(setsimulationradius) == "function" then
-            setsimulationradius(math.huge, math.huge)
-        end
-    end)
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    if not folder or not me then return 0 end
-
+    if not folder or not me or not pileCF then return 0 end
     local pilePos = pileCF.Position
     local fieldCenter = fallbackCF and fallbackCF.Position or pilePos
     local localRange = math.max(120, tonumber(_G.Settings.SharedBringRange) or 350)
@@ -7701,116 +7835,44 @@ function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryT
     local maxForce = tonumber(_G.Settings.SharedBringMaxForce) or 1000000
     local pGain = tonumber(_G.Settings.SharedBringP) or 3000
     local dGain = tonumber(_G.Settings.SharedBringD) or 100
-    local stableDelay = math.max(0.08, tonumber(_G.Settings.SharedClassicStableDelay) or 0.14)
-    local verifyRadius = math.max(6, tonumber(_G.Settings.SharedClassicVerifyRadius) or 14)
-    local hardSnapDistance = math.max(10, tonumber(_G.Settings.SharedClassicHardSnapDistance) or 22)
-
     self.SharedClassicStableAt = self.SharedClassicStableAt or setmetatable({}, {__mode="k"})
     self.SharedClassicCurrentPile = pilePos
-
-    local candidates, moved, stable, failed = 0, 0, 0, 0
-
-    local function releaseClassic(mob, root)
-        if root then
-            self.SharedClassicStableAt[root] = nil
-            local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
-            if bp then pcall(function() bp:Destroy() end) end
-        end
-        self:SharedRestoreOne(mob)
-    end
+    local candidates, stable = 0, 0
 
     for _, mob in ipairs(folder:GetChildren()) do
         if IsEnemyNamed(mob, mobName) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
             if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local okPos, pos = pcall(function() return root.Position end)
-                local inField = okPos and IsValidPos(pos)
-                    and ((pos - fieldCenter).Magnitude <= fieldRange
-                        or (pos - pilePos).Magnitude <= localRange
-                        or (pos - me.Position).Magnitude <= localRange)
-
+                local pos = root.Position
+                local inField = IsValidPos(pos)
+                    and ((pos-fieldCenter).Magnitude <= fieldRange
+                        or (pos-pilePos).Magnitude <= localRange
+                        or (pos-me.Position).Magnitude <= localRange)
                 if inField and (maxMobs <= 0 or candidates < maxMobs) then
                     candidates = candidates + 1
-
                     if mob == primaryTarget then
-                        -- The primary is real and never frozen/moved by bring.
-                        self.SharedClassicStableAt[root] = self.SharedClassicStableAt[root] or now
                         stable = stable + 1
                     else
-                        self:SharedRemember(hum, "Humanoid")
-                        self:SharedRemember(root, "Part")
-                        local head = mob:FindFirstChild("Head")
-                        if head and head:IsA("BasePart") then self:SharedRemember(head, "Part") end
-
-                        local okMove = pcall(function()
-                            root.CanCollide = false
-                            if head and head:IsA("BasePart") then head.CanCollide = false end
-                            hum.WalkSpeed = 0
-                            hum.AutoRotate = false
-                            if _G.Settings.SharedClassicState14 ~= false then
-                                hum:ChangeState(14)
-                            end
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-
+                        pcall(function()
                             local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
                             if not bp then
                                 bp = Instance.new("BodyPosition")
                                 bp.Name = "BobonSharedEnemyFlyPosition"
                                 bp.Parent = root
                             end
-                            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+                            bp.MaxForce = Vector3.new(maxForce,maxForce,maxForce)
                             bp.P = pGain
                             bp.D = dGain
                             bp.Position = pilePos
-
-                            if (root.Position - pilePos).Magnitude > hardSnapDistance then
-                                root.CFrame = CFrame.new(pilePos)
-                            end
                         end)
-
-                        if okMove then
-                            moved = moved + 1
-                            local okAfter, afterPos = pcall(function() return root.Position end)
-                            if okAfter and IsValidPos(afterPos)
-                                and (afterPos - pilePos).Magnitude <= verifyRadius then
-                                local since = self.SharedClassicStableAt[root]
-                                if not since then
-                                    since = now
-                                    self.SharedClassicStableAt[root] = since
-                                end
-                                if now - since >= stableDelay then
-                                    stable = stable + 1
-                                end
-                            else
-                                self.SharedClassicStableAt[root] = nil
-                            end
-                        else
-                            failed = failed + 1
-                            releaseClassic(mob, root)
-                        end
+                        stable = stable + 1
                     end
-                elseif mob ~= primaryTarget then
-                    -- Do not leave an old mob frozen after it exits this farm field.
-                    releaseClassic(mob, root)
                 end
             end
         end
     end
-
     self.SharedBringCount = stable
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("BN-CLASSIC %d/%d"):format(stable, candidates)
-        _G.BobonDiagnostics.BringCandidates = candidates
-        _G.BobonDiagnostics.BringMoved = moved
-        _G.BobonDiagnostics.BringFailed = failed
-        _G.BobonDiagnostics.BringOwned = 0
-        _G.BobonDiagnostics.BringUnknown = 0
-        _G.BobonDiagnostics.BringServerOwned = 0
-        _G.BobonDiagnostics.BringHPProven = 0
-        _G.BobonDiagnostics.BringProbing = 0
-    end
     return stable
 end
 
@@ -7822,10 +7884,21 @@ function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
 
+    if _G.Settings.SharedTeddyMode ~= false then
+        local at = self.SharedTeddyVerified and self.SharedTeddyVerified[root]
+        local anchorCF = self.SharedPileCFrame
+        if not at or not anchorCF then return false end
+        local ttl = math.max(0.10, tonumber(_G.Settings.SharedTeddyVerifyTTL) or 0.35)
+        if tick() - at > ttl then return false end
+        local ok, pos = pcall(function() return root.Position end)
+        if not ok or not IsValidPos(pos) then return false end
+        local radius = math.max(5, tonumber(_G.Settings.SharedTeddyVerifyRadius) or 12)
+        return (pos - anchorCF.Position).Magnitude <= radius
+    end
+
     local pilePos = self.SharedClassicCurrentPile
     local since = self.SharedClassicStableAt and self.SharedClassicStableAt[root]
     if not pilePos or not since then return false end
-
     local ok, pos = pcall(function() return root.Position end)
     if not ok or not IsValidPos(pos) then return false end
     local verifyRadius = math.max(6, tonumber(_G.Settings.SharedClassicVerifyRadius) or 14)
@@ -7874,6 +7947,16 @@ end
 
 function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     if _G.Settings.SharedSourceFarmMode == false then return false end
+    -- Teddy mode establishes the fixed field anchor and magnetizes the full spawn
+    -- before choosing a representative damage target.
+    if _G.Settings.SharedTeddyMode ~= false then
+        self:SharedEnsurePile(mobName, nil, fallbackCF)
+        if self.SharedPileCFrame then
+            self.SharedTeddyActive = true
+            pcall(function() self:SharedTeddyRestack(true) end)
+        end
+    end
+
     local target = self:SharedSelectTarget(mobName)
 
     if not target then
@@ -7906,10 +7989,7 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     end
 
     self.SharedEmptySince = 0
-    if _G.Settings.ReferenceCoreMode == true then
-        -- A mob that was a secondary magnet victim on the previous kill may now
-        -- become the authoritative target. Remove its old BodyPosition/freeze first;
-        -- the server is then free to expose its real position while combat keeps going.
+    if _G.Settings.ReferenceCoreMode == true and _G.Settings.SharedTeddyMode == false then
         self:SharedRestoreOne(target)
     end
     local hum = target:FindFirstChildOfClass("Humanoid")
@@ -7935,7 +8015,8 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     end
 
     local hoverHeight = tonumber(_G.Settings.SharedFarmHeight) or 25
-    local targetPosition = root.Position
+    local targetPosition = (_G.Settings.SharedTeddyMode ~= false and self.SharedPileCFrame)
+        and self.SharedPileCFrame.Position or root.Position
     local hoverCF = CFrame.new(targetPosition) * CFrame.new(0, hoverHeight, 0)
     if _G.State:CanRequestTravel() then
         TravelManager:Request(hoverCF, "Farm", {
@@ -7958,7 +8039,8 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
         local attempted = Attack(target, mobName)
         _G.State.FState = "SHARED_ATTACK"
 
-        if attempted and self:SharedPrimaryNoDamage(target, true) then
+        if _G.Settings.SharedTeddyMode == false
+            and attempted and self:SharedPrimaryNoDamage(target, true) then
             -- A real primary at its real position has stopped producing HP deltas. Release
             -- all visual secondary movers first, then invalidate the stale combat backend.
             -- The next tick keeps the same quest and re-enters fast target handoff cleanly.
@@ -7981,7 +8063,12 @@ function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
         self:SharedPrimaryNoDamage(nil, false)
     end
 
-    if _G.Settings.ReferenceCoreMode == true then
+    if _G.Settings.SharedTeddyMode ~= false then
+        local total = tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates)
+            or tonumber(bringCount) or 0
+        _G.BobonStatus = ("Farm: Teddy pile • %s • %d/%d")
+            :format(tostring(mobName), tonumber(bringCount) or 0, total)
+    elseif _G.Settings.ReferenceCoreMode == true then
         _G.BobonStatus = ("Killing Mob: %s • bring %d (optional)")
             :format(tostring(mobName), tonumber(bringCount) or 0)
     else
@@ -8007,7 +8094,10 @@ local ClusterHeartbeatConnection
 pcall(function()
     ClusterHeartbeatConnection = RunService.Heartbeat:Connect(function()
         if not SessionAlive() then return end
-        if _G.State and _G.State.ClusterMode ~= "OFF" then
+        if _G.Settings.SharedTeddyMode ~= false
+            and ClusterFarmController.SharedTeddyActive == true then
+            pcall(function() ClusterFarmController:SharedTeddyRestack(false) end)
+        elseif _G.State and _G.State.ClusterMode ~= "OFF" then
             pcall(function() ClusterFarmController:RestackVerifiedOnly() end)
         end
     end)
@@ -10353,7 +10443,9 @@ function SkipRouteController:Run()
     PrepareCombatTarget(target)
 
     local hoverHeight = tonumber(_G.Settings.FarmHeight) or 22
-    local hoverCF = CFrame.new(root.Position) * CFrame.new(0, hoverHeight, 0)
+    local skipAnchorPos = (_G.Settings.SharedTeddyMode ~= false and ClusterFarmController.SharedPileCFrame)
+        and ClusterFarmController.SharedPileCFrame.Position or root.Position
+    local hoverCF = CFrame.new(skipAnchorPos) * CFrame.new(0, hoverHeight, 0)
     if _G.State:CanRequestTravel() then
         TravelManager:Request(hoverCF, "Farm", {
             arrivalThreshold = _G.Settings.FarmArrivalThreshold,
