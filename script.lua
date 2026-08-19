@@ -1,13 +1,15 @@
 -- =================================================================
---         BOBON HUB v22.21 TRIO FOLLOW BRING | QUEST-MOB ONLY
---         Base: v22.20.2 EXEC-RECOVERY
---  [TF21-1] Bring batch is capped at 3 live mobs and strictly matches the active quest mob name.
---  [TF21-2] Each mob must show real HP loss before its first physical snap.
---  [TF21-3] One-write persistence is verified against the ORIGINAL snap point, not a moving anchor.
---  [TF21-4] After verification, the trio follows the player's X/Z at a rate-limited cadence.
---  [TF21-5] Pile Y follows the active camp/mob ground level instead of player.Y-depth, avoiding vertical drift.
---  [TF21-6] No BodyPosition/PlatformStand/ChangeState freeze; failed ownership is revoked and retried.
---  [TF21-7] Existing quest-first and minimal skill-effect dodge logic are left outside this bring rewrite.
+--         BOBON HUB v22.22 MOVING TRIO + QUEST CHECKPOINTS
+--         Base: v22.21 TRIO FOLLOW BRING
+--  [T22-1] Bring selects at most 3 live mobs whose canonical name matches the active quest/skip mob.
+--  [T22-2] HP loss is NOT a bring gate. Explicit ownership brings immediately; unknown ownership uses
+--          a one-shot proximity persistence proof against the original snap point.
+--  [T22-3] Verified trio members follow the player's current X/Z while the player acquires the next mob.
+--  [T22-4] Pile Y is raycast to the real surface below the player so the trio stays underfoot.
+--  [T22-5] No Animator deletion, PlatformStand, BodyPosition, or ChangeState freeze in this path.
+--  [Q22-1] Saber is checkpoint-driven: Plate1->5, Torch/Burn, Cup/SickMan, RichSon/Relic, Saber Expert.
+--  [Q22-2] Bartilo is checkpoint-driven: verified Swan quest -> Jeremy -> 8-point Colosseum maze.
+--  [Q22-3] Hidden/completed quest UI clears stale ActiveQuestMob immediately; missing quest cannot farm.
 -- =================================================================
 -- =================================================================
 --         BOBON HUB v22.20.2 EXEC-RECOVERY | MINIMAL EFFECT DODGE
@@ -1413,15 +1415,15 @@ _G.Settings = {
     -- v22.21 trio-follow bring: maximum three quest mobs under the player.
     TeddyTrioMax = 3,
     TeddyTrioFieldRange = 1800,
-    TeddyTrioFollowInterval = 0.05,
-    TeddyTrioFollowVerifyRadius = 14,
-    TeddyTrioFollowLeash = 72,
+    TeddyTrioFollowInterval = 0.03,
+    TeddyTrioFollowVerifyRadius = 18,
+    TeddyTrioFollowLeash = 110,
     TeddyTrioGroundOffset = 0,
-    TeddyTrioAcquireRadius = 38,
-    TeddyTrioAcquireHover = 12,
+    TeddyTrioAcquireRadius = 55,
+    TeddyTrioAcquireHover = 10,
     TeddyTrioTagTimeout = 3.0,
-    TeddyTrioPullTimeout = 1.35,
-    TeddyTrioRetryDelay = 0.30,
+    TeddyTrioPullTimeout = 1.80,
+    TeddyTrioRetryDelay = 0.25,
     TeddyTrioAttackRange = 120,
     TeddyAirHoverHeight  = 28,
     TeddyAirTagHoverHeight = 16,
@@ -3281,6 +3283,7 @@ local function HasQuest()
                     <= math.min(_G.Settings.QuestAcceptGrace or 1.25, 1.25) then
                 return nil
             end
+            if _G.State then _G.State.ActiveQuestMob = nil end
             return false
         end
 
@@ -3294,12 +3297,16 @@ local function HasQuest()
                     or lower:find("quest complete", 1, true)
                     or lower:find("completed", 1, true)
                     or lower:find("finished", 1, true) then
+                    if _G.State then _G.State.ActiveQuestMob = nil end
                     return false
                 end
                 local current, total = text:match("(%d+)%s*/%s*(%d+)")
                 current, total = tonumber(current), tonumber(total)
                 if current and total and total > 0 then
-                    if current >= total then return false end
+                    if current >= total then
+                        if _G.State then _G.State.ActiveQuestMob = nil end
+                        return false
+                    end
                     sawObjective = true
                 end
                 if text ~= "" then
@@ -7837,11 +7844,15 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
-    -- v22.21 TRIO FOLLOW BRING
-    -- Keep at most three mobs whose name EXACTLY matches the active quest/skip mob.
-    -- Acquisition is still proof-based: real HP loss -> one snap -> persistence verify.
-    -- The important difference from v22.16 is that persistence is checked against the
-    -- ORIGINAL snap point. Only AFTER that proof succeeds may the root follow the player.
+    -- v22.22 MOVING TRIO MAGNET
+    -- Goal: exactly the behavior shown in the supplied reference video:
+    --   * keep at most 3 live mobs matching the active quest mob name;
+    --   * acquire network ownership by moving close to an unowned member;
+    --   * once ownership/proof exists, keep that root under the CURRENT player;
+    --   * the pile follows X/Z continuously instead of staying at a fixed q.MC anchor.
+    --
+    -- We intentionally do NOT destroy Animator, PlatformStand, or ChangeState here.
+    -- Those older tricks made "statue/ghost" mobs in earlier Bobon builds.
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
         return 0, 0
@@ -7854,15 +7865,14 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
     local now = tick()
     local maxSlots = math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3, 1, 3)
-    local scanEvery = math.max(0.03, tonumber(_G.Settings.SharedTeddyScanInterval) or 0.05)
-    local fieldRange = math.max(180, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
-    local verifyRadius = math.max(6, tonumber(_G.Settings.TeddyTrioFollowVerifyRadius) or 14)
-    local stableDelay = math.max(0.10, tonumber(_G.Settings.TeddySequenceStableDelay) or 0.18)
-    local acquireRadius = math.max(16, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 38)
-    local pullTimeout = math.max(0.60, tonumber(_G.Settings.TeddyTrioPullTimeout) or 1.35)
-    local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.30)
-    local followEvery = math.max(0.03, tonumber(_G.Settings.TeddyTrioFollowInterval) or 0.05)
-    local leash = math.max(verifyRadius * 2.5, tonumber(_G.Settings.TeddyTrioFollowLeash) or 72)
+    local scanEvery = math.max(0.02, tonumber(_G.Settings.SharedTeddyScanInterval) or 0.04)
+    local fieldRange = math.max(220, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
+    local verifyRadius = math.max(8, tonumber(_G.Settings.TeddyTrioFollowVerifyRadius) or 18)
+    local stableDelay = math.max(0.08, tonumber(_G.Settings.TeddySequenceStableDelay) or 0.12)
+    local acquireRadius = math.max(20, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 55)
+    local followEvery = math.max(0.02, tonumber(_G.Settings.TeddyTrioFollowInterval) or 0.03)
+    local leash = math.max(70, tonumber(_G.Settings.TeddyTrioFollowLeash) or 110)
+    local retryDelay = math.max(0.12, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.25)
 
     pcall(function() ExpandSimulationRadius() end)
 
@@ -7878,15 +7888,16 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     local center = self.SharedTrioFieldCenter or me.Position
     local selected, selectedRoots = {}, setmetatable({}, {__mode="k"})
 
-    -- Keep live members of the current trio first. This prevents target churn every scan.
+    -- Preserve existing trio members first. A verified member may already have
+    -- followed the player away from the original spawn center, so do not evict it
+    -- merely because its current position is no longer near q.MC.
     for _, entry in ipairs(self.SharedTeddyBatch) do
         if #selected >= maxSlots then break end
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent
             and not root.Anchored and IsEnemyNamed(mob, self.SharedMobName) then
             local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                and (pos - center).Magnitude <= fieldRange then
+            if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
                 entry.Position = pos
                 selected[#selected + 1] = entry
                 selectedRoots[root] = true
@@ -7894,7 +7905,8 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end
     end
 
-    -- Fill empty trio slots from the nearest live quest mobs only.
+    -- Fill empty slots with nearest live mobs whose canonical name exactly matches
+    -- the active quest/skip mob. This never grabs another species from the island.
     if #selected < maxSlots and (forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery) then
         self.SharedTeddyLastScanAt = now
         local extras = {}
@@ -7907,7 +7919,8 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                     local okPos, pos = pcall(function() return root.Position end)
                     if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                         and IsSubmergedPosition(pos) == IsSubmergedPosition(center)
-                        and (pos - center).Magnitude <= fieldRange then
+                        and ((pos - center).Magnitude <= fieldRange
+                            or (pos - me.Position).Magnitude <= math.min(fieldRange, 500)) then
                         extras[#extras + 1] = {
                             Model = mob,
                             Humanoid = hum,
@@ -7928,45 +7941,36 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     end
     self.SharedTeddyBatch = selected
 
-    -- Follow the ground level of the current acquire mob; otherwise use the trio's
-    -- median-ish/average live root Y. X/Z always follow the player.
-    local acquireModel = self.SharedTeddyAcquireModel
-    local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
-    local wantedGroundY, yTotal, yCount = nil, 0, 0
-    if acquireRoot and acquireRoot.Parent then
-        local okY, p = pcall(function() return acquireRoot.Position end)
-        if okY and IsValidPos(p) then wantedGroundY = p.Y end
-    end
-    if wantedGroundY == nil then
-        for _, entry in ipairs(selected) do
-            local root = entry.Root
-            if root and root.Parent then
-                local okY, p = pcall(function() return root.Position end)
-                if okY and IsValidPos(p) then
-                    yTotal = yTotal + p.Y
-                    yCount = yCount + 1
-                end
-            end
+    -- Dynamic pile: X/Z follow the player every tick. Prefer the actual map surface
+    -- directly below the player, excluding our character and Enemies so a mob cannot
+    -- become its own "ground". Fallback keeps the pile one farm-height below the player.
+    me = HRP() or me
+    local fallbackDepth = math.clamp(
+        tonumber(_G.Settings.SharedFarmHeight)
+            or tonumber(_G.Settings.FarmHeight) or 25,
+        10, 34
+    )
+    local pileY = me.Position.Y - fallbackDepth
+    pcall(function()
+        local params = RaycastParams.new()
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        local ignore = {folder}
+        local c = Char()
+        if c then ignore[#ignore + 1] = c end
+        params.FilterDescendantsInstances = ignore
+        params.IgnoreWater = false
+        local hit = workspace:Raycast(
+            me.Position + Vector3.new(0, 5, 0),
+            Vector3.new(0, -220, 0),
+            params
+        )
+        if hit and hit.Position and IsValidPos(hit.Position) then
+            pileY = hit.Position.Y + 2
         end
-        if yCount > 0 then wantedGroundY = yTotal / yCount end
-    end
-    if wantedGroundY == nil then
-        wantedGroundY = self.SharedTrioGroundY or (me.Position.Y - 12)
-    end
-    if self.SharedTrioGroundY == nil then
-        self.SharedTrioGroundY = wantedGroundY
-    else
-        local dy = wantedGroundY - self.SharedTrioGroundY
-        if math.abs(dy) > 35 then
-            self.SharedTrioGroundY = wantedGroundY
-        else
-            self.SharedTrioGroundY = self.SharedTrioGroundY + dy * 0.35
-        end
-    end
-
+    end)
     local pilePos = Vector3.new(
         me.Position.X,
-        self.SharedTrioGroundY + (tonumber(_G.Settings.TeddyTrioGroundOffset) or 0),
+        pileY + (tonumber(_G.Settings.TeddyTrioGroundOffset) or 0),
         me.Position.Z
     )
     if not IsSubmergedPosition(pilePos) then
@@ -7975,8 +7979,25 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     self.SharedPileCFrame = CFrame.new(pilePos)
     self.SharedClassicCurrentPile = pilePos
 
-    local verifiedCount = 0
-    local function snapOnce(root, pos)
+    local acquireModel = self.SharedTeddyAcquireModel
+    local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
+
+    local function preparePhysical(mob, hum, root)
+        self:SharedRemember(hum, "Humanoid")
+        self:SharedRemember(root, "Part")
+        pcall(function()
+            hum.WalkSpeed = 0
+            hum.AutoRotate = false
+            root.CanCollide = false
+            local head = mob:FindFirstChild("Head")
+            if head and head:IsA("BasePart") then
+                self:SharedRemember(head, "Part")
+                head.CanCollide = false
+            end
+        end)
+    end
+
+    local function snap(root, pos)
         return pcall(function()
             local rot = root.CFrame.Rotation
             root.AssemblyLinearVelocity = Vector3.zero
@@ -7987,6 +8008,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end)
     end
 
+    local verifiedCount = 0
     for _, entry in ipairs(selected) do
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent then
@@ -7995,70 +8017,81 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                 local verifiedAt = self.SharedTeddyVerified[root]
                 local pendingAt = self.SharedTeddyPendingAt[root]
                 local pendingPos = self.SharedTrioPendingPos[root]
+                local owner = ClientOwnsMob(root)
+
+                -- No owner API: a one-shot static persistence proof is enough. This is
+                -- checked against the ORIGINAL snap point so player motion cannot make a
+                -- successful proof look like a failure.
+                if not verifiedAt and pendingAt and pendingPos then
+                    if now - pendingAt >= stableDelay then
+                        self.SharedTeddyPendingAt[root] = nil
+                        self.SharedTrioPendingPos[root] = nil
+                        if (pos - pendingPos).Magnitude <= verifyRadius then
+                            self.SharedTeddyVerified[root] = now
+                            self.SharedTeddyQualified[root] = now
+                            self.SharedTrioLastFollow[root] = 0
+                            verifiedAt = now
+                        else
+                            self.SharedTeddyRetryAfter[root] = now + retryDelay
+                        end
+                    end
+                end
 
                 if verifiedAt then
-                    -- Verified roots are the ONLY roots allowed to follow the moving player.
-                    -- Never use BodyPosition/PlatformStand; rate-limit CFrame writes instead.
-                    local owns = ClientOwnsMob(root)
-                    if now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery
-                        and owns ~= false then
-                        self.SharedTrioLastFollow[root] = now
-                        snapOnce(root, pilePos)
-                    end
-                    local okAfter, after = pcall(function() return root.Position end)
-                    if okAfter and IsValidPos(after) then
-                        local drift = (after - pilePos).Magnitude
-                        if drift <= verifyRadius * 2.2 then
-                            self.SharedTeddyVerified[root] = now
-                            verifiedCount = verifiedCount + 1
-                        elseif drift > leash then
-                            -- Server/network ownership was lost: revoke instead of showing a ghost.
+                    if owner == false then
+                        -- Explicit server ownership loss: stop pretending the mob is held.
+                        self.SharedTeddyVerified[root] = nil
+                        self.SharedTeddyQualified[root] = nil
+                        self.SharedTeddyPendingAt[root] = nil
+                        self.SharedTrioPendingPos[root] = nil
+                        self.SharedTeddyRetryAfter[root] = now + retryDelay
+                        self:SharedRestoreOne(mob)
+                    else
+                        -- Before writing again, detect a real server snap-back from the
+                        -- previous follow update. Large drift revokes an UNKNOWN-ownership
+                        -- lease instead of creating a client-only ghost.
+                        local driftBefore = (pos - pilePos).Magnitude
+                        local verifiedSince = tonumber(self.SharedTeddyQualified[root]) or verifiedAt
+                        local staleUnknown = owner == nil
+                            and driftBefore > leash
+                            and now - verifiedSince > math.max(0.14, followEvery * 3)
+                        if staleUnknown then
                             self.SharedTeddyVerified[root] = nil
                             self.SharedTeddyQualified[root] = nil
-                            self.SharedTeddyPendingAt[root] = nil
-                            self.SharedTrioPendingPos[root] = nil
                             self.SharedTeddyRetryAfter[root] = now + retryDelay
+                            self:SharedRestoreOne(mob)
                         else
-                            -- Short replication lag: keep the lease briefly without counting it.
-                            if now - verifiedAt > math.max(0.35, (_G.Settings.SharedTeddyVerifyTTL or 0.35) * 2) then
-                                self.SharedTeddyVerified[root] = nil
-                                self.SharedTeddyQualified[root] = nil
-                                self.SharedTeddyRetryAfter[root] = now + retryDelay
+                            preparePhysical(mob, hum, root)
+                            if now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
+                                self.SharedTrioLastFollow[root] = now
+                                snap(root, pilePos)
                             end
-                        end
-                    end
-
-                elseif pendingAt and pendingPos then
-                    -- Critical v22.21 fix: verify against the original snap point while the
-                    -- player is free to keep moving. The moving pile cannot invalidate proof.
-                    if now - pendingAt >= stableDelay then
-                        local persisted = (pos - pendingPos).Magnitude <= verifyRadius
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTrioPendingPos[root] = nil
-                        if persisted then
                             self.SharedTeddyVerified[root] = now
-                            self.SharedTrioLastFollow[root] = 0
                             verifiedCount = verifiedCount + 1
-                        else
-                            self.SharedTeddyQualified[root] = nil
-                            self.SharedTeddyRetryAfter[root] = now + retryDelay
                         end
-                    elseif now - pendingAt >= pullTimeout then
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTrioPendingPos[root] = nil
-                        self.SharedTeddyQualified[root] = nil
-                        self.SharedTeddyRetryAfter[root] = now + retryDelay
                     end
-
                 else
-                    -- Fresh roots get exactly one physical snap only after real HP proof and
-                    -- only while this exact root is the current acquire target and is nearby.
-                    local qualified = self.SharedTeddyQualified[root]
                     local closeToPlayer = (pos - me.Position).Magnitude <= acquireRadius
                     local isAcquire = acquireRoot == root
-                    if qualified and isAcquire and closeToPlayer
-                        and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
-                        if snapOnce(root, pilePos) then
+                    local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
+
+                    -- Strong path: executor/engine explicitly says we own it. Bring all
+                    -- three in the SAME pass when ownership is already available.
+                    if retryReady and owner == true then
+                        preparePhysical(mob, hum, root)
+                        if snap(root, pilePos) then
+                            self.SharedTeddyVerified[root] = now
+                            self.SharedTeddyQualified[root] = now
+                            self.SharedTrioLastFollow[root] = now
+                            verifiedCount = verifiedCount + 1
+                        end
+
+                    -- Compatibility path: if ownership cannot be queried, only the active
+                    -- nearby acquire target receives a single test snap.
+                    elseif retryReady and owner == nil and isAcquire and closeToPlayer
+                        and not self.SharedTeddyPendingAt[root] then
+                        preparePhysical(mob, hum, root)
+                        if snap(root, pilePos) then
                             self.SharedTeddyPendingAt[root] = now
                             self.SharedTrioPendingPos[root] = pilePos
                         end
@@ -8070,7 +8103,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
     self.SharedBringCount = verifiedCount
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TRIO-FOLLOW %d/%d"):format(verifiedCount, #selected)
+        _G.BobonDiagnostics.Bring = ("TRIO-MOVE %d/%d"):format(verifiedCount, #selected)
         _G.BobonDiagnostics.BringCandidates = #selected
         _G.BobonDiagnostics.BringMoved = verifiedCount
         _G.BobonDiagnostics.BringFailed = math.max(0, #selected - verifiedCount)
@@ -8079,8 +8112,10 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    -- v22.21: three-slot moving quest pile. Existing method name is preserved so no
-    -- caller/scheduler/skip route has to change and no new top-level controller is added.
+    -- v22.22 MOVING TRIO FARM
+    -- Build up to three quest mobs. Existing held members follow beneath the player
+    -- while Farm approaches the next member; if ownership of all three is already
+    -- available, SharedTeddyRestack brings the whole trio in one pass.
     if _G.Settings.SharedSourceFarmMode == false then return false end
     if type(mobName) ~= "string" or mobName == "" then return false end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
@@ -8091,6 +8126,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     end
     self.SharedMobName = mobName
     self.SharedTeddyActive = true
+
     if typeof(fallbackCF) == "CFrame" then
         self.SharedTrioFieldCenter = fallbackCF.Position
     elseif typeof(fallbackCF) == "Vector3" then
@@ -8100,10 +8136,9 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
         self.SharedTrioFieldCenter = h and h.Position or nil
     end
 
-    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
     self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
     self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
+    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
 
     local verified, total = self:SharedTeddyRestack(true)
     local batch = self.SharedTeddyBatch or {}
@@ -8113,13 +8148,13 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     if total <= 0 then
         self.SharedTeddyAcquireModel = nil
         self.SharedTeddyAcquireRoot = nil
-        self.SharedTeddyAcquireLastHealth = nil
         self.SharedTeddyAcquireStartedAt = 0
         self.SharedTeddyAcquireTaggedAt = 0
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
         _G.State.FState = "SHARED_BRING_FARM"
         _G.State.ActionText = "Waiting Quest Mob • " .. mobName
+
         if fallbackCF and _G.State:CanRequestTravel() then
             local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
             TravelManager:Request(baseCF * CFrame.new(0,
@@ -8137,175 +8172,152 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
 
     local now = tick()
     local acquire = self.SharedTeddyAcquireModel
-    local acquireHum = acquire and acquire:FindFirstChildOfClass("Humanoid")
-    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
 
-    local function entryIsLive(model)
-        if not model or not model.Parent then return false end
+    local function liveInBatch(model)
+        if not model or not model.Parent or not IsEnemyNamed(model, mobName) then return false end
         local h = model:FindFirstChildOfClass("Humanoid")
         local r = model:FindFirstChild("HumanoidRootPart")
-        if not h or h.Health <= 0 or not r or not r.Parent or not IsEnemyNamed(model, mobName) then
-            return false
-        end
+        if not h or h.Health <= 0 or not r or not r.Parent then return false end
         for _, entry in ipairs(batch) do
             if entry.Model == model then return true end
         end
         return false
     end
 
-    if not entryIsLive(acquire) or (acquireRoot and self.SharedTeddyVerified[acquireRoot]) then
+    if not liveInBatch(acquire) then
+        acquire = nil
         self.SharedTeddyAcquireModel = nil
         self.SharedTeddyAcquireRoot = nil
         self.SharedTeddyAcquireStartedAt = 0
-        self.SharedTeddyAcquireLastHealth = nil
         self.SharedTeddyAcquireTaggedAt = 0
-        acquire, acquireHum, acquireRoot = nil, nil, nil
+    else
+        local r = acquire:FindFirstChild("HumanoidRootPart")
+        if r and self.SharedTeddyVerified[r] then
+            acquire = nil
+            self.SharedTeddyAcquireModel = nil
+            self.SharedTeddyAcquireRoot = nil
+            self.SharedTeddyAcquireStartedAt = 0
+            self.SharedTeddyAcquireTaggedAt = 0
+        end
     end
 
-    -- Fill the trio one root at a time, but keep all already-verified roots physically
-    -- underneath the player while travelling to the next member. Net result: 1 -> 2 -> 3.
-    if not acquire and verified < total then
+    -- Choose one unresolved slot. Existing verified mobs continue to follow the
+    -- player through SharedTeddyRestack while this target is approached.
+    if not acquire and verified < math.min(3, total) then
         local best, bestDist = nil, math.huge
         for _, entry in ipairs(batch) do
             local root = entry.Root
-            if root and root.Parent and not self.SharedTeddyVerified[root]
+            if root and root.Parent
+                and not self.SharedTeddyVerified[root]
                 and not self.SharedTeddyPendingAt[root]
                 and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
                 local okPos, pos = pcall(function() return root.Position end)
                 if okPos and IsValidPos(pos) then
-                    local dist = (pos - me.Position).Magnitude
-                    if dist < bestDist then
-                        best, bestDist = entry.Model, dist
+                    local d = (pos - me.Position).Magnitude
+                    if d < bestDist then
+                        best, bestDist = entry.Model, d
                     end
                 end
             end
         end
         if best then
             acquire = best
-            acquireHum = best:FindFirstChildOfClass("Humanoid")
-            acquireRoot = best:FindFirstChild("HumanoidRootPart")
             self.SharedTeddyAcquireModel = best
-            self.SharedTeddyAcquireRoot = acquireRoot
+            self.SharedTeddyAcquireRoot = best:FindFirstChild("HumanoidRootPart")
             self.SharedTeddyAcquireStartedAt = now
-            self.SharedTeddyAcquireLastHealth = acquireHum and acquireHum.Health or nil
-            self.SharedTeddyAcquireTaggedAt = 0
+            self.SharedTeddyAcquireTaggedAt = 0 -- repurposed as "near since"
         end
     end
 
-    if acquire and acquireHum and acquireHum.Health > 0 and acquireRoot and acquireRoot.Parent then
-        _G.State.FarmTarget = acquire
-        _G.State.CurrentTarget = acquire
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Build Trio • " .. mobName
+    if acquire then
+        local hum = acquire:FindFirstChildOfClass("Humanoid")
+        local root = acquire:FindFirstChild("HumanoidRootPart")
+        if hum and hum.Health > 0 and root and root.Parent then
+            _G.State.FarmTarget = acquire
+            _G.State.CurrentTarget = acquire
+            _G.State.ClusterMode = "OFF"
+            _G.State.FState = "SHARED_BRING_FARM"
+            _G.State.ActionText = "Acquire Trio • " .. mobName
 
-        local acquireHover = math.max(8, tonumber(_G.Settings.TeddyTrioAcquireHover) or 12)
-        local acquireRadius = math.max(16, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 38)
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(acquireRoot.CFrame * CFrame.new(0, acquireHover, 0), "Farm", {
-                arrivalThreshold = acquireRadius,
-                fallback = fallbackCF or self.SharedPileCFrame,
-                combatHover = true,
-                persistent = true,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
+            local acquireHover = math.max(6, tonumber(_G.Settings.TeddyTrioAcquireHover) or 10)
+            local acquireRadius = math.max(20, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 55)
+            local attackRange = math.max(50,
+                tonumber(_G.Settings.TeddyTrioAttackRange)
+                or tonumber(_G.Settings.FastAttackRange) or 120)
 
-        -- Calling restack after movement planning makes the already-built part of the trio
-        -- follow the latest player position while we are approaching the next quest mob.
-        verified, total = self:SharedTeddyRestack(false)
-        me = HRP() or me
-        local dist = (me.Position - acquireRoot.Position).Magnitude
-        local attackRange = math.max(45,
-            tonumber(_G.Settings.TeddyTrioAttackRange)
-            or tonumber(_G.Settings.FastAttackRange) or 120)
-        local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
-        local qualified = self.SharedTeddyQualified[acquireRoot] ~= nil
-        local attempted = false
-
-        -- TAG only this exact quest mob until its Humanoid really loses HP.
-        if not qualified and dist <= attackRange and farmHolds then
-            PrepareCombatTarget(acquire)
-            EquipCombatTool()
-            attempted = Attack(acquire, mobName)
-            if attempted then _G.State.FState = "SHARED_ATTACK" end
-        elseif qualified and farmHolds then
-            -- Do not keep killing the tagged-but-unverified root. Keep damage flowing on
-            -- an already verified trio member while the tagged root is being proven.
-            local pilePrimary = nil
-            for _, entry in ipairs(batch) do
-                local r = entry.Root
-                if r and r.Parent and self.SharedTeddyVerified[r] then
-                    pilePrimary = entry.Model
-                    break
-                end
+            if _G.State:CanRequestTravel() then
+                TravelManager:Request(root.CFrame * CFrame.new(0, acquireHover, 0), "Farm", {
+                    arrivalThreshold = math.min(acquireRadius, 28),
+                    fallback = fallbackCF or self.SharedPileCFrame,
+                    combatHover = true,
+                    persistent = true,
+                    speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+                })
             end
-            if pilePrimary then
-                PrepareCombatTarget(pilePrimary)
+
+            -- Held roots move with the latest player position WHILE this travel is active.
+            verified, total = self:SharedTeddyRestack(false)
+            me = HRP() or me
+            local dist = (me.Position - root.Position).Magnitude
+
+            if dist <= acquireRadius * 1.15 then
+                if (self.SharedTeddyAcquireTaggedAt or 0) == 0 then
+                    self.SharedTeddyAcquireTaggedAt = now
+                end
+                pcall(function() ExpandSimulationRadius() end)
+                verified, total = self:SharedTeddyRestack(false)
+            else
+                self.SharedTeddyAcquireTaggedAt = 0
+            end
+
+            -- Keep farming continuously. Damage is NOT a gate for bring anymore;
+            -- proximity + real ownership/persistence is the bring proof.
+            local attempted = false
+            if dist <= attackRange then
+                PrepareCombatTarget(acquire)
                 EquipCombatTool()
-                attempted = Attack(pilePrimary, mobName)
+                attempted = Attack(acquire, mobName)
                 if attempted then _G.State.FState = "SHARED_ATTACK" end
             end
-        end
 
-        local hp = acquireHum.Health
-        local lastHP = tonumber(self.SharedTeddyAcquireLastHealth)
-        if not qualified and lastHP and hp < lastHP - 0.01 then
-            self.SharedTeddyQualified[acquireRoot] = now
-            self.SharedTeddyAcquireTaggedAt = now
-            qualified = true
-        end
-        self.SharedTeddyAcquireLastHealth = hp
+            if self.SharedTeddyVerified[root] then
+                self.SharedTeddyAcquireModel = nil
+                self.SharedTeddyAcquireRoot = nil
+                self.SharedTeddyAcquireStartedAt = 0
+                self.SharedTeddyAcquireTaggedAt = 0
+                _G.BobonStatus = ("%s: Trio • STACKED %d/%d • %s")
+                    :format(prefix, verified, total, mobName)
+                return true
+            end
 
-        if qualified then
-            verified, total = self:SharedTeddyRestack(false)
-        end
+            -- If this exact root stays close but ownership never becomes usable, rotate
+            -- to another slot briefly instead of freezing the whole farm.
+            local nearSince = tonumber(self.SharedTeddyAcquireTaggedAt) or 0
+            if nearSince > 0 and now - nearSince >= 1.8
+                and not self.SharedTeddyPendingAt[root] then
+                self.SharedTeddyRetryAfter[root] = now
+                    + math.max(0.15, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.25)
+                self.SharedTeddyAcquireModel = nil
+                self.SharedTeddyAcquireRoot = nil
+                self.SharedTeddyAcquireStartedAt = 0
+                self.SharedTeddyAcquireTaggedAt = 0
+            end
 
-        if self.SharedTeddyVerified[acquireRoot] then
-            self.SharedTeddyAcquireModel = nil
-            self.SharedTeddyAcquireRoot = nil
-            self.SharedTeddyAcquireStartedAt = 0
-            self.SharedTeddyAcquireLastHealth = nil
-            self.SharedTeddyAcquireTaggedAt = 0
-            _G.BobonStatus = ("%s: Trio • STACKED %d/%d • %s")
-                :format(prefix, verified, total, mobName)
+            local owner = ClientOwnsMob(root)
+            local phase = self.SharedTeddyPendingAt[root] and "VERIFY"
+                or (owner == true and "PULL" or "ACQUIRE")
+            _G.BobonStatus = ("%s: Trio • %s %s • pile %d/%d • hit %s")
+                :format(prefix, phase, mobName, verified, total,
+                    attempted and "ACTIVE" or "PROBING")
             return true
         end
-
-        local tagTimeout = math.max(1.0, tonumber(_G.Settings.TeddyTrioTagTimeout) or 3.0)
-        local pullTimeout = math.max(0.60, tonumber(_G.Settings.TeddyTrioPullTimeout) or 1.35)
-        local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.30)
-        if not qualified and now - (tonumber(self.SharedTeddyAcquireStartedAt) or now) >= tagTimeout then
-            self.SharedTeddyRetryAfter[acquireRoot] = now + retryDelay
-            self.SharedTeddyAcquireModel = nil
-            self.SharedTeddyAcquireRoot = nil
-            self.SharedTeddyAcquireStartedAt = 0
-            self.SharedTeddyAcquireLastHealth = nil
-            self.SharedTeddyAcquireTaggedAt = 0
-        elseif qualified and not self.SharedTeddyPendingAt[acquireRoot]
-            and now - (tonumber(self.SharedTeddyAcquireTaggedAt) or now) >= pullTimeout then
-            self.SharedTeddyQualified[acquireRoot] = nil
-            self.SharedTeddyRetryAfter[acquireRoot] = now + retryDelay
-            self.SharedTeddyAcquireModel = nil
-            self.SharedTeddyAcquireRoot = nil
-            self.SharedTeddyAcquireStartedAt = 0
-            self.SharedTeddyAcquireLastHealth = nil
-            self.SharedTeddyAcquireTaggedAt = 0
-        end
-
-        local phase = qualified and (self.SharedTeddyPendingAt[acquireRoot] and "VERIFY" or "PULL") or "TAG"
-        _G.BobonStatus = ("%s: Trio • %s %s • pile %d/%d • hit %s")
-            :format(prefix, phase, mobName, verified, total,
-                attempted and "ACTIVE" or "PROBING")
-        return true
     end
 
-    -- All current trio members that can be acquired are already under the player.
-    -- Do not fly back to a fixed q.MC anchor; attack from the current player position.
+    -- No unresolved acquire target right now: attack a verified moving pile member.
     local primary = nil
     for _, entry in ipairs(batch) do
-        local r = entry.Root
-        if r and r.Parent and self.SharedTeddyVerified[r] then
+        local root = entry.Root
+        if root and root.Parent and self.SharedTeddyVerified[root] then
             primary = entry.Model
             break
         end
@@ -8317,7 +8329,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
         _G.State.ClusterMode = "OFF"
         _G.State.FState = "SHARED_ATTACK"
         _G.State.ActionText = "Attack Moving Trio • " .. mobName
-        self:SharedTeddyRestack(false)
+        verified, total = self:SharedTeddyRestack(false)
         PrepareCombatTarget(primary)
         EquipCombatTool()
         local attempted = Attack(primary, mobName)
@@ -8327,7 +8339,8 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     end
 
     _G.State.FState = "SHARED_BRING_FARM"
-    _G.BobonStatus = ("%s: Trio • BUILD %d/%d • %s"):format(prefix, verified, total, mobName)
+    _G.BobonStatus = ("%s: Trio • BUILD %d/%d • %s")
+        :format(prefix, verified, total, mobName)
     return true
 end
 
@@ -12070,19 +12083,35 @@ function ItemProgression:CheckSaber()
                 return map, jungle, plates, door, finalPart, burnPart
             end
 
+            local function PartLooksOpen(node)
+                if not node then return nil end
+                local part = node
+                if not part:IsA("BasePart") then
+                    part = node:FindFirstChildWhichIsA("BasePart", true)
+                end
+                if not part then return nil end
+                local okState, open = pcall(function()
+                    -- Public Saber implementations use both Transparency and CanCollide
+                    -- across different client builds. Either authoritative open state wins.
+                    return part.CanCollide == false or part.Transparency >= 0.95
+                end)
+                if not okState then return nil end
+                return open == true
+            end
+
             local function DoorIsOpen()
                 local _, _, _, door = MapState()
-                return door ~= nil and door.Transparency ~= 0
+                return PartLooksOpen(door)
             end
 
             local function FinalIsOpen()
                 local _, _, _, _, finalPart = MapState()
-                return finalPart ~= nil and finalPart.Transparency ~= 0
+                return PartLooksOpen(finalPart)
             end
 
             local function BurnIsDone()
                 local _, _, _, _, _, burnPart = MapState()
-                return burnPart ~= nil and burnPart.Transparency ~= 0
+                return PartLooksOpen(burnPart)
             end
 
             -- Pulse a touch target without ever leaving the character embedded in it.
@@ -12197,37 +12226,76 @@ function ItemProgression:CheckSaber()
             end
 
             local function RunPlates()
-                _G.BobonStatus = "Saber 1/8 • streaming Jungle buttons"
+                _G.BobonStatus = "Saber 1/8 • Jungle buttons"
+
+                -- Stream the whole Jungle plate model first. Missing streamed parts are
+                -- UNKNOWN, never "already complete".
                 if not Go(CFrame.new(-1612.56,36.98,148.72), {
                     timeout=90, arrivalThreshold=22, settle=0.20, retries=3,
                 }) then
                     return false
                 end
 
-                -- Do not infer "door open" from missing streamed objects.
-                local streamDeadline = tick() + 8
+                local streamDeadline = tick() + 10
                 while _G.State:IsActionValid(myToken) and tick() < streamDeadline do
                     local _, _, plates, door = MapState()
                     if plates and door then break end
                     TouchAction()
-                    task.wait(0.15)
+                    task.wait(0.12)
                 end
 
-                for cycle = 1, 6 do
-                    if DoorIsOpen() then return true end
-                    for i = 1, 5 do
-                        if not _G.State:IsActionValid(myToken) or not IsAlive() then return false end
-                        if DoorIsOpen() then return true end
+                -- Public Saber sources use the deterministic Plate1 -> Plate5 order.
+                -- Run bounded full passes, but NEVER abandon the Saber action because a
+                -- single touch pulse failed. Re-stream and retry the same checkpoint.
+                for pass = 1, 8 do
+                    if DoorIsOpen() == true then return true end
 
-                        _G.BobonStatus = ("Saber 1/8 • button %d/5 • pass %d/6"):format(i, cycle)
+                    for i = 1, 5 do
+                        if not _G.State:IsActionValid(myToken) or not IsAlive() then
+                            return false
+                        end
+                        if DoorIsOpen() == true then return true end
+
+                        _G.BobonStatus = ("Saber 1/8 • button %d/5 • pass %d/8")
+                            :format(i, pass)
+
                         local button = ResolvePlateButton(i)
                         local cf = button and button.CFrame or plateFallback[i]
-                        StableTouch(cf, button, 0.72)
-                        task.wait(0.28)
+                        local touched = StableTouch(cf, button, 0.52)
+
+                        -- If the movement lock was briefly contested, immediately retry
+                        -- THIS button instead of leaving the plate sequence half-finished.
+                        if not touched and _G.State:IsActionValid(myToken) and IsAlive() then
+                            task.wait(0.12)
+                            button = ResolvePlateButton(i)
+                            cf = button and button.CFrame or plateFallback[i]
+                            StableTouch(cf, button, 0.62)
+                        end
+
+                        task.wait(0.20)
                     end
-                    task.wait(0.45)
+
+                    if DoorIsOpen() == true then return true end
+
+                    -- Streaming can rebuild QuestPlates after the player crosses Jungle.
+                    -- If the checkpoint becomes unreadable, return to the center, stream,
+                    -- and continue the SAME plate state machine.
+                    if DoorIsOpen() == nil then
+                        Go(CFrame.new(-1612.56,36.98,148.72), {
+                            timeout=45, arrivalThreshold=24, settle=0.15, retries=1,
+                        })
+                        local reloadUntil = tick() + 4
+                        while _G.State:IsActionValid(myToken) and tick() < reloadUntil do
+                            local _, _, plates, door = MapState()
+                            if plates and door then break end
+                            TouchAction()
+                            task.wait(0.12)
+                        end
+                    end
+                    task.wait(0.30)
                 end
-                return DoorIsOpen()
+
+                return DoorIsOpen() == true
             end
 
             local function GetTorchAndBurn()
@@ -12556,7 +12624,12 @@ function ItemProgression:CheckSecondSea()
             while not key and _G.State:IsActionValid(myToken) and tick()<keyWait do
                 _G.State:TouchAction(myToken); task.wait(0.2); key=HasItem("Key")
             end
-            if key then
+            if not key then
+                _G.BobonStatus = "Sea 2: Detective key not verified • retry"
+                self.NextOptional.Sea2 = tick() + 2
+                return
+            end
+            do
                 local c, hum = Char(), Hum()
                 if key.Parent ~= c and hum then pcall(function() hum:EquipTool(key) end) end
             end
@@ -12611,85 +12684,221 @@ end
 function ItemProgression:CheckBartilo()
     if GetSea() ~= 2 or Level() < 850 then return false end
     if not self:OptionalReady("Bartilo") then return false end
-    local progress
+
+    local initial
     local okProgress = pcall(function()
-        progress = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
+        initial = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
     end)
-    if not okProgress or type(progress) ~= "number" or progress >= 3 then return false end
+    if not okProgress or type(initial) ~= "number" or initial >= 3 then return false end
 
     local myToken = _G.State:ClaimAction("Bartilo")
     if myToken == 0 then return false end
     PrepareClaimedAction("Bartilo")
-    self.NextOptional.Bartilo = tick() + 10
+    self.NextOptional.Bartilo = tick() + 6
     _G.State:SetMode("GettingItem")
-    _G.BobonStatus = "Progression: Bartilo " .. tostring(progress)
+    _G.BobonStatus = "Progression: Bartilo " .. tostring(initial)
 
     task.spawn(function()
         local ok, err = xpcall(function()
-            if progress == 0 then
-                if TravelAndWait("Bartilo", myToken, CFrame.new(-456.29,73.02,299.90), {
-                    timeout=90, arrivalThreshold=10, settle=0.6,
+            local function ReadProgress()
+                local value
+                pcall(function()
+                    value = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
+                end)
+                _G.State:TouchAction(myToken)
+                return value
+            end
+
+            local function BartiloQuestIsActive()
+                if HasQuest() ~= true then return false end
+                local text = string.lower(tostring(GetQuestText() or ""))
+                return text:find("swan pirate", 1, true) ~= nil
+                    or text:find("swan pirates", 1, true) ~= nil
+            end
+
+            local function EnsureBartiloQuest()
+                if BartiloQuestIsActive() then return true end
+                pcall(function() CommF_:InvokeServer("AbandonQuest") end)
+                task.wait(0.15)
+                if not TravelAndWait("Bartilo", myToken, CFrame.new(-456.29,73.02,299.90), {
+                    timeout=90, arrivalThreshold=8, settle=0.35, retries=3,
                 }) then
-                    pcall(function() CommF_:InvokeServer("StartQuest", "BartiloQuest", 1) end)
+                    return false
                 end
-                local deadline = tick() + 600
-                while _G.State:IsActionValid(myToken) and IsAlive() and tick() < deadline do
+
+                for attempt = 1, 4 do
+                    if not _G.State:IsActionValid(myToken) or not IsAlive() then return false end
+                    pcall(function() CommF_:InvokeServer("StartQuest", "BartiloQuest", 1) end)
                     _G.State:TouchAction(myToken)
-                    local current
-                    pcall(function()
-                        current = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo")
-                    end)
-                    if type(current) == "number" and current ~= 0 then break end
-                    local mob = FindMob("Swan Pirate")
-                    if mob and mob:FindFirstChild("HumanoidRootPart") then
-                        PrepareCombatTarget(mob)
+                    local untilAt = tick() + 2.5
+                    while tick() < untilAt and _G.State:IsActionValid(myToken) do
+                        if BartiloQuestIsActive() then return true end
+                        task.wait(0.15)
+                    end
+                    task.wait(0.25)
+                end
+                return BartiloQuestIsActive()
+            end
+
+            local wholeDeadline = tick() + 1200
+            local current = initial
+            while _G.State:IsActionValid(myToken) and IsAlive()
+                and tick() < wholeDeadline and type(current) == "number" and current < 3 do
+                _G.State:TouchAction(myToken)
+
+                if current == 0 then
+                    _G.BobonStatus = "Bartilo 1/3 • 50 Swan Pirates"
+                    if not EnsureBartiloQuest() then
+                        self.NextOptional.Bartilo = tick() + 2
+                        task.wait(0.7)
+                        current = ReadProgress()
+                        continue
+                    end
+
+                    local phaseDeadline = tick() + 720
+                    while _G.State:IsActionValid(myToken) and IsAlive()
+                        and tick() < phaseDeadline do
+                        local p = ReadProgress()
+                        if type(p) == "number" and p ~= 0 then
+                            current = p
+                            break
+                        end
+
+                        if not BartiloQuestIsActive() then
+                            if not EnsureBartiloQuest() then
+                                task.wait(0.5)
+                                continue
+                            end
+                        end
+
+                        local mob = FindMob("Swan Pirate")
+                        if mob and mob:FindFirstChild("HumanoidRootPart") then
+                            local hum = mob:FindFirstChildOfClass("Humanoid")
+                            local root = mob:FindFirstChild("HumanoidRootPart")
+                            if hum and hum.Health > 0 and root then
+                                PrepareCombatTarget(mob)
+                                EquipCombatTool()
+                                TravelManager:Request(root, "Bartilo", {
+                                    arrivalThreshold = _G.Settings.FarmArrivalThreshold,
+                                    combatHover = true,
+                                    persistent = true,
+                                })
+                                if TravelManager:IsAtCombatAnchor(root) then
+                                    Attack(mob, "Swan Pirate")
+                                end
+                            end
+                        else
+                            TravelManager:Request(CFrame.new(932.62,156.11,1180.27), "Bartilo", {
+                                arrivalThreshold=30, persistent=false,
+                            })
+                        end
+                        task.wait(0.10)
+                    end
+
+                elseif current == 1 then
+                    _G.BobonStatus = "Bartilo 2/3 • Jeremy"
+                    TravelAndWait("Bartilo", myToken, CFrame.new(2099.88,448.93,648.99), {
+                        timeout=90, arrivalThreshold=24, settle=0.15, retries=3,
+                    })
+
+                    local boss = FindBoss("Jeremy")
+                    local spawnWait = tick() + 75
+                    while not boss and _G.State:IsActionValid(myToken)
+                        and IsAlive() and tick() < spawnWait do
+                        _G.State:TouchAction(myToken)
+                        boss = FindBoss("Jeremy")
+                        task.wait(0.20)
+                    end
+                    if not boss then
+                        _G.BobonStatus = "Bartilo 2/3 • waiting Jeremy"
+                        self.NextOptional.Bartilo = tick() + 3
+                        task.wait(0.8)
+                        current = ReadProgress()
+                        continue
+                    end
+
+                    local killDeadline = tick() + 240
+                    while _G.State:IsActionValid(myToken) and IsAlive()
+                        and tick() < killDeadline do
+                        boss = FindBoss("Jeremy")
+                        if not boss then break end
+                        local bh = boss:FindFirstChildOfClass("Humanoid")
+                        local br = boss:FindFirstChild("HumanoidRootPart")
+                        if not bh or bh.Health <= 0 or not br then break end
+                        PrepareCombatTarget(boss)
                         EquipCombatTool()
-                        TravelManager:Request(mob.HumanoidRootPart, "Bartilo", {
+                        TravelManager:Request(br, "Bartilo", {
                             arrivalThreshold=_G.Settings.FarmArrivalThreshold,
                             combatHover=true,
+                            persistent=true,
                         })
-                        if TravelManager:IsAtCombatAnchor(mob.HumanoidRootPart) then
-                            Attack(mob, "Swan Pirate")
-                        end
-                    else
-                        TravelManager:Request(CFrame.new(932.62,156.11,1180.27), "Bartilo")
-                        task.wait(1)
+                        if TravelManager:IsAtCombatAnchor(br) then Attack(boss, "Jeremy") end
+                        _G.State:TouchAction(myToken)
+                        task.wait(0.08)
                     end
-                    task.wait(0.12)
+
+                    -- Re-open Bartilo dialogue once after Jeremy. Several public
+                    -- implementations do this before the server exposes maze stage 2.
+                    if _G.State:IsActionValid(myToken) and IsAlive() then
+                        TravelAndWait("Bartilo", myToken, CFrame.new(-456.29,73.02,299.90), {
+                            timeout=90, arrivalThreshold=10, settle=0.30, retries=2,
+                        })
+                        pcall(function() CommF_:InvokeServer("BartiloQuestProgress", "Bartilo") end)
+                        task.wait(0.6)
+                    end
+
+                elseif current == 2 then
+                    _G.BobonStatus = "Bartilo 3/3 • Colosseum maze"
+                    local maze = {
+                        CFrame.new(-1850.49,13.18,1750.90),
+                        CFrame.new(-1858.87,19.38,1712.02),
+                        CFrame.new(-1803.94,16.58,1750.90),
+                        CFrame.new(-1858.56,16.86,1724.80),
+                        CFrame.new(-1869.54,15.99,1681.01),
+                        CFrame.new(-1800.10,16.50,1684.52),
+                        CFrame.new(-1819.26,14.80,1717.91),
+                        CFrame.new(-1813.52,14.86,1724.80),
+                    }
+
+                    for pass = 1, 5 do
+                        if not _G.State:IsActionValid(myToken) or not IsAlive() then break end
+                        for i, cf in ipairs(maze) do
+                            _G.BobonStatus = ("Bartilo 3/3 • maze %d/8 • pass %d/5")
+                                :format(i, pass)
+                            _G.State:TouchAction(myToken)
+                            local reached = TravelAndWait("Bartilo", myToken, cf, {
+                                timeout=30, arrivalThreshold=5, settle=0.30, retries=2,
+                            })
+                            if not reached then
+                                task.wait(0.20)
+                            end
+                        end
+
+                        task.wait(0.55)
+                        local p = ReadProgress()
+                        if type(p) == "number" and p >= 3 then
+                            current = p
+                            break
+                        end
+                    end
                 end
-            elseif progress == 1 then
-                TravelAndWait("Bartilo",myToken,CFrame.new(2099.88,448.93,648.99),{timeout=90,arrivalThreshold=35,settle=0.2})
-                local boss=FindBoss("Jeremy"); local spawnWait=tick()+45
-                while not boss and _G.State:IsActionValid(myToken) and tick()<spawnWait do
-                    _G.State:TouchAction(myToken); boss=FindBoss("Jeremy"); task.wait(0.25)
-                end
-                if not boss then self.NextOptional.Bartilo=tick()+4; _G.BobonStatus="Progression: Waiting for Jeremy"; return end
-                local deadline=tick()+180
-                while _G.State:IsActionValid(myToken) and IsAlive() and tick()<deadline do
-                    _G.State:TouchAction(myToken); boss=FindBoss("Jeremy"); if not boss then break end
-                    local bh=boss:FindFirstChildOfClass("Humanoid"); local br=boss:FindFirstChild("HumanoidRootPart")
-                    if not bh or bh.Health<=0 or not br then break end
-                    PrepareCombatTarget(boss); EquipCombatTool()
-                    TravelManager:Request(br,"Bartilo",{arrivalThreshold=_G.Settings.FarmArrivalThreshold,combatHover=true})
-                    if TravelManager:IsAtCombatAnchor(br) then Attack(boss,"Jeremy") end
-                    task.wait(0.08)
-                end
-            elseif progress == 2 then
-                local maze = {
-                    CFrame.new(-1850.49,13.18,1750.90), CFrame.new(-1858.87,19.38,1712.02),
-                    CFrame.new(-1803.94,16.58,1750.90), CFrame.new(-1858.56,16.86,1724.80),
-                    CFrame.new(-1869.54,15.99,1681.01), CFrame.new(-1800.10,16.50,1684.52),
-                    CFrame.new(-1819.26,14.80,1717.91), CFrame.new(-1813.52,14.86,1724.80),
-                }
-                for _, cf in ipairs(maze) do
-                    _G.State:TouchAction(myToken)
-                    if not TravelAndWait("Bartilo", myToken, cf, {
-                        timeout=30, arrivalThreshold=6, settle=0.25,
-                    }) then break end
-                end
+
+                task.wait(0.25)
+                current = ReadProgress()
+            end
+
+            if type(current) == "number" and current >= 3 then
+                _G.BobonStatus = "Bartilo • COMPLETE"
+            elseif _G.State:IsActionValid(myToken) and IsAlive() then
+                _G.BobonStatus = "Bartilo • checkpoint not verified • retry"
+                self.NextOptional.Bartilo = tick() + 2
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Bartilo: " .. tostring(err)) end
+
+        if not ok then
+            warn("[BobonHub] Module Error: Bartilo: " .. tostring(err))
+            self.NextOptional.Bartilo = tick() + 2
+        end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Bartilo" then
             TravelManager:Stop("BartiloComplete")
         end
@@ -13947,46 +14156,135 @@ end -- v21.1 Skull Guitar helper scope
 
 function ItemProgression:CheckRaceV2()
     if not _G.Settings.AutoRaceV2 or GetSea() ~= 2 or Level() < 850 then return false end
+
     local bartilo
-    pcall(function() bartilo=CommF_:InvokeServer("BartiloQuestProgress","Bartilo") end)
-    if type(bartilo)=="number" and bartilo<3 then return false end
+    pcall(function() bartilo = CommF_:InvokeServer("BartiloQuestProgress", "Bartilo") end)
+    if type(bartilo) == "number" and bartilo < 3 then return false end
+
     local data = LP:FindFirstChild("Data")
     local race = data and data:FindFirstChild("Race")
     if not race or race:FindFirstChild("Evolved") then return false end
-    local state
-    pcall(function() state = CommF_:InvokeServer("Alchemist","1") end)
-    if state == -2 then return false end
+
+    local initial
+    pcall(function() initial = CommF_:InvokeServer("Alchemist", "1") end)
+    if initial == -2 then return false end
+
     return StartOptionalAction(self, "RaceV2", "RaceV2", "Race: Upgrading V2", function(token)
-        if state == 0 then
-            if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
-                timeout=90, arrivalThreshold=6, settle=0.8,
-            }) then
-                pcall(function() CommF_:InvokeServer("Alchemist","2") end)
-            end
-            return
+        local function ReadStage()
+            local value
+            pcall(function() value = CommF_:InvokeServer("Alchemist", "1") end)
+            _G.State:TouchAction(token)
+            return value
         end
-        if state == 1 then
-            local flower1, flower2 = workspace:FindFirstChild("Flower1",true), workspace:FindFirstChild("Flower2",true)
-            if not FindOwnedTool("Flower 1") and flower1 and flower1:IsA("BasePart") then
-                TravelAndWait("RaceV2", token, flower1.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
-                return
+
+        local function TouchFlower(part, label)
+            if not part or not part:IsA("BasePart") then return false end
+            _G.BobonStatus = "Race V2 • " .. label
+            if not TravelAndWait("RaceV2", token, part.CFrame, {
+                timeout=90, arrivalThreshold=3, settle=0.25, retries=3,
+            }) then
+                return false
             end
-            if not FindOwnedTool("Flower 2") and flower2 and flower2:IsA("BasePart") then
-                TravelAndWait("RaceV2", token, flower2.CFrame, {timeout=90,arrivalThreshold=3,settle=1})
-                return
+            local root = HRP()
+            if root and type(firetouchinterest) == "function" then
+                pcall(function()
+                    firetouchinterest(root, part, 0)
+                    task.wait(0.06)
+                    firetouchinterest(root, part, 1)
+                end)
+            else
+                pcall(function()
+                    root.CFrame = part.CFrame * CFrame.new(0, 1.5, 0)
+                end)
             end
-            if not FindOwnedTool("Flower 3") and CombatController:IsDamageReady() then
-                local swan = FindMob("Swan Pirate")
-                if swan then FightNamedForAction("Swan Pirate","RaceV2",token,90) end
-                return
+            task.wait(0.35)
+            return true
+        end
+
+        local deadline = tick() + 420
+        local stage = initial
+        while _G.State:IsActionValid(token) and IsAlive() and tick() < deadline do
+            local liveData = LP:FindFirstChild("Data")
+            local liveRace = liveData and liveData:FindFirstChild("Race")
+            if liveRace and liveRace:FindFirstChild("Evolved") then
+                _G.BobonStatus = "Race V2 • COMPLETE"
+                break
             end
-            if FindOwnedTool("Flower 1") and FindOwnedTool("Flower 2") and FindOwnedTool("Flower 3") and Beli() >= 500000 then
+
+            stage = ReadStage()
+            if stage == -2 then break end
+
+            if stage == 0 then
+                _G.BobonStatus = "Race V2 • Alchemist dialogue"
                 if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
-                    timeout=90, arrivalThreshold=6, settle=0.8,
+                    timeout=90, arrivalThreshold=6, settle=0.55, retries=3,
                 }) then
-                    pcall(function() CommF_:InvokeServer("Alchemist","3") end)
+                    pcall(function() CommF_:InvokeServer("Alchemist", "2") end)
+                    _G.State:TouchAction(token)
+                    task.wait(0.65)
+                else
+                    task.wait(0.35)
                 end
+                continue
             end
+
+            if stage == 1 then
+                local flower1 = workspace:FindFirstChild("Flower1", true)
+                local flower2 = workspace:FindFirstChild("Flower2", true)
+
+                if not FindOwnedTool("Flower 1") then
+                    if flower1 and flower1:IsA("BasePart") then
+                        TouchFlower(flower1, "Flower 1")
+                    else
+                        _G.BobonStatus = "Race V2 • waiting Flower 1"
+                        task.wait(0.8)
+                    end
+                    continue
+                end
+
+                if not FindOwnedTool("Flower 2") then
+                    if flower2 and flower2:IsA("BasePart") then
+                        TouchFlower(flower2, "Flower 2")
+                    else
+                        _G.BobonStatus = "Race V2 • waiting Flower 2"
+                        task.wait(0.8)
+                    end
+                    continue
+                end
+
+                if not FindOwnedTool("Flower 3") then
+                    _G.BobonStatus = "Race V2 • Flower 3 • Swan Pirate"
+                    local swan = FindMob("Swan Pirate")
+                    if swan then
+                        FightNamedForAction("Swan Pirate", "RaceV2", token, 90)
+                    else
+                        TravelManager:Request(CFrame.new(932.62,156.11,1180.27), "RaceV2", {
+                            arrivalThreshold=28, persistent=false,
+                        })
+                        task.wait(0.8)
+                    end
+                    continue
+                end
+
+                if Beli() < 500000 then
+                    _G.BobonStatus = "Race V2 • need $500,000"
+                    break
+                end
+
+                _G.BobonStatus = "Race V2 • return Alchemist"
+                if TravelAndWait("RaceV2", token, CFrame.new(-2779.84,72.97,-3574.02), {
+                    timeout=90, arrivalThreshold=6, settle=0.55, retries=3,
+                }) then
+                    pcall(function() CommF_:InvokeServer("Alchemist", "3") end)
+                    _G.State:TouchAction(token)
+                    task.wait(0.8)
+                end
+                continue
+            end
+
+            -- Unknown/transitional stage: never guess the next checkpoint.
+            _G.BobonStatus = "Race V2 • verifying checkpoint"
+            task.wait(0.65)
         end
     end)
 end
