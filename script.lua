@@ -1,9 +1,21 @@
 -- =================================================================
---         BOBON HUB v22.15 | TEDDY HP-TAG STACK
+--         BOBON HUB v22.16 | TEDDY HP-PROOF ACQUIRE STACK + UI ALIGN
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.14 TEDDY AIR-SWEEP | Version: v22.15
+--         Base: v22.15 TEDDY HP-TAG STACK | Version: v22.16
 --
 --
+--
+--
+--  v22.16 HP-PROOF -> CLOSE ACQUIRE -> HARD STACK + UI ALIGN:
+--  [TH16-1] After REAL HP loss, Farm closes to that exact mob before pull.
+--  [TH16-2] Ownership API false/unknown no longer vetoes the pull attempt; only
+--           real position persistence may promote a mob to STACKED.
+--  [TH16-3] STACKED mobs use a moving under-foot BodyPosition hold at a short fixed depth;
+--           pile depth is independent of travel hover. Server snap-back revokes STACKED.
+--  [TH16-4] Teddy hold restores Humanoid/part state on release/route change.
+--  [UI16-1] Rebalanced header/stat/runtime/checker geometry and removed stat gaps.
+--  [UI16-2] Status Checker labels are forced to canonical English every refresh.
+--  [UI16-3] Left toggle is a true circular mascot button; inner logo is circular.
 --
 --  v22.15 TEDDY HP-TAG -> STACK (REFERENCE USER FLOW):
 --  [TH15-1] Fly to ONE live mob at a time and keep attacking that exact model until
@@ -1351,20 +1363,29 @@ _G.Settings = {
     SharedTeddyMode      = false,
     TeddyAirSweepMode    = true,
     TeddyAirHoverHeight  = 28,
+    TeddyAirTagHoverHeight = 16,
+    TeddyAirAcquireHeight = 4,
     TeddyAirSweepSpeed   = 430,
     TeddyAirSweepHold    = 0.55,
-    TeddyAirAcquireRadius = 120,
+    TeddyAirAcquireRadius = 22,
     TeddyAirFieldRange   = 1800,
-    TeddyAirVerifyTTL    = 0.55,
+    TeddyAirVerifyTTL    = 0.80,
     TeddyAirPileYOffset  = 0,
+    TeddyAirPileDepth = 8, -- moving pile stays close under the player, independent of travel hover height
     TeddyAirPullUnknownNear = true,
+    TeddyAirRequireOwnerForPull = false,
+    TeddyAirUseBodyPosition = true,
+    TeddyAirHoldP = 7000,
+    TeddyAirHoldD = 240,
+    TeddyAirHoldMaxForce = 1000000000,
+    TeddyAirStackLeash = 42,
     -- v22.15: exact per-mob HIT -> HP PROOF -> PULL -> STACK loop.
-    TeddyAirFocusTimeout  = 3.25,
-    TeddyAirPullTimeout   = 2.25,
-    TeddyAirPullVerifyRadius = 13,
-    TeddyAirPullStableDelay  = 0.12,
-    TeddyAirCausalDamageWindow = 0.80,
-    TeddyAirRetryDelay    = 0.45,
+    TeddyAirFocusTimeout  = 4.25,
+    TeddyAirPullTimeout   = 3.25,
+    TeddyAirPullVerifyRadius = 15,
+    TeddyAirPullStableDelay  = 0.14,
+    TeddyAirCausalDamageWindow = 1.00,
+    TeddyAirRetryDelay    = 0.35,
     SharedTeddyScanInterval = 0.03,
     SharedTeddyVerifyTTL = 0.35,
     SharedTeddyVerifyRadius = 12,
@@ -2301,7 +2322,7 @@ do
         HUD.Parent = SG
         HUD.Visible = false
 
-        local Top = Card(HUD, "TopBar", UDim2.new(0.075,0,0.035,0), UDim2.new(0.85,0,0,106))
+        local Top = Card(HUD, "TopBar", UDim2.new(0.075,0,0.028,0), UDim2.new(0.85,0,0,112))
         Top.AnchorPoint = Vector2.new(0,0)
 
         local TopLogo = MakeLogo(Top, UDim2.new(0,72,0,72), UDim2.new(0,14,0.5,-36), 5)
@@ -2314,7 +2335,7 @@ do
         BrandAccent.Size = UDim2.new(0,72,0,34)
 
         local Divider = Instance.new("Frame")
-        Divider.Position = UDim2.new(0,330,0,15)
+        Divider.Position = UDim2.new(0,318,0,15)
         Divider.Size = UDim2.new(0,1,1,-30)
         Divider.BackgroundColor3 = CYAN
         Divider.BackgroundTransparency = 0.68
@@ -2322,36 +2343,36 @@ do
         Divider.Parent = Top
 
         local FarmCap = Text(Top, "STATUS FARM", 11, CYAN_SOFT, true)
-        FarmCap.Position = UDim2.new(0,352,0,15)
-        FarmCap.Size = UDim2.new(0,125,0,20)
+        FarmCap.Position = UDim2.new(0,340,0,13)
+        FarmCap.Size = UDim2.new(0,130,0,18)
         local StatusFarm = Text(Top, "Initializing Kaitun...", 17, WHITE, true)
-        StatusFarm.Position = UDim2.new(0,352,0,35)
-        StatusFarm.Size = UDim2.new(1,-372,0,24)
+        StatusFarm.Position = UDim2.new(0,340,0,31)
+        StatusFarm.Size = UDim2.new(1,-360,0,27)
 
         local ItemCap = Text(Top, "STATUS ITEM", 11, CORAL, true)
-        ItemCap.Position = UDim2.new(0,352,0,62)
-        ItemCap.Size = UDim2.new(0,125,0,18)
+        ItemCap.Position = UDim2.new(0,340,0,62)
+        ItemCap.Size = UDim2.new(0,130,0,18)
         local StatusItem = Text(Top, "Scanning Inventory...", 16, CORAL, true)
-        StatusItem.Position = UDim2.new(0,352,0,78)
-        StatusItem.Size = UDim2.new(1,-372,0,22)
+        StatusItem.Position = UDim2.new(0,340,0,80)
+        StatusItem.Size = UDim2.new(1,-360,0,24)
 
         local StatsRow = Instance.new("Frame")
         StatsRow.Name = "StatsRow"
         -- v22.9: compact, centered stat strip.  The old row left visible game/UI
         -- gaps between translucent cards on wide screens.
         StatsRow.Position = UDim2.new(0.14,0,0.205,0)
-        StatsRow.Size = UDim2.new(0.72,0,0,72)
+        StatsRow.Size = UDim2.new(0.72,0,0,74)
         -- v22.10: one dark backing plate removes the bright game seams between
         -- the four rounded cards without adding fake whitespace.
         StatsRow.BackgroundColor3 = DARK_CARD
-        StatsRow.BackgroundTransparency = 0.04
+        StatsRow.BackgroundTransparency = 1
         StatsRow.BorderSizePixel = 0
         StatsRow.Parent = HUD
         Corner(StatsRow, 16)
 
         local function StatCard(name, order, title)
-            local w = 0.244
-            local gap = 0.008
+            local w = 0.2485
+            local gap = 0.002
             local x = (order-1)*(w+gap)
             local c = Card(StatsRow, name, UDim2.new(x,0,0,0), UDim2.new(w,0,1,0))
             -- Nearly opaque cards prevent bright Roblox panels showing through
@@ -2374,13 +2395,13 @@ do
         local FragCard, FragL, FragScale = StatCard("Fragments",3,"FRAGMENTS")
         local FruitCard, FruitL, FruitScale = StatCard("Fruit",4,"FRUIT")
 
-        local Runtime = Card(HUD, "Runtime", UDim2.new(0.405,0,0.305,0), UDim2.new(0.19,0,0,34))
+        local Runtime = Card(HUD, "Runtime", UDim2.new(0.41,0,0.314,0), UDim2.new(0.18,0,0,32))
         Runtime.BackgroundTransparency = 0.04
         local RuntimeL = Text(Runtime, "TIME  00:00:00", 12, CYAN_SOFT, true, Enum.TextXAlignment.Center)
         RuntimeL.Size = UDim2.fromScale(1,1)
 
-        local Checker = Card(HUD, "StatusChecker", UDim2.new(0.70,0,0.39,0), UDim2.new(0.275,0,0,302))
-        local CheckerTitle = Text(Checker, "STATUS CHECKER", 18, CYAN, true)
+        local Checker = Card(HUD, "StatusChecker", UDim2.new(0.715,0,0.405,0), UDim2.new(0.255,0,0,286))
+        local CheckerTitle = Text(Checker, "STATUS CHECKER", 17, CYAN, true)
         CheckerTitle.Position = UDim2.new(0,18,0,10)
         CheckerTitle.Size = UDim2.new(1,-36,0,28)
         local CheckerLine = Instance.new("Frame")
@@ -2412,8 +2433,8 @@ do
         local function BuildCheckerRow(row, index)
             local col = index <= 7 and 0 or 1
             local inCol = col == 0 and index or (index-7)
-            local x = col == 0 and 0.05 or 0.53
-            local y = 0.17 + (inCol-1)*0.105
+            local x = col == 0 and 0.055 or 0.535
+            local y = 0.18 + (inCol-1)*0.108
             local dot = Instance.new("Frame")
             dot.Size = UDim2.new(0,12,0,12)
             dot.Position = UDim2.new(x,0,y,2)
@@ -2421,9 +2442,9 @@ do
             dot.BorderSizePixel = 0
             dot.Parent = Checker
             Corner(dot, 12)
-            local label = Text(Checker, row.Label, 13, WHITE, false)
+            local label = Text(Checker, row.Label, 12, WHITE, false)
             label.Position = UDim2.new(x,20,y,-2)
-            label.Size = UDim2.new(0.42,-22,0,20)
+            label.Size = UDim2.new(0.43,-22,0,20)
             CheckerRows[index] = {Dot=dot, Label=label, State="missing"}
         end
         for i,row in ipairs(TrackedItems) do BuildCheckerRow(row,i) end
@@ -2431,8 +2452,8 @@ do
         local Toggle = Instance.new("TextButton")
         Toggle.Name = "BobonToggle"
         Toggle.AnchorPoint = Vector2.new(0,0.5)
-        Toggle.Position = UDim2.new(0,16,0.56,0)
-        Toggle.Size = UDim2.new(0,68,0,68)
+        Toggle.Position = UDim2.new(0,18,0.56,0)
+        Toggle.Size = UDim2.new(0,74,0,74)
         Toggle.BackgroundColor3 = DARK
         Toggle.BackgroundTransparency = 0.04
         Toggle.BorderSizePixel = 0
@@ -2441,14 +2462,20 @@ do
         Toggle.ZIndex = 100
         Toggle.Parent = SG
         Toggle.Visible = false
-        Corner(Toggle, 34)
+        Corner(Toggle, 37)
         local ToggleStroke = Stroke(Toggle, CYAN, 0.16, 2)
-        local ToggleLogo = MakeLogo(Toggle, UDim2.new(0,54,0,54), UDim2.new(0.5,-27,0.5,-27), 101)
+        local ToggleAspect = Instance.new("UIAspectRatioConstraint")
+        ToggleAspect.AspectRatio = 1
+        ToggleAspect.Parent = Toggle
+        local ToggleLogo = MakeLogo(Toggle, UDim2.new(0,50,0,50), UDim2.new(0.5,-25,0.5,-25), 101)
         ToggleLogo.BackgroundTransparency = 1
+        local ToggleLogoCorner = ToggleLogo:FindFirstChildOfClass("UICorner")
+        if ToggleLogoCorner then ToggleLogoCorner.CornerRadius = UDim.new(1,0) end
         local Chevron = Text(Toggle, "›", 24, CYAN, true, Enum.TextXAlignment.Center)
         Chevron.Position = UDim2.new(1,-18,0.5,-16)
         Chevron.Size = UDim2.new(0,16,0,32)
         Chevron.ZIndex = 104
+        Chevron.Visible = false
 
         -- Intro overlay. No circular halo remains after the animation: only this
         -- rounded glass frame surrounds the mascot, then the frame fades away.
@@ -2775,7 +2802,7 @@ do
                     obj.BackgroundTransparency = math.min(1, obj.BackgroundTransparency + 0.25)
                     task.delay((i-1)*0.04, function()
                         if obj.Parent then
-                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=(obj==StatsRow and 0.04 or 0.16)}):Play() end)
+                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=(obj==StatsRow and 1 or (obj==Runtime and 0.04 or 0.16))}):Play() end)
                         end
                     end)
                 end
@@ -2794,9 +2821,9 @@ do
         BobonUIConnections[#BobonUIConnections+1] = Toggle.MouseButton1Click:Connect(function()
             SetVisible(not visible)
             pcall(function()
-                TS:Create(Toggle, TweenInfo.new(0.08, Enum.EasingStyle.Back), {Size=UDim2.new(0,74,0,74)}):Play()
+                TS:Create(Toggle, TweenInfo.new(0.08, Enum.EasingStyle.Back), {Size=UDim2.new(0,80,0,80)}):Play()
                 task.delay(0.09,function()
-                    if Toggle.Parent then TS:Create(Toggle, TweenInfo.new(0.13, Enum.EasingStyle.Quad), {Size=UDim2.new(0,68,0,68)}):Play() end
+                    if Toggle.Parent then TS:Create(Toggle, TweenInfo.new(0.13, Enum.EasingStyle.Quad), {Size=UDim2.new(0,74,0,74)}):Play() end
                 end)
             end)
         end)
@@ -2911,19 +2938,22 @@ do
 
                     if lastLv~=lv then LevelL.Text=Fmt(lv); Pulse(LevelScale); lastLv=lv end
                     if lastBeli~=beli then BeliL.Text="$ "..Fmt(beli); Pulse(BeliScale); lastBeli=beli end
-                    if lastFrag~=frag then FragL.Text="◈ "..Fmt(frag); Pulse(FragScale); lastFrag=frag end
+                    if lastFrag~=frag then FragL.Text=Fmt(frag); Pulse(FragScale); lastFrag=frag end
                     if lastFruit~=fruit then FruitL.Text=fruit; Pulse(FruitScale); lastFruit=fruit end
 
                     HUDInventoryRows(false)
                     local raw=tostring(_G.BobonStatus or "")
                     local owner=tostring(state.ActionOwner or "")
                     for i,row in ipairs(TrackedItems) do
+                        local ui=CheckerRows[i]
+                        if ui and ui.Label and ui.Label.Text ~= row.Label then
+                            ui.Label.Text = row.Label -- force canonical English labels
+                        end
                         local owned=OwnsTracked(row)
                         ownedMap[i]=owned
                         local active=not owned and IsTrackedActive(row,raw,owner)
                         local targetColor=owned and GREEN or (active and YELLOW or RED)
                         local targetState=owned and "owned" or (active and "active" or "missing")
-                        local ui=CheckerRows[i]
                         if ui and ui.State~=targetState then
                             ui.State=targetState
                             pcall(function()
@@ -7566,6 +7596,8 @@ function ClusterFarmController:SharedRelease(reason)
             local root = mob:FindFirstChild("HumanoidRootPart")
             local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
             if bp then pcall(function() bp:Destroy() end) end
+            local teddyHold = root and root:FindFirstChild("BobonTeddyStackHold")
+            if teddyHold then pcall(function() teddyHold:Destroy() end) end
             pcall(function()
                 mob:SetAttribute("BobonBringExpectedAt", nil)
                 mob:SetAttribute("BobonBringExpectedPos", nil)
@@ -7601,6 +7633,18 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedEmptySince = 0
     self.SharedLastBringAt = 0
     self.SharedBringCount = 0
+    self.TeddyAirTagged = setmetatable({}, {__mode="k"})
+    self.TeddyAirStacked = setmetatable({}, {__mode="k"})
+    self.TeddyAirStackStableAt = setmetatable({}, {__mode="k"})
+    self.TeddyAirRetryAfter = setmetatable({}, {__mode="k"})
+    self.TeddyAirVerified = setmetatable({}, {__mode="k"})
+    self.TeddyAirVisited = setmetatable({}, {__mode="k"})
+    self.TeddyAirFocusModel = nil
+    self.TeddyAirFocusPhase = nil
+    self.TeddyAirFocusStartedAt = 0
+    self.TeddyAirFocusLastHealth = nil
+    self.TeddyAirFocusRoot = nil
+    self.TeddyAirMobName = nil
     if _G.State then
         _G.State.ClusterMode = "OFF"
         _G.State.ClusterPrimary = nil
@@ -8001,6 +8045,8 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
     if not folder or not me then return true end
     local now = tick()
     local prefix = tostring(statusPrefix or "Farm")
+    if self.TeddyAirMobName and string.lower(tostring(self.TeddyAirMobName)) ~= string.lower(mobName) then self:SharedRelease("TeddyMobChanged") end
+    self.TeddyAirMobName = mobName
     local fieldCenter
     if typeof(fallbackCF) == "CFrame" then
         fieldCenter = fallbackCF.Position
@@ -8044,6 +8090,27 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
     end
     self.TeddyAirCandidates = candidates
 
+    local function destroyTeddyHold(r)
+        if not r then return end
+        local h = r:FindFirstChild("BobonTeddyStackHold")
+        if h then pcall(function() h:Destroy() end) end
+    end
+    local function ensureTeddyHold(r,pos)
+        if _G.Settings.TeddyAirUseBodyPosition == false or not r or not r.Parent then return nil end
+        local h = r:FindFirstChild("BobonTeddyStackHold")
+        if h and not h:IsA("BodyPosition") then pcall(function() h:Destroy() end); h=nil end
+        if not h then h=Instance.new("BodyPosition"); h.Name="BobonTeddyStackHold"; h.Parent=r end
+        h.MaxForce=Vector3.new(holdForce,holdForce,holdForce); h.P=holdP; h.D=holdD; h.Position=pos
+        return h
+    end
+    local function prepTeddyStack(model,hum,r)
+        self:SharedRemember(hum,"Humanoid"); self:SharedRemember(r,"Part")
+        pcall(function() hum.WalkSpeed=0; hum.AutoRotate=false; r.CanCollide=false end)
+        for _,part in ipairs(model:GetDescendants()) do
+            if part:IsA("BasePart") then self:SharedRemember(part,"Part"); pcall(function() part.CanCollide=false end) end
+        end
+    end
+
     -- Drop stale focus immediately; weak-key stack tables clean themselves on destroy.
     local focus = self.TeddyAirFocusModel
     if focus and (not focus.Parent or not candidateSet[focus]) then
@@ -8074,25 +8141,32 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
                 speed = _G.Settings.TeddyAirSweepSpeed or 430,
             })
         end
-        _G.BobonStatus = prefix .. ": Teddy HP • waiting " .. tostring(mobName)
+        _G.BobonStatus = prefix .. ": Teddy • waiting " .. tostring(mobName)
         return true
     end
 
     local hover = math.max(12, tonumber(_G.Settings.TeddyAirHoverHeight) or 28)
-    local verifyRadius = math.max(6, tonumber(_G.Settings.TeddyAirPullVerifyRadius) or 13)
-    local stableDelay = math.max(0.06, tonumber(_G.Settings.TeddyAirPullStableDelay) or 0.12)
-    local acquireRadius = math.max(35, tonumber(_G.Settings.TeddyAirAcquireRadius) or 120)
-    local causalWindow = math.max(0.25, tonumber(_G.Settings.TeddyAirCausalDamageWindow) or 0.80)
-    local focusTimeout = math.max(1.25, tonumber(_G.Settings.TeddyAirFocusTimeout) or 3.25)
-    local pullTimeout = math.max(0.75, tonumber(_G.Settings.TeddyAirPullTimeout) or 2.25)
-    local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyAirRetryDelay) or 0.45)
+    local tagHover = math.max(8, tonumber(_G.Settings.TeddyAirTagHoverHeight) or 16)
+    local acquireHeight = math.max(1.5, tonumber(_G.Settings.TeddyAirAcquireHeight) or 4)
+    local verifyRadius = math.max(6, tonumber(_G.Settings.TeddyAirPullVerifyRadius) or 15)
+    local stableDelay = math.max(0.06, tonumber(_G.Settings.TeddyAirPullStableDelay) or 0.14)
+    local acquireRadius = math.max(8, tonumber(_G.Settings.TeddyAirAcquireRadius) or 22)
+    local causalWindow = math.max(0.25, tonumber(_G.Settings.TeddyAirCausalDamageWindow) or 1.00)
+    local focusTimeout = math.max(1.25, tonumber(_G.Settings.TeddyAirFocusTimeout) or 4.25)
+    local pullTimeout = math.max(0.75, tonumber(_G.Settings.TeddyAirPullTimeout) or 3.25)
+    local retryDelay = math.max(0.15, tonumber(_G.Settings.TeddyAirRetryDelay) or 0.35)
+    local leash = math.max(verifyRadius * 2, tonumber(_G.Settings.TeddyAirStackLeash) or 42)
+    local holdP = math.max(1000, tonumber(_G.Settings.TeddyAirHoldP) or 7000)
+    local holdD = math.max(50, tonumber(_G.Settings.TeddyAirHoldD) or 240)
+    local holdForce = math.max(1000000, tonumber(_G.Settings.TeddyAirHoldMaxForce) or 1000000000)
+    local pileDepth = math.max(3, tonumber(_G.Settings.TeddyAirPileDepth) or 8)
 
     -- One moving pile directly below the player. Previously stacked mobs follow it
     -- while Farm flies to the next unproven victim.
     me = HRP() or me
     local pilePos = Vector3.new(
         me.Position.X,
-        me.Position.Y - hover + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
+        me.Position.Y - pileDepth + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
         me.Position.Z
     )
     if not IsSubmergedPosition(pilePos) then
@@ -8103,18 +8177,26 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
     for _, entry in ipairs(candidates) do
         local root = entry.Root
         if root and root.Parent and self.TeddyAirStacked[root] then
-            pcall(function()
-                local rot = root.CFrame.Rotation
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(pilePos) * rot
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-            local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) and (pos - pilePos).Magnitude <= verifyRadius * 1.75 then
-                self.TeddyAirVerified[root] = now
-                stackedCount = stackedCount + 1
+            local okBefore, before = pcall(function() return root.Position end)
+            if not okBefore or not IsValidPos(before) then
+                self.TeddyAirStacked[root]=nil; self.TeddyAirVerified[root]=nil; destroyTeddyHold(root)
+            else
+                local drift=(before-pilePos).Magnitude
+                if drift > leash then
+                    self.TeddyAirStacked[root]=nil; self.TeddyAirVerified[root]=nil
+                    self.TeddyAirRetryAfter[root]=now+retryDelay
+                    destroyTeddyHold(root); self:SharedRestoreOne(entry.Model)
+                else
+                    pcall(function()
+                        ensureTeddyHold(root,pilePos)
+                        root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
+                        if drift > verifyRadius*0.70 then root.CFrame=CFrame.new(pilePos)*root.CFrame.Rotation end
+                    end)
+                    local okPos,pos=pcall(function() return root.Position end)
+                    if okPos and IsValidPos(pos) and (pos-pilePos).Magnitude <= verifyRadius*1.6 then
+                        self.TeddyAirVerified[root]=now; stackedCount=stackedCount+1
+                    end
+                end
             end
         end
     end
@@ -8174,7 +8256,7 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
             _G.BobonDiagnostics.BringCandidates = #candidates
             _G.BobonDiagnostics.BringMoved = stackedCount
         end
-        _G.BobonStatus = ("%s: Teddy HP • pile %d/%d • hit %s")
+        _G.BobonStatus = ("%s: Teddy • pile %d/%d • hit %s")
             :format(prefix, stackedCount, #candidates, attempted and "ACTIVE" or "PROBING")
         return true
     end
@@ -8202,11 +8284,9 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
 
         -- Fly above this exact mob and keep real attack dispatch on it.
         if _G.State:CanRequestTravel() then
-            TravelManager:Request(root, "Farm", {
-                arrivalThreshold = math.max(18, tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 28),
-                fallback = fallbackCF,
-                combatHover = true,
-                persistent = false,
+            TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,tagHover,0)), "Farm", {
+                arrivalThreshold = math.max(8, tagHover*0.65),
+                fallback = fallbackCF, combatHover = false, persistent = false,
                 speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
             })
         end
@@ -8227,10 +8307,10 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
         local proven = self:IsDamageProven(focus)
         if proven then
             self.TeddyAirTagged[root] = now
-            self.TeddyAirFocusPhase = "PULL"
+            self.TeddyAirFocusPhase = "ACQUIRE"
             self.TeddyAirFocusStartedAt = now
             self.TeddyAirStackStableAt[root] = nil
-            phase = "PULL"
+            phase = "ACQUIRE"
         elseif now - (tonumber(self.TeddyAirFocusStartedAt) or now) >= focusTimeout then
             -- Do not fake-tag a no-damage mob. Move on briefly, then revisit it later.
             self.TeddyAirRetryAfter[root] = now + retryDelay
@@ -8246,7 +8326,7 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
             _G.BobonDiagnostics.BringCandidates = #candidates
             _G.BobonDiagnostics.BringMoved = stackedCount
         end
-        _G.BobonStatus = ("%s: Teddy HP • HIT %s • pile %d/%d • %s")
+        _G.BobonStatus = ("%s: Teddy • HIT %s • pile %d/%d • %s")
             :format(prefix, tostring(mobName), stackedCount, #candidates,
                 proven and "HP-PROVEN" or (attempted and "DAMAGE CHECK" or "PROBING"))
         return true
@@ -8256,11 +8336,9 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
     -- move it underfoot until the root actually persists there; only then is it STACKED.
     _G.State.ActionText = "Stacking Mob • " .. tostring(mobName)
     if _G.State:CanRequestTravel() then
-        TravelManager:Request(root, "Farm", {
-            arrivalThreshold = math.max(16, tonumber(_G.Settings.ClusterAcquireArrivalThreshold) or 26),
-            fallback = fallbackCF,
-            combatHover = true,
-            persistent = false,
+        TravelManager:Request(CFrame.new(root.Position + Vector3.new(0,acquireHeight,0)), "Farm", {
+            arrivalThreshold = math.max(5, acquireHeight+2),
+            fallback = fallbackCF, combatHover = false, persistent = false,
             speed = tonumber(_G.Settings.TeddyAirSweepSpeed) or 430,
         })
     end
@@ -8268,7 +8346,7 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
     me = HRP() or me
     pilePos = Vector3.new(
         me.Position.X,
-        me.Position.Y - hover + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
+        me.Position.Y - pileDepth + (tonumber(_G.Settings.TeddyAirPileYOffset) or 0),
         me.Position.Z
     )
     if not IsSubmergedPosition(pilePos) then
@@ -8277,27 +8355,30 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
 
     local near = (root.Position - me.Position).Magnitude <= acquireRadius
     local own = ClientOwnsMob(root)
-    local canTry = near and (own ~= false or _G.Settings.TeddyAirPullUnknownNear ~= false)
-    if canTry then
+    if near then
+        pcall(function() ExpandSimulationRadius() end)
+        self:SharedRemember(root,"Part")
+        pcall(function() root.CanCollide=false end)
         pcall(function()
-            local rot = root.CFrame.Rotation
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            root.CFrame = CFrame.new(pilePos) * rot
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
+            local rot=root.CFrame.Rotation
+            root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
+            root.CFrame=CFrame.new(pilePos)*rot
+            if own ~= false or _G.Settings.TeddyAirRequireOwnerForPull == false then ensureTeddyHold(root,pilePos) end
+            root.AssemblyLinearVelocity=Vector3.zero; root.AssemblyAngularVelocity=Vector3.zero
         end)
     end
 
     local okPos, pos = pcall(function() return root.Position end)
     local inPile = okPos and IsValidPos(pos) and (pos - pilePos).Magnitude <= verifyRadius
     if inPile then
+        prepTeddyStack(focus,hum,root)
         local since = tonumber(self.TeddyAirStackStableAt[root]) or now
         if not self.TeddyAirStackStableAt[root] then self.TeddyAirStackStableAt[root] = now end
         if now - since >= stableDelay then
             self.TeddyAirStacked[root] = true
             self.TeddyAirVerified[root] = now
             self.TeddyAirRetryAfter[root] = nil
+            ensureTeddyHold(root,pilePos)
             self.TeddyAirFocusModel = nil
             self.TeddyAirFocusPhase = nil
             self.TeddyAirFocusStartedAt = 0
@@ -8324,14 +8405,16 @@ function ClusterFarmController:TeddyAirFarmTick(mobName, fallbackCF, statusPrefi
         self.TeddyAirFocusLastHealth = nil
         self.TeddyAirFocusRoot = nil
         self.TeddyAirStackStableAt[root] = nil
+        destroyTeddyHold(root)
+        self:SharedRestoreOne(focus)
     end
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TEDDY-PULL %d/%d"):format(stackedCount, #candidates)
+        _G.BobonDiagnostics.Bring = ("TEDDY-ACQUIRE %d/%d"):format(stackedCount, #candidates)
         _G.BobonDiagnostics.BringCandidates = #candidates
         _G.BobonDiagnostics.BringMoved = stackedCount
     end
-    _G.BobonStatus = ("%s: Teddy HP • PULL %s • pile %d/%d • hit %s")
+    _G.BobonStatus = ("%s: Teddy • ACQUIRE %s • pile %d/%d • hit %s")
         :format(prefix, tostring(mobName), stackedCount, #candidates,
             attempted and "ACTIVE" or "PROBING")
     return true
