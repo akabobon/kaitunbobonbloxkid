@@ -1,8 +1,19 @@
 -- =================================================================
---         BOBON HUB v22.9 | COMPACT UI | SKIP RESTORED
+--         BOBON HUB v22.10 | VIDEO REVIEW FIX | ACQUIRE-FIRST SKIP
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.8 APPROVED CAT UI | Version: v22.9
+--         Base: v22.9 COMPACT UI | Version: v22.10
 --
+--  v22.10 VIDEO 18/19 REVIEW FIXES:
+--  [V22.10-1] Early skip is now ACQUIRE-FIRST / KILL-SECOND. It no longer attacks one
+--              Sky Bandit/God's Guard while the rest of the floor is still being gathered.
+--  [V22.10-2] Skip uses a longer dedicated acquire window and longer kill slice, reducing
+--              the 3/6 -> 2/6 phase flicker seen in the supplied recordings.
+--  [V22.10-3] Skip status now distinguishes Gathering pile vs Attacking pile using live
+--              verified/total counts instead of the misleading "Gathering + attacking" text.
+--  [V22.10-4] Intro moving-logo object is destroyed after landing and the intro container
+--              is destroyed after fade, preventing a stale duplicate overlay.
+--  [V22.10-5] Stats strip has an opaque backing plate so no bright game gaps show between cards.
+--              Status Checker labels remain English.
 --
 --  v22.9 COMPACT UI + EARLY SKIP RESTORED:
 --  [V22.9-1] Compacts/centers the four live stat cards, reduces internal whitespace,
@@ -1368,6 +1379,9 @@ _G.Settings = {
     ClusterAcquireBeforeAttack = true,
     ClusterAcquirePhaseBudget = 4.0,
     ClusterKillPhaseSlice = 1.15,
+    -- v22.10: early-skip gets a longer gather window and a longer stable kill slice.
+    SkipAcquirePhaseBudget = 5.50,
+    SkipKillPhaseSlice = 2.20,
     ClusterAcquireTouchRadius = 95,
     -- v21.36: allow one proximity persistence probe even when an executor
     -- keeps reporting isnetworkowner=false. Snap-back + HP liveness still decide truth.
@@ -2228,8 +2242,13 @@ do
         -- gaps between translucent cards on wide screens.
         StatsRow.Position = UDim2.new(0.14,0,0.205,0)
         StatsRow.Size = UDim2.new(0.72,0,0,72)
-        StatsRow.BackgroundTransparency = 1
+        -- v22.10: one dark backing plate removes the bright game seams between
+        -- the four rounded cards without adding fake whitespace.
+        StatsRow.BackgroundColor3 = DARK_CARD
+        StatsRow.BackgroundTransparency = 0.04
+        StatsRow.BorderSizePixel = 0
         StatsRow.Parent = HUD
+        Corner(StatsRow, 16)
 
         local function StatCard(name, order, title)
             local w = 0.244
@@ -2544,9 +2563,18 @@ do
             local owner = tostring(state.ActionOwner or "")
 
             local farm
+            local rawLow = string.lower(raw)
+            local skipLive = tostring(state.FState or "") == "SKIP_FARM"
+                or rawLow:find("skip:",1,true) == 1
+                or rawLow:find("skip mode",1,true) ~= nil
             if state.DodgeActive then
                 farm = "Dodging • " .. tostring(state.DodgeThreatName or state.ActiveQuestMob or "target")
-            elseif mode == "Recovering" or raw:lower():find("recovery",1,true) or raw:lower():find("recovering",1,true) then
+            elseif skipLive then
+                -- v22.10: video 18 showed the HUD saying "Farming Bandit" while the
+                -- character was physically killing Sky Bandit. Skip state must win over
+                -- any stale ActiveQuestMob left by the normal quest selector.
+                farm = raw
+            elseif mode == "Recovering" or rawLow:find("recovery",1,true) or rawLow:find("recovering",1,true) then
                 farm = raw
             elseif LooksItemStatus(raw) or LooksItemStatus(owner) then
                 if mode == "Farming" and state.ActiveQuestMob then
@@ -2648,7 +2676,7 @@ do
                     obj.BackgroundTransparency = math.min(1, obj.BackgroundTransparency + 0.25)
                     task.delay((i-1)*0.04, function()
                         if obj.Parent then
-                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=0.16}):Play() end)
+                            pcall(function() TS:Create(obj, TweenInfo.new(0.20, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position=old, BackgroundTransparency=(obj==StatsRow and 0.04 or 0.16)}):Play() end)
                         end
                     end)
                 end
@@ -2743,7 +2771,10 @@ do
                     Position=targetPos,Size=UDim2.new(0,72,0,72)
                 }):Play()
                 task.wait(0.82)
-                IntroLogo.Visible=false
+                -- v22.10: destroy the travelling copy after it lands. Keeping a
+                -- hidden duplicate alive caused some executors to leave a stale
+                -- image object over the status text.
+                if IntroLogo and IntroLogo.Parent then IntroLogo:Destroy() end
                 TopLogo.Visible=true
 
                 Intro.BackgroundTransparency=0
@@ -2757,11 +2788,12 @@ do
                     obj.Position=p+UDim2.new(0,0,0,16)
                     if obj:IsA("Frame") then obj.BackgroundTransparency=1 end
                     TS:Create(obj,TweenInfo.new(0.45,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),{
-                        Position=p,BackgroundTransparency=obj==StatsRow and 1 or 0.16
+                        Position=p,BackgroundTransparency=obj==StatsRow and 0.04 or 0.16
                     }):Play()
                     task.wait(0.22)
                 end
-                Intro.Visible=false
+                -- v22.10: remove the finished intro tree completely.
+                if Intro and Intro.Parent then Intro:Destroy() end
             end)
         end)
 
@@ -6773,14 +6805,22 @@ function ClusterFarmController:UpdatePhase()
             acquireEpoch = tonumber(state.ClusterPhaseStartedAt) or now
             state.ClusterWaveStartedAt = acquireEpoch
         end
-        if now - acquireEpoch >= (_G.Settings.ClusterAcquirePhaseBudget or 4.0) then
+        local acquireBudget = state.ClusterMode == "SKIP"
+            and (_G.Settings.SkipAcquirePhaseBudget or 5.50)
+            or (_G.Settings.ClusterAcquirePhaseBudget or 4.0)
+        if now - acquireEpoch >= acquireBudget then
             state.ClusterPhase = "KILL"
             state.ClusterPhaseStartedAt = now
         end
     elseif state.ClusterPhase == "KILL" then
-        local killSlice = verified <= 0
-            and (_G.Settings.ClusterUnstackedKillSlice or 3.25)
-            or (_G.Settings.ClusterKillPhaseSlice or 1.15)
+        local killSlice
+        if verified <= 0 then
+            killSlice = _G.Settings.ClusterUnstackedKillSlice or 3.25
+        elseif state.ClusterMode == "SKIP" then
+            killSlice = _G.Settings.SkipKillPhaseSlice or 2.20
+        else
+            killSlice = _G.Settings.ClusterKillPhaseSlice or 1.15
+        end
         if verified < total and now - (state.ClusterPhaseStartedAt or now)
             >= killSlice then
             state.ClusterPhase = "ACQUIRE"
@@ -10167,29 +10207,31 @@ function SkipRouteController:Run()
     -- so the same Farm owner atomically retargeted away from the mob every tick.
     -- Both Floor 1 and Floor 2 therefore showed found>0, owned=0, stacked=0 and
     -- appeared to teleport to the island then stand forever.
-    local acquireTarget = ClusterFarmController:GetAcquireTarget()
+    local phase = tostring(_G.State.ClusterPhase or "ACQUIRE")
+    local acquireTarget = phase == "ACQUIRE" and ClusterFarmController:GetAcquireTarget() or nil
     local acquireRoot = acquireTarget
         and acquireTarget:FindFirstChild("HumanoidRootPart")
-    local acquiring = acquireRoot ~= nil
+    local acquiring = phase == "ACQUIRE"
+        and acquireRoot ~= nil
         and _G.State:IsTargetValid(acquireTarget)
         and ClusterFarmController:IsModelAllowed(acquireTarget)
 
-    local primary = ClusterFarmController:SelectPrimary()
+    -- v22.10: skip now obeys the same ACQUIRE -> KILL discipline as the
+    -- normal cluster farm. Do not kill one mob at its spawn while the rest of
+    -- the floor is still being gathered.
+    local primary = phase == "KILL" and ClusterFarmController:SelectPrimary() or nil
     local target = nil
     local targetRoot = nil
+    local stacked = ClusterFarmController:GetVerifiedCount()
+    local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
 
-    if acquiring then
-        -- The acquisition trip owns this tick. Do NOT overwrite it with hoverCF.
+    if phase == "ACQUIRE" and acquiring then
         _G.State.FState = "SKIP_FARM"
         _G.State.FarmTarget = acquireTarget
         _G.State.CurrentTarget = acquireTarget
-        target = acquireTarget
-        targetRoot = acquireRoot
         PrepareCombatTarget(acquireTarget)
 
-        local stacked = ClusterFarmController:GetVerifiedCount()
-        local total = tonumber(_G.BobonDiagnostics.BringCandidates) or 0
-        _G.BobonStatus = ("Skip: Gathering + attacking %s (%d/%d)")
+        _G.BobonStatus = ("Skip: Gathering pile %s (%d/%d)")
             :format(tostring(route.Display or route.Names[1]), stacked, total)
 
         if _G.State:CanRequestTravel() then
@@ -10201,15 +10243,19 @@ function SkipRouteController:Run()
                 speed = _G.Settings.SkipTravelSpeed or 320,
             })
         end
+        return true
 
-    elseif primary then
-        -- No more immediate acquire target: settle above the verified stack.
+    elseif phase == "KILL" and primary then
+        -- Settle over the real verified pile first, then fan attacks only from
+        -- the combat anchor. This is what the videos were missing.
         _G.State.FState = "SKIP_FARM"
         _G.State.FarmTarget = primary
         _G.State.CurrentTarget = primary
         target = primary
         targetRoot = primary:FindFirstChild("HumanoidRootPart")
         PrepareCombatTarget(primary)
+        _G.BobonStatus = ("Skip: Attacking pile %s (%d/%d)")
+            :format(tostring(route.Display or route.Names[1]), stacked, total)
 
         if hoverCF and _G.State:CanRequestTravel() then
             TravelManager:Request(hoverCF, "Farm", {
@@ -10222,9 +10268,6 @@ function SkipRouteController:Run()
         end
 
     else
-        -- v21.13: no immediate nearest-mob chase here. RestackBatch gets the first
-        -- chance to remote-pull the whole floor; GetAcquireTarget becomes the single
-        -- bounded fallback only if zero mobs can be proven at the anchor.
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
         if hoverCF and _G.State:CanRequestTravel() then
@@ -10236,16 +10279,18 @@ function SkipRouteController:Run()
                 persistent = true,
             })
         end
-        _G.BobonStatus = "Skip: Remote gathering " .. tostring(route.Display)
+        _G.BobonStatus = phase == "KILL"
+            and ("Skip: Waiting verified pile " .. tostring(route.Display))
+            or (("Skip: Remote gathering %s (%d/%d)")
+                :format(tostring(route.Display), stacked, total))
         return true
     end
 
-    -- HYBRID ATTACK: while acquiring, damage the exact real floor mob as soon as
-    -- it is inside the verified fast-attack range. Once settled, require the
-    -- normal combat anchor. CollectTargets will also include every verified
-    -- same-name mob already stacked at the anchor.
+    -- KILL phase only. The attack backend may fan out across every eligible
+    -- verified mob in the pile, but acquisition itself never attacks.
     local me = HRP()
-    if target and targetRoot and me and _G.State:IsTargetValid(target) then
+    if phase == "KILL" and target and targetRoot and me
+        and _G.State:IsTargetValid(target) then
         local okPos, targetPos = pcall(function() return targetRoot.Position end)
         if okPos and IsValidPos(targetPos) then
             local range = fastReady
@@ -10255,7 +10300,7 @@ function SkipRouteController:Run()
             local farmHolds = not _G.State.IsTraveling
                 or _G.State.MovementOwner == "Farm"
             local canHit = distance <= range and farmHolds
-                and (acquiring or TravelManager:IsAtCombatAnchor())
+                and TravelManager:IsAtCombatAnchor()
 
             if canHit then
                 EquipCombatTool()
