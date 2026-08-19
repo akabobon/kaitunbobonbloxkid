@@ -1,8 +1,16 @@
 -- =================================================================
---         BOBON HUB v22.8 | APPROVED CAT UI | REAL ACCOUNT STATUS
+--         BOBON HUB v22.9 | COMPACT UI | SKIP RESTORED
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.7 PUBLIC-SOURCE SAFE MERGE | Version: v22.8
+--         Base: v22.8 APPROVED CAT UI | Version: v22.9
 --
+--
+--  v22.9 COMPACT UI + EARLY SKIP RESTORED:
+--  [V22.9-1] Compacts/centers the four live stat cards, reduces internal whitespace,
+--             makes cards/runtime nearly opaque so bright Roblox panels do not show through seams.
+--  [V22.9-2] Normalizes localized empty-fruit text (including "Không có") to English "NONE".
+--  [V22.9-3] Restores Sea 1 Lv10-70 skip startup without waiting for FastReady.
+--             Normal verified combat bootstraps the route; fast combat takes over once HP-proven.
+--  [V22.9-4] Skip still uses ClusterFarmController/Bring Mobs and keeps the existing no-progress fallback.
 --
 --  v22.8 APPROVED CAT UI + REAL STATUS:
 --  [V22.8-1] Replaces Ember HUD with the approved dark-glass/cyan BobonHub layout.
@@ -1658,7 +1666,7 @@ end
 --   State consistency checks
 --   Centralized target/action management
 -- ══════════════════════════════════════════════════════════════════
-_G.BobonStatus = "Initializing..."
+_G.BobonStatus = "Initializing Kaitun..."
 _G.BobonDiagnostics = {
     Tool = "wait",
     Net = "wait",
@@ -1984,7 +1992,7 @@ local BobonUIRoot = nil
 local BobonUIConnections = {}
 
 -- ══════════════════════════════════════════════════════════════════
---       UI — BOBONHUB CAT GLASS HUD v6 | REAL ACCOUNT STATUS
+--       UI — BOBONHUB CAT GLASS HUD v6.1 | ENGLISH REAL ACCOUNT STATUS
 --   Approved layout: unified mascot logo, framed intro, letter reveal,
 --   slow panel load, live Status Farm/Status Item and real item checker.
 -- ══════════════════════════════════════════════════════════════════
@@ -2203,35 +2211,40 @@ do
         local FarmCap = Text(Top, "STATUS FARM", 11, CYAN_SOFT, true)
         FarmCap.Position = UDim2.new(0,352,0,15)
         FarmCap.Size = UDim2.new(0,125,0,20)
-        local StatusFarm = Text(Top, "Initializing...", 17, WHITE, true)
+        local StatusFarm = Text(Top, "Initializing Kaitun...", 17, WHITE, true)
         StatusFarm.Position = UDim2.new(0,352,0,35)
         StatusFarm.Size = UDim2.new(1,-372,0,24)
 
         local ItemCap = Text(Top, "STATUS ITEM", 11, CORAL, true)
         ItemCap.Position = UDim2.new(0,352,0,62)
         ItemCap.Size = UDim2.new(0,125,0,18)
-        local StatusItem = Text(Top, "Checking inventory...", 16, CORAL, true)
+        local StatusItem = Text(Top, "Scanning Inventory...", 16, CORAL, true)
         StatusItem.Position = UDim2.new(0,352,0,78)
         StatusItem.Size = UDim2.new(1,-372,0,22)
 
         local StatsRow = Instance.new("Frame")
         StatsRow.Name = "StatsRow"
-        StatsRow.Position = UDim2.new(0.13,0,0.205,0)
-        StatsRow.Size = UDim2.new(0.62,0,0,88)
+        -- v22.9: compact, centered stat strip.  The old row left visible game/UI
+        -- gaps between translucent cards on wide screens.
+        StatsRow.Position = UDim2.new(0.14,0,0.205,0)
+        StatsRow.Size = UDim2.new(0.72,0,0,72)
         StatsRow.BackgroundTransparency = 1
         StatsRow.Parent = HUD
 
         local function StatCard(name, order, title)
-            local w = 0.235
-            local gap = 0.02
+            local w = 0.244
+            local gap = 0.008
             local x = (order-1)*(w+gap)
             local c = Card(StatsRow, name, UDim2.new(x,0,0,0), UDim2.new(w,0,1,0))
-            local cap = Text(c, title, 11, CYAN_SOFT, true, Enum.TextXAlignment.Center)
-            cap.Position = UDim2.new(0,8,0,12)
-            cap.Size = UDim2.new(1,-16,0,18)
-            local val = Text(c, "-", 23, WHITE, true, Enum.TextXAlignment.Center)
-            val.Position = UDim2.new(0,8,0,36)
-            val.Size = UDim2.new(1,-16,0,32)
+            -- Nearly opaque cards prevent bright Roblox panels showing through
+            -- the tiny seams and looking like white empty bars.
+            c.BackgroundTransparency = 0.04
+            local cap = Text(c, title, 10, CYAN_SOFT, true, Enum.TextXAlignment.Center)
+            cap.Position = UDim2.new(0,6,0,7)
+            cap.Size = UDim2.new(1,-12,0,16)
+            local val = Text(c, "-", 21, WHITE, true, Enum.TextXAlignment.Center)
+            val.Position = UDim2.new(0,6,0,25)
+            val.Size = UDim2.new(1,-12,0,30)
             local scale = Instance.new("UIScale")
             scale.Scale = 1
             scale.Parent = c
@@ -2243,8 +2256,9 @@ do
         local FragCard, FragL, FragScale = StatCard("Fragments",3,"FRAGMENTS")
         local FruitCard, FruitL, FruitScale = StatCard("Fruit",4,"FRUIT")
 
-        local Runtime = Card(HUD, "Runtime", UDim2.new(0.39,0,0.335,0), UDim2.new(0.22,0,0,40))
-        local RuntimeL = Text(Runtime, "TIME  00:00:00", 13, CYAN_SOFT, true, Enum.TextXAlignment.Center)
+        local Runtime = Card(HUD, "Runtime", UDim2.new(0.405,0,0.305,0), UDim2.new(0.19,0,0,34))
+        Runtime.BackgroundTransparency = 0.04
+        local RuntimeL = Text(Runtime, "TIME  00:00:00", 12, CYAN_SOFT, true, Enum.TextXAlignment.Center)
         RuntimeL.Size = UDim2.fromScale(1,1)
 
         local Checker = Card(HUD, "StatusChecker", UDim2.new(0.70,0,0.39,0), UDim2.new(0.275,0,0,302))
@@ -2482,11 +2496,20 @@ do
                     local v = d:FindFirstChild(name)
                     if v then
                         local ok,val = pcall(function() return v.Value end)
-                        if ok and val ~= nil and tostring(val) ~= "" then return tostring(val) end
+                        if ok and val ~= nil and tostring(val) ~= "" then
+                            local text = tostring(val)
+                            local low = string.lower(text)
+                            if low == "none" or low == "nil" or low == "n/a"
+                                or low == "no fruit" or low:find("không", 1, true)
+                                or low:find("khong", 1, true) then
+                                return "NONE"
+                            end
+                            return text
+                        end
                     end
                 end
             end
-            return "None"
+            return "NONE"
         end
 
         local ItemKeywords = {
@@ -2522,14 +2545,14 @@ do
 
             local farm
             if state.DodgeActive then
-                farm = "Dodge • " .. tostring(state.DodgeThreatName or state.ActiveQuestMob or "target")
+                farm = "Dodging • " .. tostring(state.DodgeThreatName or state.ActiveQuestMob or "target")
             elseif mode == "Recovering" or raw:lower():find("recovery",1,true) or raw:lower():find("recovering",1,true) then
                 farm = raw
             elseif LooksItemStatus(raw) or LooksItemStatus(owner) then
                 if mode == "Farming" and state.ActiveQuestMob then
                     farm = "Farming " .. tostring(state.ActiveQuestMob)
                 elseif state.ActiveActionToken ~= 0 and owner ~= "" then
-                    farm = "Paused for " .. owner
+                    farm = "Paused • " .. owner
                 else
                     farm = string.upper(mode)
                 end
@@ -2538,7 +2561,7 @@ do
                 if fs:find("QUEST",1,true) then
                     farm = "Taking Quest • " .. tostring(state.ActiveQuestMob)
                 elseif fs:find("MOVE",1,true) or fs:find("ACQUIRE",1,true) then
-                    farm = "Moving to " .. tostring(state.ActiveQuestMob)
+                    farm = "Moving To " .. tostring(state.ActiveQuestMob)
                 else
                     farm = "Farming " .. tostring(state.ActiveQuestMob)
                 end
@@ -2556,7 +2579,7 @@ do
                 for i,row in ipairs(TrackedItems) do
                     if ownedMap[i] == false then missing = row.Label break end
                 end
-                item = missing and ("Missing • " .. missing) or "All tracked completed ✓"
+                item = missing and ("Missing Item • " .. missing) or "All Required Items Completed ✓"
             end
             return farm, item
         end
@@ -10081,11 +10104,16 @@ function SkipRouteController:FindTarget(route)
 end
 
 function SkipRouteController:Run()
-    -- Teddy-style early skip needs a verified fast backend. If damage cannot be
-    -- proven, normal quest farming remains the safe bootstrap/fallback.
-    if not CombatController:IsFastReady() then
-        self:Reset("fast attack not health-verified")
-        return false
+    -- v22.9: early skip must start at Lv10-70 even before the fast adapter has
+    -- been health-verified.  The previous hard gate made a fresh account at
+    -- Lv40 stay on normal quests forever because FastReady could only become
+    -- true after enough real combat proof.  Skip now bootstraps with the normal
+    -- verified attack path, then automatically upgrades to fast combat once
+    -- CombatController proves it.  The existing HP-delta watchdog still falls
+    -- back to quests if the route makes no real level progress.
+    local fastReady = CombatController:IsFastReady()
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.SkipBackend = fastReady and "FAST" or "BOOTSTRAP"
     end
 
     local route = self:GetRoute()
@@ -10124,6 +10152,7 @@ function SkipRouteController:Run()
     _G.State.FState = "SKIP_FARM"
     _G.BobonStatus = "Level Farming | Skip Mode | "
         .. (route.Key == "TeddyFloor1" and "Floor 1" or "Floor 2")
+        .. (fastReady and " | Fast Combat" or " | Combat Bootstrap")
 
     -- Keep one persistent spawn anchor and refresh the complete same-name batch.
     ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
@@ -10219,7 +10248,9 @@ function SkipRouteController:Run()
     if target and targetRoot and me and _G.State:IsTargetValid(target) then
         local okPos, targetPos = pcall(function() return targetRoot.Position end)
         if okPos and IsValidPos(targetPos) then
-            local range = _G.Settings.FastAttackRange or _G.Settings.AttackRange or 100
+            local range = fastReady
+                and (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
+                or math.max(_G.Settings.AttackRange or 20, 35)
             local distance = (me.Position - targetPos).Magnitude
             local farmHolds = not _G.State.IsTraveling
                 or _G.State.MovementOwner == "Farm"
