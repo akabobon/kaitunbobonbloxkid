@@ -1,4 +1,14 @@
 -- =================================================================
+--         BOBON HUB v22.20 SKILL-EFFECT-ONLY DODGE | TEDDY v22.17 LOCKED
+--         Base: v22.19.1 EXEC-SAFE QUEST-FIRST
+--  [D220-1] Dodge NEVER triggers from raw damage, stun/busy, root velocity, or animation alone.
+--  [D220-2] Cast animation only arms source correlation; movement starts only after a real
+--           slash/projectile/beam/blast effect emitted by the active NPC is observed.
+--  [D220-3] Effect must belong to the active target and overlap the player or travel toward the player.
+--  [D220-4] Dodge is one short sidestep pulse. No repeated dodge movement can fight Teddy bring/acquire.
+--  [D220-5] Teddy bring blocks are byte-identical to v22.19.1.
+-- =================================================================
+-- =================================================================
 --         BOBON HUB v22.19.1 EXEC-SAFE QUEST-FIRST | TEDDY v22.17 LOCKED
 --         Base: v22.17; NO new top-level locals (Luau chunk local-pressure safe)
 --  [Q191-1] Quest completion/hidden wrapper stops farm immediately.
@@ -1606,23 +1616,30 @@ _G.Settings = {
     DodgeKeepAttacking  = true,
     DodgeSideStepOnly   = true,
     -- Target-lock side-step: same TravelManager owner, same target, same combat stream.
-    DodgeCooldown       = 0.24,
-    DodgeDistance       = 22,
+    DodgeCooldown       = 0.28,
+    DodgeDistance       = 18,
     DodgeHeight         = 0,
-    DodgeRadius         = 42,
+    DodgeRadius         = 46,
     DodgeEmergencySpeed = 380,
-    DodgeMinHold        = 0.30,
-    DodgeSafeConfirm    = 0.50,
-    DodgeMaxHold        = 2.50,
-    DodgeDamageFallbackHold = 1.10,
-    DodgeReplanInterval = 0.55,
-    DodgeMonitorInterval= 0.05,
-    DodgeHazardTTL      = 1.20,
-    DodgeHazardMargin   = 6,
-    DodgeHazardTrackRadius = 65,
+    DodgeMinHold        = 0.12,
+    DodgeSafeConfirm    = 0.12,
+    DodgeMaxHold        = 0.68,
+    DodgeDamageFallbackHold = 0, -- ignored: raw damage never triggers dodge
+    DodgeReplanInterval = 999,   -- one sidestep only
+    DodgeMonitorInterval= 0.04,
+    DodgeHazardTTL      = 0.85,
+    DodgeHazardMargin   = 5,
+    DodgeHazardTrackRadius = 82,
     DodgeConfirmSamples = 2,
-    DodgeGlobalHazardRadius = 18,
-    DodgeTargetHazardRadius = 70,
+    DodgeGlobalHazardRadius = 34,
+    DodgeTargetHazardRadius = 90,
+    DodgeEffectSourceRadius = 34,
+    DodgeCastArmTTL     = 0.50,
+    DodgeSkillPulseTTL  = 0.44,
+    DodgeIncomingRadius = 38,
+    DodgeIncomingLookahead = 0.58,
+    DodgeIncomingMinSpeed = 7,
+    DodgeIncomingDot    = 0.22,
     QuestUILease        = 0.65,
     QuestCloseConfirm   = 0.20,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
@@ -10143,7 +10160,7 @@ task.spawn(function()
     end
 end)
 -- ══════════════════════════════════════════════════════════════════
---    v21.33 TARGET-LOCK SKILL DODGE — CONFIRM → EVADE ONCE → SAFE → RESUME
+--    v22.20 TARGET-LOCK SKILL-EFFECT DODGE — EMITTED EFFECT ONLY → ONE PULSE → RESUME
 --   * Never scans unrelated nearby NPCs as threats; only the TravelManager active target.
 --   * No generic Action-priority fallback: ordinary combat/idle animations cannot trigger dodge.
 --   * A threat must be seen in consecutive monitor samples before movement changes.
@@ -10165,21 +10182,25 @@ local DodgeController = {
     PendingKey = nil,
     PendingCount = 0,
     PendingAt = 0,
+    CastTarget = nil,
+    CastUntil = 0,
     HazardParts = setmetatable({}, {__mode="k"}),
+    HazardMotion = setmetatable({}, {__mode="k"}),
 }
 
--- v22.3: normal M1/contact animations are intentionally NOT dodge triggers.
--- Only high-confidence skill/cast names may move the player sideways.
+-- v22.20: animation is only source-arming evidence. Animation alone NEVER moves the player.
 local ATTACK_WORDS = {
     "skill","cast","blast","beam","wave","projectile","charge",
     "roar","stomp","slam","burst","explosion","shockwave",
     "vortex","tornado","laser","eruption","aoe",
+    "slash","slice","cleave","swordwave","blade wave","cut",
 }
--- High-confidence world hazards only. Generic Hitbox/Damage names are excluded
--- because ordinary NPC melee boxes and player VFX would create false dodges.
+-- Only explicit emitted skill/slash effect names are tracked. Generic Hitbox/Damage/Weapon
+-- parts stay excluded so ordinary melee and Teddy acquire movement cannot fake a dodge.
 local HARD_HAZARD_WORDS = {
     "projectile","beam","blast","explosion","shockwave","aoe",
     "vortex","tornado","laser","eruption",
+    "slash","slice","cleave","swordwave","blade wave","cutwave","cut wave",
 }
 
 local function WordMatch(text, words)
@@ -10253,7 +10274,7 @@ local function FlatUnit(v, fallback)
     return Vector3.new(1,0,0)
 end
 
-local function TrackHazard(obj)
+local function TrackHazard(obj, extraLabel)
     if not obj or not obj:IsA("BasePart")
         or IsOurCharacterDescendant(obj) or IsPlayerOwnedEffect(obj) then
         return
@@ -10264,17 +10285,52 @@ local function TrackHazard(obj)
 
     local ok, pos, size = pcall(function() return obj.Position, obj.Size end)
     if not ok or not IsValidPos(pos) then return end
-    if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 65) then return end
-    if (pos - targetRoot.Position).Magnitude > (_G.Settings.DodgeTargetHazardRadius or 70) then return end
+    if (pos - me.Position).Magnitude > (_G.Settings.DodgeHazardTrackRadius or 82) then return end
 
-    local label = tostring(obj.Name or "") .. " " .. tostring(obj.Parent and obj.Parent.Name or "")
+    local label = tostring(obj.Name or "") .. " "
+        .. tostring(obj.Parent and obj.Parent.Name or "") .. " "
+        .. tostring(extraLabel or "")
     if not WordMatch(label, HARD_HAZARD_WORDS) then return end
-    if math.max(size.X,size.Y,size.Z) < 2 then return end
-    DodgeController.HazardParts[obj] = tick() + (_G.Settings.DodgeHazardTTL or 1.2)
+    if math.max(size.X,size.Y,size.Z) < 0.45 then return end
+
+    local enemies = workspace:FindFirstChild("Enemies")
+    local effectModel = obj:FindFirstAncestorOfClass("Model")
+    if effectModel and enemies and effectModel.Parent == enemies and effectModel ~= target then
+        return
+    end
+
+    local now = tick()
+    local sourceRadius = tonumber(_G.Settings.DodgeEffectSourceRadius) or 34
+    local fromTarget = obj:IsDescendantOf(target)
+    local spawnedAtTarget = (pos - targetRoot.Position).Magnitude <= sourceRadius
+    local castArmed = DodgeController.CastTarget == target
+        and now <= (tonumber(DodgeController.CastUntil) or 0)
+
+    if not fromTarget and not spawnedAtTarget and not castArmed then return end
+    if (pos - targetRoot.Position).Magnitude > (_G.Settings.DodgeTargetHazardRadius or 90)
+        and not castArmed then
+        return
+    end
+
+    DodgeController.HazardParts[obj] = now + (_G.Settings.DodgeHazardTTL or 0.85)
+    DodgeController.HazardMotion[obj] = {
+        Position = pos,
+        At = now,
+        Target = target,
+    }
 end
 
 local hazardConn = workspace.DescendantAdded:Connect(function(obj)
-    if SessionAlive() and obj:IsA("BasePart") then pcall(TrackHazard,obj) end
+    if not SessionAlive() then return end
+    if obj:IsA("BasePart") then
+        pcall(TrackHazard, obj)
+    elseif obj:IsA("Beam") or obj:IsA("Trail") then
+        local carrier = obj.Parent
+        if carrier and carrier:IsA("Attachment") then carrier = carrier.Parent end
+        if carrier and carrier:IsA("BasePart") then
+            pcall(TrackHazard, carrier, tostring(obj.Name or "") .. " " .. obj.ClassName)
+        end
+    end
 end)
 BobonUIConnections[#BobonUIConnections+1] = hazardConn
 
@@ -10300,53 +10356,81 @@ end
 
 local function ActiveHazardNear(me, targetRoot)
     if not me or not targetRoot then return nil end
-    local now=tick()
-    local best
-    for part,expires in pairs(DodgeController.HazardParts) do
-        if not part.Parent or now>expires then
-            DodgeController.HazardParts[part]=nil
+    local now = tick()
+    local activeTarget = ActiveCombatModel()
+    for part, expires in pairs(DodgeController.HazardParts) do
+        if not part.Parent or now > expires then
+            DodgeController.HazardParts[part] = nil
+            DodgeController.HazardMotion[part] = nil
         else
-            local ok,pos=pcall(function() return part.Position end)
-            if ok and IsValidPos(pos)
-                and (pos-me.Position).Magnitude <= (_G.Settings.DodgeGlobalHazardRadius or 18)
-                and (pos-targetRoot.Position).Magnitude <= (_G.Settings.DodgeTargetHazardRadius or 70)
-                and HazardTouchesPoint(part,me.Position) then
-                best=part
-                break
+            local motion = DodgeController.HazardMotion[part]
+            if not motion or not motion.Target or motion.Target ~= activeTarget then
+                DodgeController.HazardParts[part] = nil
+                DodgeController.HazardMotion[part] = nil
+            else
+                local ok, pos, size, assemblyVel = pcall(function()
+                    return part.Position, part.Size, part.AssemblyLinearVelocity
+                end)
+                if ok and IsValidPos(pos) then
+                    local toPlayer = me.Position - pos
+                    local distance = toPlayer.Magnitude
+                    local touches = HazardTouchesPoint(part, me.Position)
+
+                    local velocity = assemblyVel
+                    if motion.Position and motion.At and now > motion.At + 0.008 then
+                        local inferred = (pos - motion.Position) / math.max(now - motion.At, 0.008)
+                        if inferred.Magnitude > velocity.Magnitude then velocity = inferred end
+                    end
+                    motion.Position = pos
+                    motion.At = now
+
+                    local incoming = false
+                    local incomingRadius = tonumber(_G.Settings.DodgeIncomingRadius) or 38
+                    local minSpeed = tonumber(_G.Settings.DodgeIncomingMinSpeed) or 7
+                    if not touches and distance <= incomingRadius and velocity.Magnitude >= minSpeed then
+                        local dir = velocity.Unit
+                        local dot = distance > 0.01 and dir:Dot(toPlayer.Unit) or 1
+                        local forward = toPlayer:Dot(dir)
+                        local eta = forward / math.max(velocity.Magnitude, 0.01)
+                        local lateral = (toPlayer - dir * math.max(forward, 0)).Magnitude
+                        local hitRadius = math.max(size.X,size.Y,size.Z) * 0.5
+                            + (_G.Settings.DodgeHazardMargin or 5)
+                        incoming = forward >= 0
+                            and dot >= (_G.Settings.DodgeIncomingDot or 0.22)
+                            and eta <= (_G.Settings.DodgeIncomingLookahead or 0.58)
+                            and lateral <= hitRadius + 4
+                    end
+
+                    if touches or incoming then return part end
+                end
             end
         end
     end
-    return best
+    return nil
 end
 
 local function TargetThreat()
-    local target,root,hum=ActiveCombatModel()
-    local me=HRP()
+    local target, root, hum = ActiveCombatModel()
+    local me = HRP()
     if not target or not root or not hum or not me then return nil,nil,nil end
-    local dist=(root.Position-me.Position).Magnitude
-    if dist>(_G.Settings.DodgeRadius or 42) then return nil,nil,nil end
+    local dist = (root.Position - me.Position).Magnitude
+    if dist > (_G.Settings.DodgeRadius or 46) then return nil,nil,nil end
 
-    if _G.Settings.DodgeOnRawDamage == true
-        and _G.State.DamageDodgeTarget == target
-        and tick() <= (tonumber(_G.State.DamageDodgeUntil) or 0) then
-        return target,root,"damage-confirmed"
+    local anim = NamedAttackAnimation(hum)
+    if anim then
+        DodgeController.CastTarget = target
+        DodgeController.CastUntil = tick() + (_G.Settings.DodgeCastArmTTL or 0.50)
+    elseif DodgeController.CastTarget ~= target
+        or tick() > (tonumber(DodgeController.CastUntil) or 0) then
+        DodgeController.CastTarget = nil
+        DodgeController.CastUntil = 0
     end
 
-    local anim,why=NamedAttackAnimation(hum)
-    if anim then return target,root,why end
-
-    -- Do not infer a skill from root velocity alone. Bring/network correction can
-    -- move an NPC quickly and used to create a false "charge" dodge. Real charge
-    -- skills are still caught by their animation/cast name or spawned hazard.
-    for _,obj in ipairs(target:GetDescendants()) do
-        if obj:IsA("BasePart") and WordMatch(obj.Name,HARD_HAZARD_WORDS)
-            and HazardTouchesPoint(obj,me.Position) then
-            return target,root,"target-hitbox"
-        end
-    end
-
-    if ActiveHazardNear(me,root) then
-        return target,root,"spawned-hazard"
+    -- Only a real emitted effect can move the player.
+    -- Raw HP loss, Stun/Busy, NPC velocity, normal animation and permanent hitboxes are ignored.
+    local hazard = ActiveHazardNear(me, root)
+    if hazard then
+        return target, root, "skill-effect:" .. tostring(hazard.Name or hazard.ClassName)
     end
     return nil,nil,nil
 end
@@ -10416,10 +10500,8 @@ function DodgeController:Finish(reason)
     self.PendingCount=0
     _G.State.DodgeActive=false
     _G.State.DodgeThreatName=nil
-    if _G.State.DamageDodgeTarget == self.Threat then
-        _G.State.DamageDodgeTarget = nil
-        _G.State.DamageDodgeUntil = 0
-    end
+    _G.State.DamageDodgeTarget = nil
+    _G.State.DamageDodgeUntil = 0
     TravelManager:ClearDodgeOffset()
     _G.BobonDiagnostics.Dodge="CLEAR:"..tostring(reason or "safe")
     DLog("DODGE","confirmed safe → resume exact active target")
@@ -10443,60 +10525,37 @@ function DodgeController:Begin(enemy,root,why,now)
     _G.BobonDiagnostics.Dodge=("EVADE:%s"):format(tostring(why or "skill"))
     return TravelManager:ApplyDodgeOffset(
         self.EvadeOffset,
-        math.max((_G.Settings.DodgeSafeConfirm or 0.50)+0.25,0.75),
-        _G.Settings.DodgeEmergencySpeed or 320)
+        _G.Settings.DodgeSkillPulseTTL or 0.44,
+        _G.Settings.DodgeEmergencySpeed or 380)
 end
 
 function DodgeController:TryDodge()
     if not _G.Settings.DodgeAttacks or not IsAlive() then
-        if self.Active then self:Finish("disabled/dead") end
-        return false
-    end
-    if _G.State.Mode=="Recovering" or _G.State.Mode=="Dead"
-        or _G.State.Mode=="Respawning" or _G.State.Mode=="ServerHop" then
-        if self.Active then self:Finish("state-change") end
-        return false
-    end
-
-    local target,targetRoot,why=TargetThreat()
-    local now=tick()
-
-    if self.Active then
-        -- Only the original active target may keep the dodge alive. A farm retarget ends it.
-        local current=ActiveCombatModel()
-        if current~=self.Threat then
+        if self.Active then
+        local current = ActiveCombatModel()
+        if current ~= self.Threat then
             self:Finish("target-changed")
             return false
         end
 
-        if target and target==self.Threat then
-            self.LastThreatAt=now
-            self.ThreatReason=why or self.ThreatReason
-            -- Replan rarely, and only if the current evade pocket itself became hazardous.
-            local me=HRP()
-            local evadeBase=self.ThreatRoot and FarmPositionController:GetFarmPos(
-                self.ThreatRoot.Parent,_G.Settings.FarmHeight or 22) or nil
-            local evadeWorld=evadeBase and (evadeBase+self.EvadeOffset) or nil
-            if evadeWorld and ActiveHazardNear(me,self.ThreatRoot)
-                and now-(self.LastReplanAt or 0)>=(_G.Settings.DodgeReplanInterval or 0.55) then
-                self.LastReplanAt=now
-                self.EvadeOffset=ChooseOffset(self.ThreatRoot)
-            end
+        if target and target == self.Threat then
+            self.LastThreatAt = now
+            self.ThreatReason = why or self.ThreatReason
         end
 
-        local maxHold=_G.Settings.DodgeMaxHold or 2.20
-        local minHold=_G.Settings.DodgeMinHold or 0.30
-        local safeConfirm=_G.Settings.DodgeSafeConfirm or 0.50
-        if now-self.StartedAt>=maxHold then
-            self:Finish("max-hold")
+        local maxHold = _G.Settings.DodgeMaxHold or 0.68
+        local minHold = _G.Settings.DodgeMinHold or 0.12
+        local safeConfirm = _G.Settings.DodgeSafeConfirm or 0.12
+        if now - self.StartedAt >= maxHold then
+            self:Finish("pulse-complete")
             return true
         end
-        if now-self.StartedAt>=minHold and now-self.LastThreatAt>=safeConfirm then
-            self:Finish("confirmed-safe")
+        if now - self.StartedAt >= minHold
+            and now - self.LastThreatAt >= safeConfirm then
+            self:Finish("effect-passed")
             return true
         end
-        TravelManager:ApplyDodgeOffset(
-            self.EvadeOffset,0.22,_G.Settings.DodgeEmergencySpeed or 320)
+
         return true
     end
 
