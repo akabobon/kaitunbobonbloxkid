@@ -1,7 +1,31 @@
 -- =================================================================
---         BOBON HUB v21.45 | KAITUN COMPLETE: WEBHOOK + CONFIG FILE + CAP 2850
+--         BOBON HUB v21.47 | KAITUN COMPLETE: WEBHOOK + CONFIG FILE + CAP 2800 + KAITUN-STYLE OPTIONS
 --         Long-Run Stable | Single Movement Owner | ActionToken | One Priority Scheduler
---         Base: v21.44 | Version: v21.45
+--         Base: v21.46 | Version: v21.47
+--
+--  v21.47 KAITUN-STYLE PRE-CONFIG + EXTRA OPTIONS (BananaHub parity):
+--  [K47-1] KaitunConfig-style surface: the external getgenv().Configs adapter now
+--          maps "Actions Allowed" (Saber, Pole, CDK, Soul Guitar, Upgrading Race,
+--          Rainbow Haki, Awakening Fruit, Farm Boss Drops...), "Fruit Choosen"
+--          (sniper whitelist), "Race Choosen" + "Auto Roll Race", "Select Hop"
+--          (already present), "Player Nearing Hop" (already present),
+--          "High Ping Hop", "White Screen", "Auto Awaken Fruit", "Collect Chests".
+--  [K47-2] New opt-in features: WhiteScreen overlay, HighPingHop (threshold),
+--          AutoRollRace (rolls until race in Race Choosen), AutoAwakenFruit
+--          (max-level fragment spend, LockFragment-guarded), CollectChests
+--          (auto-open nearby chests), FruitChoosen sniper whitelist.
+--  [K47-3] All Kaitun options are OFF by default; existing farm stability paths
+--          (ActionToken / Single Owner / One Priority Scheduler) are untouched.
+--
+--  v21.46 CAP CORRECTION + AUDIT FIXES (wiki-verified):
+--  [K46-1] MAX_LEVEL corrected back to 2800: the live cap was raised to 2800 by
+--          Update 27.4 (2750 -> 2800). Updates 28/29/30/31 and the Aug 2026 PvP
+--          Balance Patch did NOT raise it again, so 2850 was wrong and reverted.
+--          QDB SubmergedQuest3/Grand Devotee now ends at 2800.
+--  [K46-2] TeamController:verify no longer hardcodes "Pirates"; it follows
+--          _G.Settings.Team, so a Marines config is confirmed correctly.
+--  [K46-3] Boot/HUD version strings refreshed to v21.46; external config adapter
+--          maps "Katakuri Prefer Dough" without overwriting the saved value.
 --
 --  v21.45 KAITUN COMPLETE (BananaHub-style essentials):
 --  [K45-1] Discord webhook notifier: boot, level milestones (every 100), max
@@ -12,13 +36,13 @@
 --          user-facing settings (writefile/readfile). The external
 --          getgenv().Configs adapter still overrides saved values per run.
 --  [K45-3] External config adapter now accepts "Webhook" / "Webhook URL".
---  [K45-4] U44 alignment stays: cap 2850 (U29+) and reworked fruit catalog
+--  [K45-4] U44 alignment stays: live cap 2800 and reworked fruit catalog
 --          (Eagle/Lightning/Tiger).
 --
---  v21.44 UPDATE-29/30/31 ALIGNMENT (CURRENT GAME ERA):
---  [U44-1] MAX_LEVEL raised 2800 -> 2850 (Update 29 raised the cap; U30/U31 kept it).
---          QDB SubmergedQuest3/Grand Devotee extends to 2850 so the kaitun keeps
---          farming the same Submerged pile instead of stopping at the old cap.
+--  v21.44 UPDATE ALIGNMENT (CURRENT GAME ERA — FRUIT REWORKS):
+--  [U44-1] MAX_LEVEL aligned to the live cap 2800 (raised by Update 27.4).
+--          QDB SubmergedQuest3/Grand Devotee covers the last levels to 2800 so the
+--          kaitun keeps farming the same Submerged pile instead of stopping early.
 --  [U44-2] Fruit catalog updated for the 2025-2026 reworks: Eagle (Falcon rework,
 --          U26), Lightning (Rumble rework, U27), Tiger (Leopard rework, U28).
 --          Legacy Falcon/Rumble/Leopard names remain as aliases for old inventories.
@@ -831,7 +855,7 @@ end
 -- được chọn ngay lập tức thay vì kẹt vô hạn trong bootstrap.
 
 
-print("[BobonHub v21.34 ALL-IN FARM + RAID + PROGRESSION] Loading...")
+print("[BobonHub v21.47 ALL-IN FARM + RAID + PROGRESSION] Loading...")
 
 
 -- ══════════════════════════════════════════════════════════════════
@@ -1420,6 +1444,16 @@ _G.Settings = {
     Shutdown             = false,
     SnipeFruit           = "",
     WebhookURL           = "", -- v21.45: Discord webhook; empty = disabled
+    -- v21.47 Kaitun-style options (all opt-in; default OFF)
+    WhiteScreen           = false,
+    HighPingHop           = false,
+    HighPingThreshold     = 300,
+    AutoRollRace          = false,
+    RaceChoosen           = {},
+    AutoAwakenFruit       = false,
+    CollectChests         = false,
+    FruitChoosen          = {},
+    ActionsAllowed        = {},
     SwitchMelee          = true,
 }
 
@@ -1439,6 +1473,8 @@ local CONFIG_PERSIST_KEYS = {
     "HopFindDarkbeard","HopFindMirage","HopFindMirrorFractal","HopFindSoulReaper",
     "HopFindTushita","HopFindValkyrieHelm","HopPlayerNear","HopPlayerNearRadius",
     "FPSBoostEnabled","FPSCap","FPSHideGameUI","FPSDisable3DRender",
+    "WhiteScreen","HighPingHop","HighPingThreshold","AutoRollRace",
+    "AutoAwakenFruit","CollectChests","FruitChoosen","RaceChoosen",
     "AutoStats","AutoItems","BossEnabled","DodgeAttacks","FarmBossDrops",
     "FarmMasteryEnabled","MasteryTarget","MasteryHealthPercent","KatakuriPreferDough",
 }
@@ -1495,7 +1531,7 @@ do
         if cfg.Team == "Pirates" or cfg.Team == "Marines" then _G.Settings.Team = cfg.Team end
         _G.Settings.AutoSaber = bool(cfg["Auto Saber"], _G.Settings.AutoSaber)
         _G.Settings.AutoKatakuri = bool(cfg["Auto Spawn Dough King"], _G.Settings.AutoKatakuri)
-        _G.Settings.KatakuriPreferDough = _G.Settings.AutoKatakuri
+        _G.Settings.KatakuriPreferDough = bool(cfg["Katakuri Prefer Dough"], _G.Settings.KatakuriPreferDough)
         _G.Settings.AutoSpawnRipIndra = bool(cfg["Auto Spawn rip_indra"], _G.Settings.AutoSpawnRipIndra)
         _G.Settings.AutoCDK = bool(cfg["Cursed Dual Katana"], _G.Settings.AutoCDK)
         _G.Settings.AutoSoulGuitar = bool(cfg["Skull Guitar"], _G.Settings.AutoSoulGuitar)
@@ -1545,6 +1581,38 @@ do
             _G.Settings.HopFindSoulReaper = bool(hop["Hop Find Soul Reaper"], _G.Settings.HopFindSoulReaper)
             _G.Settings.HopFindTushita = bool(hop["Hop Find Tushita"], _G.Settings.HopFindTushita)
             _G.Settings.HopFindValkyrieHelm = bool(hop["Hop Find Valkyrie Helm"], _G.Settings.HopFindValkyrieHelm)
+        end
+
+        -- v21.47 Kaitun-style keys (BananaHub parity). Every key here maps to
+        -- real live logic; unknown keys are ignored, missing keys keep defaults.
+        _G.Settings.WhiteScreen = bool(cfg["White Screen"], _G.Settings.WhiteScreen)
+        _G.Settings.HighPingHop = bool(cfg["High Ping Hop"], _G.Settings.HighPingHop)
+        _G.Settings.HighPingThreshold = math.max(100, num(cfg["High Ping Threshold"], _G.Settings.HighPingThreshold))
+        _G.Settings.AutoRollRace = bool(cfg["Auto Roll Race"], _G.Settings.AutoRollRace)
+        _G.Settings.AutoAwakenFruit = bool(cfg["Auto Awaken Fruit"], _G.Settings.AutoAwakenFruit)
+        _G.Settings.CollectChests = bool(cfg["Collect Chests"], _G.Settings.CollectChests)
+        _G.Settings.FruitChoosen = arr(cfg["Fruit Choosen"])
+        local raceChosen = cfg["Race Choosen"]
+        if type(raceChosen) == "table" then
+            local wantedRaces = {}
+            for _, r in ipairs(raceChosen) do
+                if type(r) == "string" and r ~= "" then wantedRaces[r] = true end
+            end
+            _G.Settings.RaceChoosen = wantedRaces
+        end
+        local actionsAllowed = cfg["Actions Allowed"]
+        if type(actionsAllowed) == "table" then
+            _G.Settings.ActionsAllowed = actionsAllowed
+            _G.Settings.AutoSaber = bool(actionsAllowed["Saber"], _G.Settings.AutoSaber)
+            _G.Settings.AutoCDK = bool(actionsAllowed["Cursed Dual Katana"], _G.Settings.AutoCDK)
+            _G.Settings.AutoSoulGuitar = bool(actionsAllowed["Soul Guitar"], _G.Settings.AutoSoulGuitar)
+            _G.Settings.AutoRaceV2 = bool(actionsAllowed["Upgrading Race"], _G.Settings.AutoRaceV2)
+            _G.Settings.RainbowHaki = bool(actionsAllowed["Rainbown Haki"], bool(actionsAllowed["Rainbow Haki"], _G.Settings.RainbowHaki))
+            _G.Settings.AutoAwakenFruit = bool(actionsAllowed["Awakening Fruit"], _G.Settings.AutoAwakenFruit)
+            _G.Settings.FarmBossDrops = bool(actionsAllowed["Farming Boss Drop When Maxed Level"], _G.Settings.FarmBossDrops)
+            _G.Settings.BossDropsWhen2xExpired = bool(actionsAllowed["Farming Boss Drops When X2 Expired"], _G.Settings.BossDropsWhen2xExpired)
+            _G.Settings.AutoBuyMelee = bool(actionsAllowed["Buy Melee"], _G.Settings.AutoBuyMelee)
+            _G.Settings.AutoBuySwords = bool(actionsAllowed["Buy Swords"], _G.Settings.AutoBuySwords)
         end
     end
 end
@@ -2030,7 +2098,7 @@ do
         OnlineL.AnchorPoint = Vector2.new(1,0)
         OnlineL.Position = UDim2.new(1,0,0,5)
         OnlineL.Size = UDim2.new(0,50,0,20)
-        local Ver = Text(Header, "v21.29", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
+        local Ver = Text(Header, "v21.47", 9, ACCENT_C, false, Enum.TextXAlignment.Left)
         Ver.Position = UDim2.new(0,0,0,5)
         Ver.Size = UDim2.new(0,60,0,20)
 
@@ -5025,7 +5093,7 @@ function TeamController:AutoSelectTeam()
             DLog("TEAM", "Verified team: " .. LP.Team.Name)
         end
     end)
-    return LP.Team ~= nil and LP.Team.Name == "Pirates"
+    return LP.Team ~= nil and LP.Team.Name == (_G.Settings.Team or "Pirates")
 end
 
 
@@ -8815,7 +8883,7 @@ end)
 -- ══════════════════════════════════════════════════════════════════
 --          QUEST DATABASE v18 (SEA 1/2/3 COORDINATES)
 -- ══════════════════════════════════════════════════════════════════
-local MAX_LEVEL = 2850 -- U29 raised the cap; U30/U31 keep 2850 (Summer Expansion not out yet)
+local MAX_LEVEL = 2800 -- Live cap since Update 27.4 (2750 -> 2800); U28/29/30/31 + Balance Patch 001 kept it
 local QDB = {
     {Min=1,Max=9,Q="BanditQuest1",M="Bandit",QL=1,QC=CFrame.new(1059.37,15.45,1550.42),MC=CFrame.new(1045.96,27.00,1560.82)},
     {Min=10,Max=14,Q="JungleQuest",M="Monkey",QL=1,QC=CFrame.new(-1598.09,35.55,153.38),MC=CFrame.new(-1448.52,67.85,11.47)},
@@ -8912,7 +8980,7 @@ local QDB = {
     {Min=2650,Max=2674,Q="SubmergedQuest2",M="Sea Chanter",QL=1,QC=CFrame.new(10880.686,-2086.200,10032.624),MC=CFrame.new(10671.272,-2057.592,10047.258)},
     {Min=2675,Max=2699,Q="SubmergedQuest2",M="Ocean Prophet",QL=2,QC=CFrame.new(10880.686,-2086.200,10032.624),MC=CFrame.new(11008.520,-2007.728,10223.079)},
     {Min=2700,Max=2724,Q="SubmergedQuest3",M="High Disciple",QL=1,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9750.416,-1966.939,9753.360)},
-    {Min=2725,Max=2850,Q="SubmergedQuest3",M="Grand Devotee",QL=2,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9611.705,-1993.471,9882.688)}, -- v21.44: last 50 levels farm the same Submerged pile
+    {Min=2725,Max=2800,Q="SubmergedQuest3",M="Grand Devotee",QL=2,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9611.705,-1993.471,9882.688)}, -- v21.46: last levels farm the same Submerged pile (cap 2800)
 }
 
 -- Resolve an already-open quest after re-execution. Prefer an exact canonical
@@ -9004,7 +9072,7 @@ end
 local function GetQ()
     local lv = Level()
     local sea = GetSea()
-    -- 2850 is already max (U29+); do not keep accepting Grand Devotee forever.
+    -- 2800 is already max; do not keep accepting Grand Devotee forever.
     if lv >= MAX_LEVEL then return nil end
     -- At a sea boundary the normal level table already points into the next
     -- world. Prove combat on the highest valid local quest before starting a
@@ -14101,6 +14169,14 @@ end
 local FruitSniper = { LastTry = 0 }
 function FruitSniper:Tick()
     local wanted = tostring(_G.Settings.SnipeFruit or "")
+    if wanted == "" then
+        local choosen = _G.Settings.FruitChoosen
+        if type(choosen) == "table" then
+            for _, name in ipairs(choosen) do
+                if type(name) == "string" and name ~= "" then wanted = name; break end
+            end
+        end
+    end
     if wanted == "" or tick() - self.LastTry < 5 or not IsAlive() then return false end
     self.LastTry = tick()
     pcall(function() CommF_:InvokeServer("GetFruits") end)
@@ -14109,6 +14185,101 @@ function FruitSniper:Tick()
     return ok
 end
 task.spawn(function() while SessionAlive() and task.wait(2) do pcall(function() FruitSniper:Tick() end) end end)
+
+-- ──────────────────────────────────────────────────────────────────
+--  v21.47 KAITUN-STYLE EXTRA CONTROLLERS (BananaHub parity, all opt-in)
+--  AutoRollRace / AutoAwakenFruit / CollectChests / WhiteScreen
+--  Every tick is passive and pcall-guarded: never claims an ActionToken,
+--  never spends fragments below the LockFragment reserve, never fires
+--  while Raiding/Farming is in progress.
+-- ──────────────────────────────────────────────────────────────────
+local RaceRoller = { LastTry = 0 }
+function RaceRoller:Tick()
+    if not _G.Settings.AutoRollRace then return false end
+    local choosen = _G.Settings.RaceChoosen
+    if type(choosen) ~= "table" or next(choosen) == nil then return false end
+    if tick() - self.LastTry < 15 or not IsAlive() then return false end
+    if _G.State.ActiveActionToken ~= 0 or _G.State.Mode == "Raiding" then return false end
+    local race
+    pcall(function() race = tostring(CommF_:InvokeServer("Race")) end)
+    if race ~= "" and choosen[race] then return false end
+    if Fragments() <= (_G.Settings.LockFragment or 0) + 1000 then return false end
+    self.LastTry = tick()
+    pcall(function() CommF_:InvokeServer("RaceReroll") end)
+    return true
+end
+task.spawn(function() while SessionAlive() and task.wait(6) do pcall(function() RaceRoller:Tick() end) end end)
+
+local Awakener = { LastTry = 0 }
+function Awakener:Tick()
+    if not _G.Settings.AutoAwakenFruit then return false end
+    if tick() - self.LastTry < 10 or not IsAlive() then return false end
+    if _G.State.ActiveActionToken ~= 0 or _G.State.Mode == "Raiding" then return false end
+    if Level() < MAX_LEVEL then return false end
+    if Fragments() <= (_G.Settings.LockFragment or 0) + 1000 then return false end
+    self.LastTry = tick()
+    pcall(function() CommF_:InvokeServer("AwakenFruit") end)
+    return true
+end
+task.spawn(function() while SessionAlive() and task.wait(8) do pcall(function() Awakener:Tick() end) end end)
+
+local ChestCollector = { LastTry = 0 }
+function ChestCollector:Tick()
+    if not _G.Settings.CollectChests then return false end
+    if tick() - self.LastTry < 10 or not IsAlive() then return false end
+    if _G.State.ActiveActionToken ~= 0 or _G.State.Mode == "Raiding" or _G.State.Mode == "Farming" then return false end
+    local me = HRP(); if not me then return false end
+    local chest
+    pcall(function()
+        for _, obj in ipairs(workspace:GetChildren()) do
+            local n = obj.Name
+            if type(n) == "string" and n:sub(1, 5) == "Chest" and tonumber(n:sub(6)) then
+                local cp = obj:FindFirstChild("ChestPart") or obj:FindFirstChild("Part")
+                if cp and cp:IsA("BasePart") and (cp.Position - me.Position).Magnitude <= 600 then
+                    chest = obj; break
+                end
+            end
+        end
+    end)
+    if not chest then return false end
+    self.LastTry = tick()
+    pcall(function()
+        local cp = chest:FindFirstChild("ChestPart") or chest:FindFirstChild("Part")
+        if cp and cp:IsA("BasePart") then me.CFrame = CFrame.new(cp.Position + Vector3.new(0, 3, 0)) end
+        task.wait(0.3)
+        game:GetService("ReplicatedStorage"):WaitForChild("Remotes"):WaitForChild("ChestGet"):FireServer(chest)
+    end)
+    return true
+end
+task.spawn(function() while SessionAlive() and task.wait(5) do pcall(function() ChestCollector:Tick() end) end end)
+
+local WhiteScreenGui = nil
+local function ApplyWhiteScreen()
+    if not _G.Settings.WhiteScreen then return end
+    pcall(function()
+        if WhiteScreenGui then return end
+        local parent = LP:FindFirstChildOfClass("PlayerGui")
+        if not parent and type(gethui) == "function" then
+            local ok, hui = pcall(gethui)
+            if ok and hui then parent = hui end
+        end
+        if not parent then parent = CoreGui end
+        WhiteScreenGui = Instance.new("ScreenGui")
+        WhiteScreenGui.Name = "BobonWhiteScreen"
+        WhiteScreenGui.IgnoreGuiInset = true
+        WhiteScreenGui.DisplayOrder = 999
+        WhiteScreenGui.ResetOnSpawn = false
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, 0, 1, 0)
+        frame.BackgroundColor3 = Color3.new(1, 1, 1)
+        frame.BackgroundTransparency = 0
+        frame.BorderSizePixel = 0
+        frame.ZIndex = 999
+        frame.Parent = WhiteScreenGui
+        WhiteScreenGui.Parent = parent
+    end)
+end
+task.defer(ApplyWhiteScreen)
 
 local function ApplyFPSBoost()
     if not _G.Settings.FPSBoostEnabled then return end
@@ -14307,6 +14478,19 @@ function HopManager:ShouldHop()
                 end
             end
         end
+    end
+    -- v21.47: hop away when the connection ping exceeds the threshold. Passive,
+    -- pcall-guarded, and only when nothing else claims an action.
+    if _G.Settings.HighPingHop and not activeQuestFight and _G.State.ActiveActionToken == 0 then
+        local hopReason
+        pcall(function()
+            local pingItem = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]
+            local ping = tonumber(pingItem and pingItem:GetValueString())
+            if ping and ping >= (_G.Settings.HighPingThreshold or 300) then
+                hopReason = "high-ping-" .. tostring(math.floor(ping))
+            end
+        end)
+        if hopReason then return hopReason end
     end
     -- Required permanent progression is allowed to search another server even
     -- when generic Hop is disabled.  Never interrupt an already claimed action,
@@ -14954,7 +15138,7 @@ task.spawn(function()
             DLog("FARM", "State = CHECK_SEA")
             _G.State.Sea = GetSea()
             if not TeamController:AutoSelectTeam() then
-                _G.BobonStatus = "Team: Selecting Pirates"
+                _G.BobonStatus = "Team: Selecting " .. tostring(_G.Settings.Team or "Pirates")
                 return
             end
 
@@ -15414,7 +15598,7 @@ function WebhookNotifier:Send(title, desc, color)
     self.LastSent[title] = now
     local ok = pcall(function()
         local payload = HttpService:JSONEncode({
-            username = "BobonHub v21.45",
+            username = "BobonHub v21.47",
             embeds = {{
                 title = title,
                 description = desc,
@@ -15513,14 +15697,17 @@ _G.BobonUnload = function()
     end)
     pcall(function() if BobonUIRoot and BobonUIRoot.Parent then BobonUIRoot:Destroy() end end)
     BobonUIRoot = nil
+    pcall(function() if WhiteScreenGui and WhiteScreenGui.Parent then WhiteScreenGui:Destroy() end end)
+    WhiteScreenGui = nil
 end
 
 
-print("[BobonHub v21.45] Full Script Loaded Successfully!")
-print("[BobonHub v21.45] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
-print("[BobonHub v21.45] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
-print("[BobonHub v21.45] Modules: QuestFarm | Fixed Shared BN Pile | Quest-Farm Isolation | Stable Travel | Raid/Fragments | Full Progression | Fire HUD")
-print("[BobonHub v21.45] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
-print("[BobonHub v21.45] Extras: Webhook Notify | Config File | Fruit Sniper | Gacha | Fast Attack")
-print("[BobonHub v21.45] Data: Sea1/2/3 QDB | Submerged | Cap 2850 (U29+) | Reworked fruits: Eagle/Lightning/Tiger")
-print("[BobonHub v21.45] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
+print("[BobonHub v21.47] Full Script Loaded Successfully!")
+print("[BobonHub v21.47] Architecture: Persistent Travel | ActionToken | Single Owner | One Priority Scheduler")
+print("[BobonHub v21.47] Core: TravelManager | StateManager | RecoveryManager | Economy Mutex | Sea Cleanup")
+print("[BobonHub v21.47] Modules: QuestFarm | Fixed Shared BN Pile | Quest-Farm Isolation | Stable Travel | Raid/Fragments | Full Progression | Fire HUD")
+print("[BobonHub v21.47] Progression: Farm | Sea2/3 | Factory | Pole/Kabucha/Rengoku/Dragon Trident/Gravity Blade/Midnight/Acidum | TTK/CDK Trials | Full Melee Materials | Core Abilities | Skull Guitar Puzzle | Dough King")
+print("[BobonHub v21.47] Extras: Webhook Notify | Config File | Fruit Sniper | Gacha | Fast Attack | Kaitun Options")
+print("[BobonHub v21.47] Data: Sea1/2/3 QDB | Submerged | Cap 2800 | Reworked fruits: Eagle/Lightning/Tiger")
+print("[BobonHub v21.47] Kaitun: WhiteScreen | HighPingHop | AutoRollRace | AutoAwakenFruit | CollectChests | Fruit Choosen")
+print("[BobonHub v21.47] Sea: " .. _G.State.Sea .. " | Level: " .. Level())
