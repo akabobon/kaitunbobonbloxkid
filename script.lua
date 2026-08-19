@@ -1,19 +1,11 @@
 -- =================================================================
---         BOBON HUB v22.19 QUEST-FIRST HARD REWRITE | TEDDY v22.17 LOCKED
---         Base: v22.17 TEDDY SEQUENCE REBASE (bring block preserved)
---  [Q19-1] Quest truth now comes only from the currently VISIBLE Main/Minimal
---           quest wrapper. Hidden stale QuestTitle text can no longer keep farm alive.
---  [Q19-2] Confirmed quest close immediately stops level farm and retargets the
---           quest giver; UI lease/grace applies only to an UNMOUNTED/rebuilding UI.
---  [Q19-3] Quest-giver travel uses QuestInteractDistance and persistent=false,
---           fixing the old 35-stud persistent CFrame arrival that could never reach
---           the 8-stud StartQuest gate.
---  [Q19-4] Wrong/completed quests clear cached ActiveQuestMob and farm targets before
---           any new attack tick; no optional boss/item detour is allowed in that gap.
---  [Q19-5] StartQuest verification requires a real visible active wrapper; RequestQuest
---           remains a bounded fallback. Retry never falls through to mob farming.
---  [Q19-6] SharedTeddyRestack / TeddySequenceFarmTick / SharedFarmTick are copied
---           byte-for-byte from v22.17 and are not modified by this quest rewrite.
+--         BOBON HUB v22.19.1 EXEC-SAFE QUEST-FIRST | TEDDY v22.17 LOCKED
+--         Base: v22.17; NO new top-level locals (Luau chunk local-pressure safe)
+--  [Q191-1] Quest completion/hidden wrapper stops farm immediately.
+--  [Q191-2] Quest accept/rebuild grace applies only to unreadable UI, never confirmed closed UI.
+--  [Q191-3] Quest giver travel uses <= QuestInteractDistance and persistent=false.
+--  [Q191-4] No optional detour between quest completion and the next StartQuest.
+--  [Q191-5] SharedTeddyRestack / TeddySequenceFarmTick / SharedFarmTick are untouched.
 -- =================================================================
 -- =================================================================
 --         BOBON HUB v22.17 TEDDY SEQUENCE REBASE | STABLE-ANCHOR ACQUIRE
@@ -1352,7 +1344,7 @@ _G.Settings = {
     QuestDelay          = 1.5,
     QuestRetryLimit     = 3,
     QuestRetryBackoff   = 6,
-    QuestAcceptGrace    = 2.0,
+    QuestAcceptGrace    = 1.25,
     RecoveryDelay       = 3,
     ActionLockTimeout   = 240,  -- v21.27 progression puzzles refresh token; 4m hard safety only
     BossEnabled         = true,
@@ -1631,7 +1623,7 @@ _G.Settings = {
     DodgeConfirmSamples = 2,
     DodgeGlobalHazardRadius = 18,
     DodgeTargetHazardRadius = 70,
-    QuestUILease        = 0.75,
+    QuestUILease        = 0.65,
     QuestCloseConfirm   = 0.20,
     -- [D-4] Skip level không hiệu quả: cùng route quá N giây mà level
     -- không tăng → tắt skip route, quay về farm quest bình thường.
@@ -3228,93 +3220,70 @@ local function TryClickDetector(root)
 end
 
 
-local function QuestGuiTreeVisible(node)
-    if not node then return false end
-    local cur = node
-    while cur and cur ~= LP do
-        if cur:IsA("GuiObject") and cur.Visible == false then return false end
-        if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
-        cur = cur.Parent
-    end
-    return true
-end
-
--- Return the quest wrapper that is actually rendered right now.
--- Hidden template/stale wrappers are intentionally NOT accepted as active.
-local function GetLiveQuestRoot()
-    local pgui = LP:FindFirstChild("PlayerGui")
-    if not pgui then return nil, "unmounted" end
-    local roots = {}
-    local main = pgui:FindFirstChild("Main")
-    local minimal = pgui:FindFirstChild("Main (minimal)")
-    if main then
-        local q = main:FindFirstChild("Quest", true)
-        if q then roots[#roots + 1] = q end
-    end
-    if minimal then
-        local q = minimal:FindFirstChild("Quest", true)
-        if q then roots[#roots + 1] = q end
-    end
-    if #roots == 0 then return nil, "unmounted" end
-    for _, q in ipairs(roots) do
-        if QuestGuiTreeVisible(q) then return q, "visible" end
-    end
-    return roots[1], "hidden"
-end
-
 local function HasQuest()
     local ok, r = pcall(function()
-        local quest, mountState = GetLiveQuestRoot()
-        if mountState == "unmounted" then return nil end
-        if mountState == "hidden" then return false end
+        local pgui = LP:FindFirstChild("PlayerGui")
+        local main = pgui and pgui:FindFirstChild("Main")
+        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
+        local quest = (main and main:FindFirstChild("Quest", true))
+            or (minimal and minimal:FindFirstChild("Quest", true))
         if not quest then return nil end
 
-        local container = quest:FindFirstChild("Container") or quest
-        local sawLiveText = false
+        -- Nested helper: does NOT consume another top-level Luau local.
+        local function Rendered(node)
+            if not node then return false end
+            local cur = node
+            while cur and cur ~= pgui do
+                if cur:IsA("GuiObject") and cur.Visible == false then return false end
+                if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
+                cur = cur.Parent
+            end
+            return true
+        end
 
+        -- A just-accepted quest may rebuild its wrapper briefly. Treat that tiny
+        -- transition as unreadable (nil), not as active and not as completed.
+        if not Rendered(quest) then
+            if _G.State and (_G.State.LastQuestAccepted or 0) > 0
+                and tick() - (_G.State.LastQuestAccepted or 0)
+                    <= math.min(_G.Settings.QuestAcceptGrace or 1.25, 1.25) then
+                return nil
+            end
+            return false
+        end
+
+        local container = quest:FindFirstChild("Container") or quest
+        local sawObjective = false
         for _, node in ipairs(container:GetDescendants()) do
-            if node:IsA("TextLabel") and QuestGuiTreeVisible(node) then
-                local labelText = tostring(node.Text or "")
-                local lower = string.lower(labelText)
+            if node:IsA("TextLabel") and Rendered(node) then
+                local text = tostring(node.Text or "")
+                local lower = string.lower(text)
                 if lower:find("quest completed", 1, true)
                     or lower:find("quest complete", 1, true)
                     or lower:find("completed", 1, true)
                     or lower:find("finished", 1, true) then
                     return false
                 end
-                local current, total = labelText:match("(%d+)%s*/%s*(%d+)")
-                if current and total then
-                    current, total = tonumber(current), tonumber(total)
-                    if current and total and total > 0 then
-                        if current >= total then return false end
-                        sawLiveText = true
-                    end
+                local current, total = text:match("(%d+)%s*/%s*(%d+)")
+                current, total = tonumber(current), tonumber(total)
+                if current and total and total > 0 then
+                    if current >= total then return false end
+                    sawObjective = true
                 end
-                if labelText ~= "" then
-                    local nodeName = string.lower(tostring(node.Name or ""))
-                    if nodeName:find("title", 1, true)
-                        or nodeName:find("task", 1, true)
-                        or nodeName:find("objective", 1, true)
+                if text ~= "" then
+                    local nn = string.lower(tostring(node.Name or ""))
+                    if nn:find("title", 1, true)
+                        or nn:find("task", 1, true)
+                        or nn:find("objective", 1, true)
                         or lower:find("defeat", 1, true)
                         or lower:find("kill", 1, true)
                         or lower:find("collect", 1, true) then
-                        sawLiveText = true
+                        sawObjective = true
                     end
                 end
             end
         end
-
-        local title = container:FindFirstChild("QuestTitle", true)
-        local titleText = title and title:FindFirstChild("Title", true)
-        if titleText and titleText:IsA("TextLabel") and QuestGuiTreeVisible(titleText) then
-            local value = tostring(titleText.Text or "")
-            local lower = string.lower(value)
-            if value ~= "" and lower ~= "quest" and lower ~= "quest details" then
-                sawLiveText = true
-            end
-        end
-
-        if sawLiveText then return true end
+        if sawObjective then return true end
         return nil
     end)
     if not ok then return nil end
@@ -3388,13 +3357,27 @@ end
 -- [FIX-P2] Đọc quest text với nhiều fallback (TextLabel chính + QuestModel)
 -- Trả về text đọc được, hoặc nil nếu UI không đọc được.
 local function GetQuestText()
-    local ok, result = pcall(function()
-        local quest, mountState = GetLiveQuestRoot()
-        if mountState ~= "visible" or not quest then return nil end
+    local ok, text = pcall(function()
+        local pgui = LP:FindFirstChild("PlayerGui")
+        local main = pgui and pgui:FindFirstChild("Main")
+        local minimal = pgui and pgui:FindFirstChild("Main (minimal)")
+        local quest = (main and main:FindFirstChild("Quest", true))
+            or (minimal and minimal:FindFirstChild("Quest", true))
+        if not quest then return nil end
+        local function Rendered(node)
+            local cur = node
+            while cur and cur ~= pgui do
+                if cur:IsA("GuiObject") and cur.Visible == false then return false end
+                if cur:IsA("LayerCollector") and cur.Enabled == false then return false end
+                cur = cur.Parent
+            end
+            return true
+        end
+        if not Rendered(quest) then return nil end
         local container = quest:FindFirstChild("Container") or quest
         local parts = {}
         for _, d in ipairs(container:GetDescendants()) do
-            if d:IsA("TextLabel") and QuestGuiTreeVisible(d) then
+            if d:IsA("TextLabel") and Rendered(d) then
                 local value = tostring(d.Text or "")
                 if value ~= "" then parts[#parts + 1] = value end
             end
@@ -3403,46 +3386,26 @@ local function GetQuestText()
         return table.concat(parts, " ")
     end)
     if not ok then return nil end
-    return result
+    return text
 end
-
 
 -- [FIX-P2] Kiểm tra quest hiện tại có đúng mob q.M hay không.
 -- Trả về: true = khớp, false = sai mob, nil = không đọc được UI.
 local function QuestMatches(mobName)
     if not mobName then return nil end
-
+    local state = HasQuest()
+    if state == false then return false end
     local text = GetQuestText()
     if text and string.find(string.lower(text), string.lower(mobName), 1, true) then
         return true
     end
-
-    if HasQuest() == true then
+    if state == true then
         local activeMob = _G.State and _G.State.ActiveQuestMob
         if activeMob then
-            return string.lower(tostring(activeMob))
-                == string.lower(tostring(mobName))
+            return string.lower(tostring(activeMob)) == string.lower(tostring(mobName))
         end
-        return nil
     end
-
     return nil
-end
-
-
-local function RequestQuestGiverTravel(q, reason)
-    if not q or not q.QC then return false end
-    local threshold = math.max(4, tonumber(_G.Settings.QuestInteractDistance) or 8)
-    _G.State.FState = "QUEST_TRAVEL"
-    _G.BobonStatus = "Quest: Traveling to " .. tostring(q.M)
-    local ok = TravelManager:Request(q.QC, "Farm", {
-        arrivalThreshold = threshold,
-        combatHover = false,
-        persistent = false,
-        speed = math.max(tonumber(_G.Settings.FlySpeed) or 180, 240),
-    })
-    if not ok then DLog("QUEST", "Quest giver travel retry: " .. tostring(reason or "request")) end
-    return ok
 end
 
 -- [FIX-P3] Request quest tại giver với retry có giới hạn, không spam remote.
@@ -17144,7 +17107,6 @@ task.spawn(function()
                 _G.State.QuestClosedStable =
                     questNow - (_G.State.QuestClosedSince or questNow)
                         >= (_G.Settings.QuestCloseConfirm or 0.20)
-                _G.State.ActiveQuestMob = nil
             else
                 -- unreadable/rebuilding UI is never evidence that the quest closed
                 _G.State.QuestClosedStable = false
@@ -17221,7 +17183,7 @@ task.spawn(function()
             -- contains an exact QDB mob name. A localized/unreadable wrapper
             -- is still safe to farm by level, but bring stays disabled until
             -- this session accepts the next quest and knows its exact mob.
-            if questState == false then
+            if questState == false and _G.State.QuestClosedStable == true then
                 FarmPositionController:ReleaseCluster()
                 _G.State.ActiveQuestMob = nil
             elseif questState == true then
@@ -17278,7 +17240,7 @@ task.spawn(function()
             if not hasQuest and questState == nil and questMatch ~= false
                 and _G.State.ActiveQuestMob
                 and questNow - (_G.State.QuestLastSeenAt or 0)
-                    <= (_G.Settings.QuestUILease or 0.75) then
+                    <= (_G.Settings.QuestUILease or 0.65) then
                 hasQuest = true
             end
             -- Right after StartQuest, some UI builds briefly hide/rebuild the
@@ -17287,7 +17249,7 @@ task.spawn(function()
             if not hasQuest and questState == nil and questMatch ~= false
                 and _G.State.LastQuestAccepted > 0
                 and tick() - _G.State.LastQuestAccepted
-                    <= math.min(_G.Settings.QuestAcceptGrace or 2.0, 2.0) then
+                    <= math.min(_G.Settings.QuestAcceptGrace or 1.25, 1.25) then
                 hasQuest = true
             end
             local questOk = hasQuest
@@ -17297,18 +17259,28 @@ task.spawn(function()
             -- không còn xác nhận được đều phải quay lại giver ngay trong tick
             -- này.  Dừng target/travel cũ trước để không bay tiếp tới mob cũ.
             if not hasQuest then
-                -- Q19 QUEST-FIRST: confirmed quest close goes straight back to
-                -- the level quest giver. Optional work remains scheduler-owned.
+                -- HARD QUEST-FIRST: a confirmed closed/wrong quest cannot fall
+                -- through to farm, boss, item, or stale travel in this tick.
                 FarmPositionController:ReleaseCluster()
                 _G.State:ClearTargets()
+                _G.State.ActiveQuestMob = nil
+                if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+                    TravelManager:Stop("QuestClosedRefresh")
+                end
                 _G.State:SetMode("GettingQuest")
+                _G.State.FState = "QUEST_REFRESH"
                 _G.BobonStatus = "Quest: Refreshing " .. q.M
-                DLog("QUEST", "Quest missing/complete/wrong → refresh " .. q.M)
                 local hrp = HRP()
                 local atGiver = hrp and (hrp.Position - q.QC.Position).Magnitude
                     <= (_G.Settings.QuestInteractDistance or 8)
                 if HandleQuestAtGiver(q, atGiver) then return end
-                RequestQuestGiverTravel(q, "quest closed")
+                _G.State.FState = "QUEST_TRAVEL"
+                _G.BobonStatus = "Quest: Traveling to " .. q.M
+                TravelManager:Request(q.QC, "Farm", {
+                    arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
+                    combatHover = false,
+                    persistent = false,
+                })
                 return
             end
 
@@ -17327,7 +17299,11 @@ task.spawn(function()
                         if HandleQuestAtGiver(q, atGiver) then
                             return
                         else
-                            RequestQuestGiverTravel(q, "verify unreadable")
+                            TravelManager:Request(q.QC, "Farm", {
+                                arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
+                                combatHover = false,
+                                persistent = false,
+                            })
                             return
                         end
                     end
@@ -17344,7 +17320,11 @@ task.spawn(function()
                     return
                 else
                     _G.BobonStatus = "Quest: Traveling to " .. q.M
-                    RequestQuestGiverTravel(q, "missing/wrong")
+                    TravelManager:Request(q.QC, "Farm", {
+                                arrivalThreshold = _G.Settings.QuestInteractDistance or 8,
+                                combatHover = false,
+                                persistent = false,
+                            })
                     return
                 end
             end
