@@ -1,9 +1,9 @@
 -- =================================================================
---         BOBON HUB v22.11.1 | SAFE DIRECT MAGNET | EXEC FIX
+--         BOBON HUB v22.12 | CLASSIC BN BRING REBASE
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.10 VIDEO REVIEW FIX | Version: v22.11.1
+--         Base: v22.11.1 EXEC FIX | Version: v22.12
 --
---  v22.11.1 EXEC / MAGNET FIX:
+--  v22.12 CLASSIC BN BRING REBASE (replaces v22.11.1 direct magnet):
 --  [V22.11.1-1] Built from the last execute-safe v22.10 base. No new top-level local
 --                controller is added, avoiding a possible Luau chunk/local-register compile limit.
 --  [V22.11.1-2] Early Skip Lv10-70 uses a compact same-frame direct magnet stored on
@@ -916,6 +916,20 @@
 --  [R-7] Fruit work never owns movement/ActionToken, so it cannot race farm/travel.
 
 
+
+--  v22.12 CLASSIC BN BRING REBASE:
+--  [BN12-1] Replaces the v22.5 HP-proof / ownership-probe SharedBring path with
+--           a single classic BN-style physics hold: SimulationRadius + BodyPosition
+--           + ChangeState(14) + WalkSpeed=0 + collision suppression.
+--  [BN12-2] One real primary remains the combat anchor. Secondary mobs are held at
+--           that anchor; no separate ACQUIRE/STACK controller is allowed to fight it.
+--  [BN12-3] Secondary fan-out is admitted only after the root physically remains
+--           inside the pile radius for a short stable window. No fake visual count.
+--  [BN12-4] Early Skip Lv10-70 uses the exact same SharedBring engine as normal
+--           quest farming; the old Skip DirectMagnet path is no longer called.
+--  [BN12-5] All temporary WalkSpeed/AutoRotate/collision/BodyPosition state is
+--           restored through SharedRelease/SharedRestoreOne when the farm changes.
+
 repeat task.wait() until game:IsLoaded()
 repeat task.wait() until game.Players.LocalPlayer
 -- Re-execution guard. Newer sessions invalidate every persistent loop from
@@ -1291,12 +1305,16 @@ _G.Settings = {
     SharedBringRange     = 350,
     SharedBringFieldRange = 1200, -- active field only; avoids cross-island physics work
     SharedBringMaxMobs   = 0, -- 0 = all matching mobs in the active field
-    SharedBringInterval  = 0.05,
+    SharedBringInterval  = 0.08,
     SharedFarmHeight     = 25,
     SharedFixedPile      = false, -- v22 reference core: target is authoritative; fixed pile is optional legacy mode
     SharedPileEmptyHold  = 2.0,
     SharedBringP         = 3000,
     SharedBringD         = 100,
+    SharedClassicStableDelay = 0.14,
+    SharedClassicVerifyRadius = 14,
+    SharedClassicHardSnapDistance = 22,
+    SharedClassicState14 = true,
     SharedBringMaxForce  = 1000000,
     SharedAttackMaxTargets = 32,
     SharedBringFailureLimit = 50, -- diagnostic only while blacklist is disabled
@@ -1332,7 +1350,7 @@ _G.Settings = {
     -- Enabled only after the combat adapter confirms real fast damage.
     SkipLevelRoute      = true,
     -- v22.11.1 execute-safe early-skip direct magnet.
-    SkipDirectMagnetEnabled = true,
+    SkipDirectMagnetEnabled = false,
     SkipDirectMagnetRange = 700,
     SkipDirectMagnetFieldRange = 1300,
     SkipDirectMagnetInterval = 0.03,
@@ -7502,6 +7520,8 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedHPProvenUntil = setmetatable({}, {__mode="k"})
     self.SharedHPProvenAt = setmetatable({}, {__mode="k"})
     self.SharedProbeState = setmetatable({}, {__mode="k"})
+    self.SharedClassicStableAt = setmetatable({}, {__mode="k"})
+    self.SharedClassicCurrentPile = nil
     self.SharedNextProbeWaveAt = 0
     self.SharedPrimaryWatchTarget = nil
     self.SharedPrimaryWatchHealth = nil
@@ -7639,8 +7659,7 @@ end
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return 0 end
-    if type(mobName) ~= "string" or mobName == "" then return 0 end
-    if not pileCF then return 0 end
+    if type(mobName) ~= "string" or mobName == "" or not pileCF then return 0 end
 
     if self.SharedMobName and string.lower(self.SharedMobName) ~= string.lower(mobName) then
         self:SharedRelease("QuestMobChanged")
@@ -7648,256 +7667,174 @@ function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryT
     self.SharedMobName = mobName
 
     local now = tick()
-    if now - (self.SharedLastBringAt or 0) < (_G.Settings.SharedBringInterval or 0.05) then
+    local interval = math.max(0.04, tonumber(_G.Settings.SharedBringInterval) or 0.08)
+    if now - (self.SharedLastBringAt or 0) < interval then
         return self.SharedBringCount or 0
     end
     self.SharedLastBringAt = now
-    ExpandSimulationRadius()
 
-    self.SharedSoftProof = self.SharedSoftProof or setmetatable({}, {__mode="k"})
-    self.SharedSoftBlockedUntil = self.SharedSoftBlockedUntil or setmetatable({}, {__mode="k"})
-    self.SharedSoftVerifiedUntil = self.SharedSoftVerifiedUntil or setmetatable({}, {__mode="k"})
-    self.SharedHPProvenUntil = self.SharedHPProvenUntil or setmetatable({}, {__mode="k"})
-    self.SharedHPProvenAt = self.SharedHPProvenAt or setmetatable({}, {__mode="k"})
-    self.SharedProbeState = self.SharedProbeState or setmetatable({}, {__mode="k"})
-    self.SharedNextProbeWaveAt = tonumber(self.SharedNextProbeWaveAt) or 0
+    -- Classic BN/public-magnet basis: request simulation first, then keep a soft
+    -- physics hold on every same-name secondary at ONE real primary anchor.
+    -- There is deliberately no ownership gate, HP lease, probe wave, or acquire phase.
+    pcall(function() ExpandSimulationRadius() end)
+    pcall(function()
+        if type(sethiddenproperty) == "function" then
+            sethiddenproperty(LP, "SimulationRadius", math.huge)
+            pcall(function() sethiddenproperty(LP, "MaximumSimulationRadius", math.huge) end)
+        end
+    end)
+    pcall(function()
+        if type(setsimulationradius) == "function" then
+            setsimulationradius(math.huge, math.huge)
+        end
+    end)
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
     if not folder or not me then return 0 end
 
-    local localRange = tonumber(_G.Settings.SharedBringRange) or 350
-    local fieldRange = tonumber(_G.Settings.SharedBringFieldRange) or 1200
+    local pilePos = pileCF.Position
+    local fieldCenter = fallbackCF and fallbackCF.Position or pilePos
+    local localRange = math.max(120, tonumber(_G.Settings.SharedBringRange) or 350)
+    local fieldRange = math.max(localRange, tonumber(_G.Settings.SharedBringFieldRange) or 1200)
     local maxMobs = math.floor(tonumber(_G.Settings.SharedBringMaxMobs) or 0)
     local maxForce = tonumber(_G.Settings.SharedBringMaxForce) or 1000000
     local pGain = tonumber(_G.Settings.SharedBringP) or 3000
     local dGain = tonumber(_G.Settings.SharedBringD) or 100
-    local proofDelay = math.max(0.10, tonumber(_G.Settings.SoftBringProofDelay) or 0.18)
-    local verifiedTTL = math.max(0.5, tonumber(_G.Settings.SoftBringVerifiedTTL) or 2.5)
-    local retryDelay = math.max(0.5, tonumber(_G.Settings.SoftBringRetryDelay) or 1.5)
-    local snapDistance = math.max(8, math.min(35, tonumber(_G.Settings.SharedBringSnapDistance) or 18))
-    local probeWaveSize = math.max(1, math.floor(tonumber(_G.Settings.SharedProbeWaveSize) or 3))
-    local probeLaunchInterval = math.max(0.10, tonumber(_G.Settings.SharedProbeLaunchInterval) or 0.15)
-    local probeAttackWindow = math.max(proofDelay, tonumber(_G.Settings.SharedProbeAttackWindow) or 0.45)
-    local probeTimeout = math.max(probeAttackWindow, tonumber(_G.Settings.SharedProbeTimeout) or 0.75)
-    local hpProofTTL = math.max(0.35, tonumber(_G.Settings.SharedHPProofTTL) or 1.25)
-    local hpMissGrace = math.max(0.35, tonumber(_G.Settings.SharedHPProofMissGrace) or 0.85)
-    local pilePos = pileCF.Position
-    local fieldCenter = fallbackCF and fallbackCF.Position or pilePos
+    local stableDelay = math.max(0.08, tonumber(_G.Settings.SharedClassicStableDelay) or 0.14)
+    local verifyRadius = math.max(6, tonumber(_G.Settings.SharedClassicVerifyRadius) or 14)
+    local hardSnapDistance = math.max(10, tonumber(_G.Settings.SharedClassicHardSnapDistance) or 22)
 
-    local candidates, moved, ownedCount, unknownCount, serverOwnedCount, failed = 0, 0, 0, 0, 0, 0
-    local hpProvenCount, probingCount = 0, 0
-    local launchWave = now >= (self.SharedNextProbeWaveAt or 0)
-    local launchedThisWave = 0
+    self.SharedClassicStableAt = self.SharedClassicStableAt or setmetatable({}, {__mode="k"})
+    self.SharedClassicCurrentPile = pilePos
 
-    local function releaseMover(mob, root)
-        local bp = root and root:FindFirstChild("BobonSharedEnemyFlyPosition")
-        if bp then pcall(function() bp:Destroy() end) end
-        -- Restore any properties left by v22.0/v21.x immediately. This is important
-        -- when the same live NPC survives re-execution or becomes the primary target.
-        self:SharedRestoreOne(mob)
-    end
+    local candidates, moved, stable, failed = 0, 0, 0, 0
 
-    local function applySoftMover(mob, root, hardSnap)
-        -- SOFT means: never ChangeState(14), never WalkSpeed=0, never disable
-        -- CanTouch/CanQuery on the NPC. Only the root collision is suppressed while
-        -- a physics-proven root is being pulled, so combat/health state stays live.
-        self:SharedRemember(root, "Part")
-        pcall(function()
-            root.CanCollide = false
-        end)
-
-        local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
-        local newMover = bp == nil
-        if not bp then
-            bp = Instance.new("BodyPosition")
-            bp.Name = "BobonSharedEnemyFlyPosition"
-            bp.Parent = root
+    local function releaseClassic(mob, root)
+        if root then
+            self.SharedClassicStableAt[root] = nil
+            local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+            if bp then pcall(function() bp:Destroy() end) end
         end
-        local ok = pcall(function()
-            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
-            bp.P = pGain
-            bp.D = dGain
-            bp.Position = pilePos
-            -- v22.5: hard-snap only on first acquisition. Rewriting root.CFrame every
-            -- 50ms can outrun server ownership/physics replication and create visual ghosts.
-            if hardSnap and newMover then
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(pilePos)
-            end
-        end)
-        if ok then moved = moved + 1 end
-        return ok
+        self:SharedRestoreOne(mob)
     end
 
     for _, mob in ipairs(folder:GetChildren()) do
         if IsEnemyNamed(mob, mobName) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and root.Parent then
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
                 local okPos, pos = pcall(function() return root.Position end)
                 local inField = okPos and IsValidPos(pos)
                     and ((pos - fieldCenter).Magnitude <= fieldRange
-                        or (pos - me.Position).Magnitude <= localRange
-                        or (pos - pilePos).Magnitude <= fieldRange)
-                if inField then
+                        or (pos - pilePos).Magnitude <= localRange
+                        or (pos - me.Position).Magnitude <= localRange)
+
+                if inField and (maxMobs <= 0 or candidates < maxMobs) then
                     candidates = candidates + 1
-                    if maxMobs <= 0 or candidates <= maxMobs then
-                        local isPrimary = primaryTarget ~= nil and mob == primaryTarget
-                        if isPrimary then
-                            -- The victim being attacked is NEVER a magnet body. Keep its
-                            -- Humanoid fully live and let combat/watchers observe real HP.
-                            releaseMover(mob, root)
-                            self.SharedSoftProof[root] = nil
-                            self.SharedSoftBlockedUntil[root] = nil
-                            self.SharedSoftVerifiedUntil[root] = nil
-                        elseif _G.Settings.SafeSoftBring == false then
-                            -- Compatibility only. Even in legacy mode v22.1 refuses to
-                            -- PlatformStand/WalkSpeed-freeze the mob.
-                            applySoftMover(mob, root, true)
-                        else
-                            local blockedUntil = self.SharedSoftBlockedUntil[root] or 0
-                            if blockedUntil > now then
-                                releaseMover(mob, root)
-                            else
-                                local ownership = ClientOwnsMob(root)
-                                if ownership == true then
-                                    ownedCount = ownedCount + 1
-                                    self.SharedSoftProof[root] = nil
-                                    self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
-                                    applySoftMover(mob, root, true)
-                                elseif ownership == false then
-                                    -- Explicit server ownership: do NOT create a local ghost pile.
-                                    serverOwnedCount = serverOwnedCount + 1
-                                    self.SharedSoftProof[root] = nil
-                                    self.SharedSoftVerifiedUntil[root] = nil
-                                    self.SharedSoftBlockedUntil[root] = now + retryDelay
-                                    releaseMover(mob, root)
-                                else
-                                    unknownCount = unknownCount + 1
-                                    local hpUntil = self.SharedHPProvenUntil[root] or 0
-                                    local hpAt = self.SharedHPProvenAt[root] or 0
-                                    if hpUntil > now then
-                                        -- Real HP delta on this exact Humanoid is the strongest proof that
-                                        -- the server accepts combat while it is staged. Keep it softly held.
-                                        hpProvenCount = hpProvenCount + 1
-                                        self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
-                                        self.SharedProbeState[root] = nil
-                                        applySoftMover(mob, root, false)
-                                    else
-                                        local probe = self.SharedProbeState[root]
-                                        if probe then
-                                            probingCount = probingCount + 1
-                                            local age = now - (probe.At or now)
-                                            local okNow, currentPos = pcall(function() return root.Position end)
-                                            local persisted = okNow and IsValidPos(currentPos)
-                                                and (currentPos - (probe.Expected or pilePos)).Magnitude <= snapDistance
-                                            local hpFresh = hpAt >= (probe.At or now) and hpAt > 0
-                                            if hpFresh then
-                                                self.SharedHPProvenUntil[root] = now + hpProofTTL
-                                                self.SharedSoftVerifiedUntil[root] = now + verifiedTTL
-                                                self.SharedProbeState[root] = nil
-                                                hpProvenCount = hpProvenCount + 1
-                                                applySoftMover(mob, root, false)
-                                            elseif (age >= proofDelay and not persisted) or age >= probeTimeout then
-                                                -- Visual pull without causal HP proof is a ghost candidate.
-                                                -- Release immediately instead of re-writing it forever.
-                                                failed = failed + 1
-                                                self.SharedProbeState[root] = nil
-                                                self.SharedSoftProof[root] = nil
-                                                self.SharedSoftVerifiedUntil[root] = nil
-                                                self.SharedHPProvenUntil[root] = nil
-                                                self.SharedSoftBlockedUntil[root] = now + math.max(retryDelay, hpMissGrace)
-                                                releaseMover(mob, root)
-                                            else
-                                                -- During the bounded probe window: no BodyPosition. The one-shot
-                                                -- staged root may receive a causal fan-out hit; HP delta promotes it.
-                                                releaseMover(mob, root)
-                                            end
-                                        elseif _G.Settings.SoftBringRequireProof == false then
-                                            applySoftMover(mob, root, false)
-                                        elseif launchWave and launchedThisWave < probeWaveSize then
-                                            -- v22.5: launch only a small unknown-owner wave per settle interval.
-                                            -- This prevents an entire camp from being CFramed in the same replication frame.
-                                            releaseMover(mob, root)
-                                            local okProbe = pcall(function()
-                                                root.CFrame = CFrame.new(pilePos)
-                                            end)
-                                            if okProbe then
-                                                launchedThisWave = launchedThisWave + 1
-                                                probingCount = probingCount + 1
-                                                self.SharedProbeState[root] = {
-                                                    At = now,
-                                                    Expected = pilePos,
-                                                    StartHealth = hum.Health,
-                                                }
-                                            else
-                                                failed = failed + 1
-                                                self.SharedSoftBlockedUntil[root] = now + retryDelay
-                                            end
-                                        end
-                                    end
-                                end
+
+                    if mob == primaryTarget then
+                        -- The primary is real and never frozen/moved by bring.
+                        self.SharedClassicStableAt[root] = self.SharedClassicStableAt[root] or now
+                        stable = stable + 1
+                    else
+                        self:SharedRemember(hum, "Humanoid")
+                        self:SharedRemember(root, "Part")
+                        local head = mob:FindFirstChild("Head")
+                        if head and head:IsA("BasePart") then self:SharedRemember(head, "Part") end
+
+                        local okMove = pcall(function()
+                            root.CanCollide = false
+                            if head and head:IsA("BasePart") then head.CanCollide = false end
+                            hum.WalkSpeed = 0
+                            hum.AutoRotate = false
+                            if _G.Settings.SharedClassicState14 ~= false then
+                                hum:ChangeState(14)
                             end
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+
+                            local bp = root:FindFirstChild("BobonSharedEnemyFlyPosition")
+                            if not bp then
+                                bp = Instance.new("BodyPosition")
+                                bp.Name = "BobonSharedEnemyFlyPosition"
+                                bp.Parent = root
+                            end
+                            bp.MaxForce = Vector3.new(maxForce, maxForce, maxForce)
+                            bp.P = pGain
+                            bp.D = dGain
+                            bp.Position = pilePos
+
+                            if (root.Position - pilePos).Magnitude > hardSnapDistance then
+                                root.CFrame = CFrame.new(pilePos)
+                            end
+                        end)
+
+                        if okMove then
+                            moved = moved + 1
+                            local okAfter, afterPos = pcall(function() return root.Position end)
+                            if okAfter and IsValidPos(afterPos)
+                                and (afterPos - pilePos).Magnitude <= verifyRadius then
+                                local since = self.SharedClassicStableAt[root]
+                                if not since then
+                                    since = now
+                                    self.SharedClassicStableAt[root] = since
+                                end
+                                if now - since >= stableDelay then
+                                    stable = stable + 1
+                                end
+                            else
+                                self.SharedClassicStableAt[root] = nil
+                            end
+                        else
+                            failed = failed + 1
+                            releaseClassic(mob, root)
                         end
                     end
+                elseif mob ~= primaryTarget then
+                    -- Do not leave an old mob frozen after it exits this farm field.
+                    releaseClassic(mob, root)
                 end
             end
         end
     end
 
-    if launchWave and launchedThisWave > 0 then
-        self.SharedNextProbeWaveAt = now + probeLaunchInterval
-    end
-    self.SharedBringCount = moved
+    self.SharedBringCount = stable
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "SOFT-BRING"
+        _G.BobonDiagnostics.Bring = ("BN-CLASSIC %d/%d"):format(stable, candidates)
         _G.BobonDiagnostics.BringCandidates = candidates
         _G.BobonDiagnostics.BringMoved = moved
-        _G.BobonDiagnostics.BringOwned = ownedCount
-        _G.BobonDiagnostics.BringUnknown = unknownCount
-        _G.BobonDiagnostics.BringServerOwned = serverOwnedCount
-        _G.BobonDiagnostics.BringHPProven = hpProvenCount
-        _G.BobonDiagnostics.BringProbing = probingCount
         _G.BobonDiagnostics.BringFailed = failed
-        _G.BobonDiagnostics.BringBlacklisted = 0
+        _G.BobonDiagnostics.BringOwned = 0
+        _G.BobonDiagnostics.BringUnknown = 0
+        _G.BobonDiagnostics.BringServerOwned = 0
+        _G.BobonDiagnostics.BringHPProven = 0
+        _G.BobonDiagnostics.BringProbing = 0
     end
-    return moved
+    return stable
 end
 
 function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     if not model or not model.Parent then return false end
     if primaryTarget and model == primaryTarget then return true end
+
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
 
-    local own = ClientOwnsMob(root)
-    if own == true then return true end
+    local pilePos = self.SharedClassicCurrentPile
+    local since = self.SharedClassicStableAt and self.SharedClassicStableAt[root]
+    if not pilePos or not since then return false end
 
-    local now = tick()
-    self.SharedHPProvenUntil = self.SharedHPProvenUntil or setmetatable({}, {__mode="k"})
-    self.SharedHPProvenAt = self.SharedHPProvenAt or setmetatable({}, {__mode="k"})
-    self.SharedProbeState = self.SharedProbeState or setmetatable({}, {__mode="k"})
-    if own == false then
-        -- v22.6 strict server-owner rule: stale visual/HP authority can never outlive
-        -- an explicit ownership=false observation. Attack the mob later at its real position.
-        self.SharedHPProvenUntil[root] = nil
-        self.SharedHPProvenAt[root] = nil
-        self.SharedProbeState[root] = nil
+    local ok, pos = pcall(function() return root.Position end)
+    if not ok or not IsValidPos(pos) then return false end
+    local verifyRadius = math.max(6, tonumber(_G.Settings.SharedClassicVerifyRadius) or 14)
+    local stableDelay = math.max(0.08, tonumber(_G.Settings.SharedClassicStableDelay) or 0.14)
+    if (pos - pilePos).Magnitude > verifyRadius then
+        self.SharedClassicStableAt[root] = nil
         return false
     end
-    if (self.SharedHPProvenUntil[root] or 0) > now then return true end
-
-    local probe = self.SharedProbeState[root]
-    if probe and now - (probe.At or now) <= (_G.Settings.SharedProbeAttackWindow or 0.45) then
-        local ok, pos = pcall(function() return root.Position end)
-        local expected = probe.Expected
-        local snapDistance = math.max(8, math.min(35, tonumber(_G.Settings.SharedBringSnapDistance) or 18))
-        return ok and IsValidPos(pos) and expected and (pos - expected).Magnitude <= snapDistance
-    end
-    return false
+    return tick() - since >= stableDelay
 end
 
 function ClusterFarmController:SharedPrimaryNoDamage(target, attackWindow)
@@ -10383,23 +10320,32 @@ function SkipRouteController:Run()
 
     _G.State.FarmTarget = target
     _G.State.CurrentTarget = target
-    ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
+    _G.State.ActiveQuestMob = targetName or (route.Names and route.Names[1])
 
+    -- v22.12: Skip no longer has a separate magnet implementation. It uses the
+    -- exact same classic BN SharedBring engine as normal level farm.
     local pinned, total = 1, 1
+    _G.State.FState = "SHARED_BRING_FARM"
     if _G.Settings.GatherMobs ~= false then
-        local ok, a, b = pcall(function()
-            return self:DirectMagnet(route, target)
+        local okBring, countOrErr = pcall(function()
+            return ClusterFarmController:SharedBring(
+                targetName or route.Names[1],
+                root.CFrame,
+                route.Fallback,
+                target
+            )
         end)
-        if ok then
-            pinned, total = tonumber(a) or 1, tonumber(b) or 1
+        if okBring then
+            pinned = tonumber(countOrErr) or 1
+            total = tonumber(_G.BobonDiagnostics and _G.BobonDiagnostics.BringCandidates) or pinned
         else
-            DLog("SKIP-MAGNET", "contained error: " .. tostring(a))
+            DLog("SKIP-BN", "contained error: " .. tostring(countOrErr))
         end
     end
 
     local display = tostring(route.Display or targetName or (route.Names and route.Names[1]) or "Skip Mob")
     if total > 1 and pinned < total then
-        _G.BobonStatus = ("Skip: Magnetizing %s (%d/%d)"):format(display,pinned,total)
+        _G.BobonStatus = ("Skip: BN bring %s (%d/%d)"):format(display,pinned,total)
     else
         _G.BobonStatus = ("Skip: Attacking pile %s (%d/%d)"):format(display,pinned,total)
     end
@@ -10429,8 +10375,11 @@ function SkipRouteController:Run()
     local distance = (me.Position-targetPos).Magnitude
     local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
     if distance <= range and farmHolds then
+        _G.State.FState = "SHARED_ATTACK"
         EquipCombatTool()
         Attack(target, route.Names[1])
+    else
+        _G.State.FState = "SHARED_BRING_FARM"
     end
     return true
 end
