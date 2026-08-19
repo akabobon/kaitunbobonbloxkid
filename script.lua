@@ -1,19 +1,19 @@
 -- =================================================================
---         BOBON HUB v22.11 | DIRECT MAGNET SKIP | VIDEO 20 FIX
+--         BOBON HUB v22.11.1 | SAFE DIRECT MAGNET | EXEC FIX
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
---         Base: v22.10 VIDEO REVIEW FIX | Version: v22.11
+--         Base: v22.10 VIDEO REVIEW FIX | Version: v22.11.1
 --
---  v22.11 VIDEO 20 / DIRECT-MAGNET FIX:
---  [V22.11-1] Replaces the strict ACQUIRE/KILL ownership gate for Sea-1 Lv10-70 skip
---              with a dedicated target-centered direct magnet. The real primary is never frozen.
---  [V22.11-2] Public-hub compatibility idea: request SimulationRadius and continuously CFrame
---              same-name secondaries onto the live primary; positive-owned/HP-proven roots get
---              an additional BodyPosition hold. False/unknown ownership is NOT hard-rejected.
---  [V22.11-3] Combat fan-out reads the dedicated same-frame pinned set, so video-20's
---              1/6 -> 2/6 -> 0/6 ownership oscillation no longer blocks all secondary hits.
---  [V22.11-4] No Humanoid freeze is used by default (PlatformStand/Sit stays off);
---              optional owned-only freeze exists as a compatibility switch, preventing client-only statues.
---  [V22.11-5] Normal quest/raid/item bring remains on the existing HP-proof controller.
+--  v22.11.1 EXEC / MAGNET FIX:
+--  [V22.11.1-1] Built from the last execute-safe v22.10 base. No new top-level local
+--                controller is added, avoiding a possible Luau chunk/local-register compile limit.
+--  [V22.11.1-2] Early Skip Lv10-70 uses a compact same-frame direct magnet stored on
+--                SkipRouteController instead of the strict HP-proof ACQUIRE/KILL bring.
+--  [V22.11.1-3] Secondaries are repeatedly CFramed onto ONE real primary after requesting
+--                simulation radius; no PlatformStand/Sit freeze and no BodyPosition objects.
+--  [V22.11.1-4] Combat fan-out accepts only same-frame magnet-marked skip mobs, bypassing
+--                the old isnetworkowner false/unknown gate that caused 1/6 -> 2/6 -> 0/6.
+--  [V22.11.1-5] Normal quest/item/raid bring remains unchanged. Magnet failure is pcall-contained
+--                so it cannot stop the whole kaitun/UI from loading.
 --
 --  v22.10 VIDEO 18/19 REVIEW FIXES:
 --  [V22.10-1] Early skip is now ACQUIRE-FIRST / KILL-SECOND. It no longer attacks one
@@ -1331,20 +1331,13 @@ _G.Settings = {
     -- Sea 1 optimized skip route (Fountain, bosses, Upper Sky/Galley).
     -- Enabled only after the combat adapter confirms real fast damage.
     SkipLevelRoute      = true,
-    -- v22.11 early-skip magnet: target-centered direct magnet adapted from
-    -- public Blox Fruits hub patterns, but the primary target is never frozen.
+    -- v22.11.1 execute-safe early-skip direct magnet.
     SkipDirectMagnetEnabled = true,
-    SkipDirectMagnetRange = 650,
-    SkipDirectMagnetFieldRange = 1200,
+    SkipDirectMagnetRange = 700,
+    SkipDirectMagnetFieldRange = 1300,
     SkipDirectMagnetInterval = 0.03,
-    SkipDirectMagnetVerifyRadius = 38,
-    SkipDirectMagnetPinnedTTL = 0.20,
-    SkipDirectMagnetBodyPosition = true,
-    SkipDirectMagnetP = 12500,
-    SkipDirectMagnetD = 900,
-    SkipDirectMagnetMaxForce = 9000000,
-    SkipDirectMagnetOwnedFreeze = false,
-    SkipDirectMagnetNoDamageRelease = 1.35,
+    SkipDirectMagnetVerifyRadius = 55,
+    SkipDirectMagnetPinnedTTL = 0.18,
     -- Bring matching quest mobs only inside the current island/farm area.
     -- Simulation ownership is requested before movement to avoid ghost mobs.
     GatherMaxDistance   = 3000,
@@ -3451,7 +3444,6 @@ end
 local WeaponController
 local ClientOwnsMob
 local ClusterFarmController
-local SkipMagnetController
 local VerifiedGatherRoots = setmetatable({}, { __mode = "k" })
 local DamageProvenGatherRoots = setmetatable({}, { __mode = "k" })
 local GatherAuthorityClass = setmetatable({}, { __mode = "k" })
@@ -3899,10 +3891,12 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
     local sharedFarmActive = _G.Settings.SharedSourceFarmMode ~= false
         and _G.State and _G.State.Mode == "Farming"
         and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
-    local skipMagnetActive = SkipMagnetController
-        and SkipMagnetController.Active == true
-        and _G.State and _G.State.Mode == "Farming"
-        and _G.State.ClusterMode == "SKIP"
+    -- v22.11.1: early skip uses a same-frame direct-magnet mark instead of
+    -- ClusterFarmController ownership/proof admission. Kept inside this function
+    -- so no extra top-level local is allocated in the giant Luau chunk.
+    local skipPinned = _G.BobonSkipMagnetPinnedModels
+    local skipMagnetActive = _G.State and _G.State.Mode == "Farming"
+        and _G.State.ClusterMode == "SKIP" and type(skipPinned) == "table"
     local shadowQuest = questGatherActive and not sharedFarmActive and ClusterFarmController
         and ClusterFarmController:IsShadowCombatActive()
 
@@ -3989,11 +3983,10 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
                 else
                     local allowExtra = true
                     if skipMagnetActive and enemy ~= preferred then
-                        -- v22.11 early-skip magnet: direct target-centered stacking is
-                        -- validated by the dedicated controller on the same frame.
-                        -- The primary always stays real; only secondaries need a live
-                        -- local pile position to join the fan-out.
-                        allowExtra = SkipMagnetController:IsPinned(enemy)
+                        -- Same-frame direct magnet: bypass false/unknown ownership reports.
+                        -- TTL is intentionally short; every usable secondary must be refreshed
+                        -- by SkipRouteController:DirectMagnet continuously.
+                        allowExtra = (skipPinned[enemy] or 0) > tick()
                     elseif sharedFarmActive and enemy ~= preferred then
                         -- v22.5 no-ghost rule: visual proximity is not authority. Secondary
                         -- fan-out requires real network ownership, causal HP proof, or a
@@ -5895,9 +5888,6 @@ end
 -- therefore a logical stop plus a diagnostic reset; the server keeps control
 -- of every assembly that is not currently client-owned.
 function FarmPositionController:ReleaseCluster()
-    if SkipMagnetController and SkipMagnetController.Active then
-        pcall(function() SkipMagnetController:Release("ReleaseCluster") end)
-    end
     if ClusterFarmController and ClusterFarmController.SharedMobName then
         pcall(function() ClusterFarmController:SharedRelease("ReleaseCluster") end)
     end
@@ -10129,305 +10119,10 @@ end
 -- Upper Sky/Galley before the normal Sea 2 progression gate at level 700.
 -- A live instance is always preferred; fallback coordinates only keep the
 -- player over a safe island while a boss or mob is respawning.
-
--- ══════════════════════════════════════════════════════════════════
--- v22.11 EARLY-SKIP DIRECT MAGNET
--- The strict ownership/proof cluster was excellent at avoiding client ghosts,
--- but video Roblox(20) showed the downside on executors where isnetworkowner()
--- keeps returning false: 1/6 -> 2/6 -> 0/6 even while the mobs are visibly in
--- the same Upper Sky field.  Early skip now uses a separate target-centered
--- magnet, inspired by public hub patterns:
---   * keep ONE real primary target untouched;
---   * repeatedly place every same-name secondary on that real target;
---   * request SimulationRadius aggressively;
---   * only freeze/BodyPosition roots when this client actually owns them;
---   * unknown/server-reported roots are never PlatformStand-frozen;
---   * fan-out sees only secondaries that are physically at the pile this frame.
--- Normal quest/raid/item cluster logic remains unchanged.
--- ══════════════════════════════════════════════════════════════════
-SkipMagnetController = {
-    Active = false,
-    Key = nil,
-    PinnedUntil = setmetatable({}, {__mode="k"}),
-    Restore = setmetatable({}, {__mode="k"}),
-    LastHealth = setmetatable({}, {__mode="k"}),
-    LastDamageAt = setmetatable({}, {__mode="k"}),
-    DamageProvenUntil = setmetatable({}, {__mode="k"}),
-    PinnedSince = setmetatable({}, {__mode="k"}),
-    SnapCount = setmetatable({}, {__mode="k"}),
-    LastTick = 0,
-}
-
-function SkipMagnetController:Remember(root, hum)
-    if root and not self.Restore[root] then
-        self.Restore[root] = {
-            Kind = "Root",
-            CanCollide = root.CanCollide,
-        }
-    end
-    if hum and not self.Restore[hum] then
-        self.Restore[hum] = {
-            Kind = "Humanoid",
-            PlatformStand = hum.PlatformStand,
-            Sit = hum.Sit,
-            AutoRotate = hum.AutoRotate,
-        }
-    end
-end
-
-function SkipMagnetController:RestoreMob(mob)
-    if not mob then return end
-    local hum = mob:FindFirstChildOfClass("Humanoid")
-    local root = mob:FindFirstChild("HumanoidRootPart")
-    if root then
-        local mover = root:FindFirstChild("BobonSkipDirectMagnet")
-        if mover then pcall(function() mover:Destroy() end) end
-        local old = self.Restore[root]
-        if old then
-            pcall(function()
-                if old.CanCollide ~= nil then root.CanCollide = old.CanCollide end
-            end)
-            self.Restore[root] = nil
-        end
-        self.PinnedUntil[root] = nil
-        self.PinnedSince[root] = nil
-        self.SnapCount[root] = nil
-    end
-    if hum then
-        local old = self.Restore[hum]
-        if old then
-            pcall(function()
-                if old.PlatformStand ~= nil then hum.PlatformStand = old.PlatformStand end
-                if old.Sit ~= nil then hum.Sit = old.Sit end
-                if old.AutoRotate ~= nil then hum.AutoRotate = old.AutoRotate end
-            end)
-            self.Restore[hum] = nil
-        end
-    end
-end
-
-function SkipMagnetController:Release(reason)
-    local folder = workspace:FindFirstChild("Enemies")
-    if folder then
-        for _, mob in ipairs(folder:GetChildren()) do
-            self:RestoreMob(mob)
-        end
-    end
-    self.Active = false
-    self.Key = nil
-    self.PinnedUntil = setmetatable({}, {__mode="k"})
-    self.Restore = setmetatable({}, {__mode="k"})
-    self.LastHealth = setmetatable({}, {__mode="k"})
-    self.LastDamageAt = setmetatable({}, {__mode="k"})
-    self.DamageProvenUntil = setmetatable({}, {__mode="k"})
-    self.PinnedSince = setmetatable({}, {__mode="k"})
-    self.SnapCount = setmetatable({}, {__mode="k"})
-    self.LastTick = 0
-    if _G.State then
-        _G.State.SkipMagnetAnchor = nil
-    end
-    if reason then DLog("SKIP-MAGNET", "Release: " .. tostring(reason)) end
-end
-
-function SkipMagnetController:IsPinned(model)
-    if not self.Active or not model or not model.Parent then return false end
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    local root = model:FindFirstChild("HumanoidRootPart")
-    if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
-    if (self.PinnedUntil[root] or 0) <= tick() then return false end
-    local state = _G.State
-    local anchorCF = state and state.SkipMagnetAnchor
-    if not anchorCF then return false end
-    local ok, pos = pcall(function() return root.Position end)
-    local radius = tonumber(_G.Settings.SkipDirectMagnetVerifyRadius) or 38
-    return ok and IsValidPos(pos) and (pos - anchorCF.Position).Magnitude <= radius
-end
-
-function SkipMagnetController:Tick(route, primary)
-    if _G.Settings.SkipDirectMagnetEnabled == false then return 0,0,nil end
-    if not route or not primary or not primary.Parent then return 0,0,nil end
-    local humPrimary = primary:FindFirstChildOfClass("Humanoid")
-    local rootPrimary = primary:FindFirstChild("HumanoidRootPart")
-    local me = HRP()
-    local folder = workspace:FindFirstChild("Enemies")
-    if not humPrimary or humPrimary.Health <= 0 or not rootPrimary or not rootPrimary.Parent
-        or not me or not folder then
-        return 0,0,nil
-    end
-
-    if self.Key ~= route.Key then
-        self:Release("route-change")
-        self.Key = route.Key
-    end
-    self.Active = true
-
-    local now = tick()
-    local interval = math.max(0.01, tonumber(_G.Settings.SkipDirectMagnetInterval) or 0.03)
-    if now - (self.LastTick or 0) < interval then
-        local count, total = 0, 0
-        for _, mob in ipairs(folder:GetChildren()) do
-            local allowed = false
-            for _, wanted in ipairs(route.Names or {}) do
-                if IsEnemyNamed(mob, wanted) then allowed = true break end
-            end
-            if allowed then
-                local hum = mob:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    total = total + 1
-                    if mob == primary or self:IsPinned(mob) then count = count + 1 end
-                end
-            end
-        end
-        return count, total, _G.State and _G.State.SkipMagnetAnchor
-    end
-    self.LastTick = now
-
-    ExpandSimulationRadius()
-
-    -- Keep the primary completely real.  It is the combat truth and the pile anchor.
-    self:RestoreMob(primary)
-    local pileCF = CFrame.new(rootPrimary.Position)
-    local pilePos = pileCF.Position
-    if _G.State then
-        _G.State.SkipMagnetAnchor = pileCF
-        _G.State.ClusterPhase = "KILL"
-        _G.State.ClusterPhaseStartedAt = now
-    end
-
-    local fieldCenter = route.Fallback and route.Fallback.Position or pilePos
-    local fieldRange = math.max(200, tonumber(_G.Settings.SkipDirectMagnetFieldRange) or 1200)
-    local localRange = math.max(120, tonumber(_G.Settings.SkipDirectMagnetRange) or 650)
-    local verifyRadius = math.max(12, tonumber(_G.Settings.SkipDirectMagnetVerifyRadius) or 38)
-    local ttl = math.max(0.08, tonumber(_G.Settings.SkipDirectMagnetPinnedTTL) or 0.20)
-    local useMover = _G.Settings.SkipDirectMagnetBodyPosition ~= false
-    local maxForce = tonumber(_G.Settings.SkipDirectMagnetMaxForce) or 9000000
-    local pGain = tonumber(_G.Settings.SkipDirectMagnetP) or 12500
-    local dGain = tonumber(_G.Settings.SkipDirectMagnetD) or 900
-
-    local total, pinned, owned, unknown, serverReported, snapbacks = 0, 0, 0, 0, 0, 0
-    local oldestNoDamageRoot = nil
-
-    for _, mob in ipairs(folder:GetChildren()) do
-        local allowed = false
-        for _, wanted in ipairs(route.Names or {}) do
-            if IsEnemyNamed(mob, wanted) then allowed = true break end
-        end
-        if allowed then
-            local hum = mob:FindFirstChildOfClass("Humanoid")
-            local root = mob:FindFirstChild("HumanoidRootPart")
-            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
-                local okPre, prePos = pcall(function() return root.Position end)
-                local inField = okPre and IsValidPos(prePos)
-                    and ((prePos - fieldCenter).Magnitude <= fieldRange
-                        or (prePos - pilePos).Magnitude <= localRange
-                        or (prePos - me.Position).Magnitude <= localRange)
-
-                if inField then
-                    total = total + 1
-
-                    local hp = tonumber(hum.Health) or 0
-                    local lastHP = self.LastHealth[root]
-                    if lastHP and hp < lastHP - 0.01 then
-                        self.LastDamageAt[root] = now
-                        self.DamageProvenUntil[root] = now + 2.0
-                    end
-                    self.LastHealth[root] = hp
-
-                    if mob == primary then
-                        self.PinnedUntil[root] = now + ttl
-                        self.PinnedSince[root] = self.PinnedSince[root] or now
-                        pinned = pinned + 1
-                    else
-                        self:Remember(root, hum)
-
-                        -- If the server snapped this root back since the last frame, remember
-                        -- it diagnostically but do not blacklist it.  Repeated direct magnet +
-                        -- SimulationRadius is exactly the compatibility path old public hubs use.
-                        if self.PinnedUntil[root] and self.PinnedUntil[root] > 0
-                            and (prePos - pilePos).Magnitude > verifyRadius * 1.5 then
-                            self.SnapCount[root] = (self.SnapCount[root] or 0) + 1
-                            snapbacks = snapbacks + 1
-                        end
-
-                        local own = ClientOwnsMob(root)
-                        if own == true then owned = owned + 1
-                        elseif own == false then serverReported = serverReported + 1
-                        else unknown = unknown + 1 end
-
-                        -- Never freeze a root just because an executor says false/unknown.
-                        -- PlatformStand/Sit is only used when ownership is positively proven.
-                        if own == true and _G.Settings.SkipDirectMagnetOwnedFreeze ~= false then
-                            pcall(function()
-                                hum.PlatformStand = true
-                                hum.Sit = true
-                                hum.AutoRotate = false
-                            end)
-                        end
-
-                        pcall(function()
-                            root.CanCollide = false
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                            root.CFrame = pileCF
-                        end)
-
-                        -- Physics hold is enabled only for positive ownership or exact HP proof.
-                        local proven = (self.DamageProvenUntil[root] or 0) > now
-                        local mover = root:FindFirstChild("BobonSkipDirectMagnet")
-                        if useMover and (own == true or proven) then
-                            if not mover then
-                                mover = Instance.new("BodyPosition")
-                                mover.Name = "BobonSkipDirectMagnet"
-                                mover.Parent = root
-                            end
-                            pcall(function()
-                                mover.MaxForce = Vector3.new(maxForce,maxForce,maxForce)
-                                mover.P = pGain
-                                mover.D = dGain
-                                mover.Position = pilePos
-                            end)
-                        elseif mover then
-                            pcall(function() mover:Destroy() end)
-                        end
-
-                        local okPost, postPos = pcall(function() return root.Position end)
-                        if okPost and IsValidPos(postPos)
-                            and (postPos - pilePos).Magnitude <= verifyRadius then
-                            self.PinnedUntil[root] = now + ttl
-                            self.PinnedSince[root] = self.PinnedSince[root] or now
-                            pinned = pinned + 1
-                        else
-                            self.PinnedUntil[root] = nil
-                            self.PinnedSince[root] = nil
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    if _G.State then
-        _G.State.ClusterPhaseVerified = pinned
-        _G.State.ClusterPhaseTotal = total
-        _G.State.ClusterLastCandidateCount = total
-        _G.State.ClusterPrimary = primary
-    end
-    if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("SKIP-DIRECT %d/%d"):format(pinned,total)
-        _G.BobonDiagnostics.BringCandidates = total
-        _G.BobonDiagnostics.BringMoved = pinned
-        _G.BobonDiagnostics.BringOwned = owned
-        _G.BobonDiagnostics.BringUnknown = unknown
-        _G.BobonDiagnostics.BringServerOwned = serverReported
-        _G.BobonDiagnostics.BringFailed = snapbacks
-    end
-
-    return pinned, total, pileCF
-end
-
 local SkipRouteController = {
     Enabled = true,
     CurrentKey = nil,
+    LastMagnetTick = 0,
     -- [D-4] Theo dõi hiệu quả của route: level tại lúc chọn route + thời
     -- điểm bắt đầu. Level không tăng trong SkipRouteFallbackTimeout giây
     -- → coi skip không hiệu quả → tắt hẳn, farm quest bình thường.
@@ -10458,11 +10153,10 @@ function SkipRouteController:Reset(reason)
         if _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
             TravelManager:Stop("SkipRouteReset")
         end
-        if SkipMagnetController then
-            pcall(function() SkipMagnetController:Release("SkipRouteReset") end)
-        end
         FarmPositionController:ReleaseCluster()
         _G.State:ClearTargets()
+        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
+        self.LastMagnetTick = 0
         self.CurrentKey = nil
     end
 end
@@ -10482,11 +10176,133 @@ function SkipRouteController:FindTarget(route)
     return nil, nil
 end
 
+function SkipRouteController:DirectMagnet(route, primary)
+    if _G.Settings.SkipDirectMagnetEnabled == false then return 1, 1 end
+    if not route or not primary or not primary.Parent then return 0, 0 end
+
+    local folder = workspace:FindFirstChild("Enemies")
+    local primaryHum = primary:FindFirstChildOfClass("Humanoid")
+    local primaryRoot = primary:FindFirstChild("HumanoidRootPart")
+    local me = HRP()
+    if not folder or not primaryHum or primaryHum.Health <= 0
+        or not primaryRoot or not primaryRoot.Parent or not me then
+        return 0, 0
+    end
+
+    if type(_G.BobonSkipMagnetPinnedModels) ~= "table" then
+        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
+    end
+    local marks = _G.BobonSkipMagnetPinnedModels
+    local now = tick()
+    local interval = math.max(0.01, tonumber(_G.Settings.SkipDirectMagnetInterval) or 0.03)
+    local ttl = math.max(0.08, tonumber(_G.Settings.SkipDirectMagnetPinnedTTL) or 0.18)
+    local verifyRadius = math.max(20, tonumber(_G.Settings.SkipDirectMagnetVerifyRadius) or 55)
+    local localRange = math.max(150, tonumber(_G.Settings.SkipDirectMagnetRange) or 700)
+    local fieldRange = math.max(localRange, tonumber(_G.Settings.SkipDirectMagnetFieldRange) or 1300)
+
+    local anchorPos = primaryRoot.Position
+    local fieldPos = route.Fallback and route.Fallback.Position or anchorPos
+    local total, pinned = 0, 0
+
+    -- Count helper is intentionally repeated rather than creating a new top-level helper.
+    local function allowedMob(mob)
+        for _, wanted in ipairs(route.Names or {}) do
+            if IsEnemyNamed(mob, wanted) then return true end
+        end
+        return false
+    end
+
+    -- Throttle writes, but keep reporting live counts between writes.
+    if now - (self.LastMagnetTick or 0) < interval then
+        for _, mob in ipairs(folder:GetChildren()) do
+            if allowedMob(mob) then
+                local hum = mob:FindFirstChildOfClass("Humanoid")
+                local root = mob:FindFirstChild("HumanoidRootPart")
+                if hum and hum.Health > 0 and root and root.Parent then
+                    local ok, pos = pcall(function() return root.Position end)
+                    if ok and IsValidPos(pos)
+                        and ((pos-fieldPos).Magnitude <= fieldRange
+                            or (pos-anchorPos).Magnitude <= localRange
+                            or (pos-me.Position).Magnitude <= localRange) then
+                        total = total + 1
+                        if mob == primary or (marks[mob] or 0) > now then
+                            pinned = pinned + 1
+                        end
+                    end
+                end
+            end
+        end
+        return pinned, total
+    end
+    self.LastMagnetTick = now
+
+    -- Compatibility path used by classic public magnets. Any unsupported executor
+    -- primitive is contained here and cannot terminate the kaitun.
+    pcall(function() ExpandSimulationRadius() end)
+    pcall(function()
+        if sethiddenproperty then
+            sethiddenproperty(LP, "SimulationRadius", math.huge)
+        end
+    end)
+
+    for _, mob in ipairs(folder:GetChildren()) do
+        if allowedMob(mob) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPre, prePos = pcall(function() return root.Position end)
+                local inField = okPre and IsValidPos(prePos)
+                    and ((prePos-fieldPos).Magnitude <= fieldRange
+                        or (prePos-anchorPos).Magnitude <= localRange
+                        or (prePos-me.Position).Magnitude <= localRange)
+                if inField then
+                    total = total + 1
+                    if mob == primary then
+                        marks[mob] = now + ttl
+                        pinned = pinned + 1
+                    else
+                        -- No PlatformStand, no Sit, no BodyPosition: repeated CFrame only.
+                        -- This avoids the statue/ghost state produced by frozen server-owned mobs.
+                        pcall(function()
+                            root.CanCollide = false
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                            root.CFrame = CFrame.new(anchorPos)
+                        end)
+
+                        local okPost, postPos = pcall(function() return root.Position end)
+                        if okPost and IsValidPos(postPos)
+                            and (postPos-anchorPos).Magnitude <= verifyRadius then
+                            marks[mob] = now + ttl
+                            pinned = pinned + 1
+                        else
+                            marks[mob] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    if _G.State then
+        _G.State.ClusterPhase = "KILL"
+        _G.State.ClusterPhaseVerified = pinned
+        _G.State.ClusterPhaseTotal = total
+        _G.State.ClusterLastCandidateCount = total
+        _G.State.ClusterPrimary = primary
+    end
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = ("SKIP-MAGNET %d/%d"):format(pinned,total)
+        _G.BobonDiagnostics.BringCandidates = total
+        _G.BobonDiagnostics.BringMoved = pinned
+    end
+    return pinned, total
+end
+
 function SkipRouteController:Run()
-    -- v22.11: early skip no longer waits for the strict ownership/proof cluster.
-    -- Roblox(20) showed that controller oscillating 1/6 -> 2/6 -> 0/6 on an
-    -- executor that kept reporting server ownership.  Skip now uses a dedicated
-    -- target-centered direct magnet while preserving the real primary target.
+    -- v22.11.1: execute-safe direct magnet. This controller is deliberately
+    -- compact and pcall-contained; if magnet writes are unsupported, normal
+    -- movement/combat still continue instead of killing the whole script.
     local fastReady = CombatController:IsFastReady()
     if _G.BobonDiagnostics then
         _G.BobonDiagnostics.SkipBackend = fastReady and "FAST" or "BOOTSTRAP"
@@ -10503,7 +10319,7 @@ function SkipRouteController:Run()
         self.CurrentKey = route.Key
         self.RouteStartTime = os.time()
         self.RouteStartLevel = Level()
-        DLog("SKIP", "Direct-magnet route selected: " .. route.Key)
+        DLog("SKIP", "Safe direct-magnet route selected: " .. tostring(route.Key))
     elseif Level() > (self.RouteStartLevel or 0) then
         self.RouteStartLevel = Level()
         self.RouteStartTime = os.time()
@@ -10512,7 +10328,7 @@ function SkipRouteController:Run()
     if self.RouteStartTime and os.time() - self.RouteStartTime
         > (_G.Settings.SkipRouteFallbackTimeout or 90) then
         self:Reset("skip made no level progress")
-        DLog("SKIP", "Direct-magnet skip stalled -> normal quest fallback")
+        DLog("SKIP", "Safe direct magnet stalled -> normal quest fallback")
         return false
     end
 
@@ -10524,14 +10340,13 @@ function SkipRouteController:Run()
     _G.State:SetMode("Farming")
     _G.State.FState = "SKIP_FARM"
 
-    -- Keep the current live primary until it dies.  Picking a different nearest
-    -- victim every tick would drag the whole pile around the island.
+    -- Preserve a real primary until death so the pile does not jump between mobs.
     local target, targetName = nil, nil
-    local current = _G.State.FarmTarget
-    if current and current.Parent and _G.State:IsTargetValid(current) then
+    local old = _G.State.FarmTarget
+    if old and old.Parent and _G.State:IsTargetValid(old) then
         for _, wanted in ipairs(route.Names or {}) do
-            if IsEnemyNamed(current, wanted) then
-                target, targetName = current, wanted
+            if IsEnemyNamed(old, wanted) then
+                target, targetName = old, wanted
                 break
             end
         end
@@ -10541,17 +10356,12 @@ function SkipRouteController:Run()
     end
 
     if not target then
-        if SkipMagnetController and SkipMagnetController.Active then
-            pcall(function() SkipMagnetController:Release("wave-empty") end)
-        end
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
+        _G.BobonSkipMagnetPinnedModels = setmetatable({}, {__mode="k"})
         _G.BobonStatus = "Skip: Waiting " .. tostring(route.Display)
-
         if route.Fallback and _G.State:CanRequestTravel() then
-            local waitCF = route.Fallback * CFrame.new(0, _G.Settings.FarmHeight or 22, 0)
-            TravelManager:Request(waitCF, "Farm", {
+            TravelManager:Request(route.Fallback * CFrame.new(0, _G.Settings.FarmHeight or 22, 0), "Farm", {
                 arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
                 fallback = route.Fallback,
                 combatHover = true,
@@ -10573,29 +10383,29 @@ function SkipRouteController:Run()
 
     _G.State.FarmTarget = target
     _G.State.CurrentTarget = target
-
-    -- Activate only the naming/context side of ClusterFarmController so the
-    -- combat fan-out knows this is a SKIP cluster.  Its strict Tick()/proof
-    -- pipeline is intentionally NOT run for early skip anymore.
     ClusterFarmController:Activate("SKIP", route.Names, route.Fallback, "Farm")
 
-    local pinned, total, pileCF = 1, 1, CFrame.new(root.Position)
-    if SkipMagnetController and _G.Settings.GatherMobs ~= false then
-        pinned, total, pileCF = SkipMagnetController:Tick(route, target)
+    local pinned, total = 1, 1
+    if _G.Settings.GatherMobs ~= false then
+        local ok, a, b = pcall(function()
+            return self:DirectMagnet(route, target)
+        end)
+        if ok then
+            pinned, total = tonumber(a) or 1, tonumber(b) or 1
+        else
+            DLog("SKIP-MAGNET", "contained error: " .. tostring(a))
+        end
     end
 
-    local display = tostring(route.Display or targetName or route.Names[1])
+    local display = tostring(route.Display or targetName or (route.Names and route.Names[1]) or "Skip Mob")
     if total > 1 and pinned < total then
-        _G.BobonStatus = ("Skip: Magnetizing %s (%d/%d)"):format(display, pinned, total)
+        _G.BobonStatus = ("Skip: Magnetizing %s (%d/%d)"):format(display,pinned,total)
     else
-        _G.BobonStatus = ("Skip: Attacking pile %s (%d/%d)"):format(display, pinned, total)
+        _G.BobonStatus = ("Skip: Attacking pile %s (%d/%d)"):format(display,pinned,total)
     end
 
     PrepareCombatTarget(target)
 
-    -- Hover above the REAL primary.  Secondaries are continuously moved onto
-    -- this exact point by SkipMagnetController, matching the public-hub magnet
-    -- behavior without freezing the primary itself.
     local hoverHeight = tonumber(_G.Settings.FarmHeight) or 22
     local hoverCF = CFrame.new(root.Position) * CFrame.new(0, hoverHeight, 0)
     if _G.State:CanRequestTravel() then
@@ -10615,19 +10425,15 @@ function SkipRouteController:Run()
 
     local range = fastReady
         and (_G.Settings.FastAttackRange or _G.Settings.AttackRange or 100)
-        or math.max(_G.Settings.AttackRange or 20, 35)
-    local distance = (me.Position - targetPos).Magnitude
+        or math.max(_G.Settings.AttackRange or 20, 40)
+    local distance = (me.Position-targetPos).Magnitude
     local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
-    local canHit = distance <= range and farmHolds
-
-    if canHit then
+    if distance <= range and farmHolds then
         EquipCombatTool()
         Attack(target, route.Names[1])
     end
-
     return true
 end
-
 
 -- ══════════════════════════════════════════════════════════════════
 --          FIGHTING STYLE PROGRESSION v17 — FARM-COOPERATIVE
