@@ -1,4 +1,14 @@
 -- =================================================================
+--         BOBON HUB v22.17 TEDDY SEQUENCE REBASE | STABLE-ANCHOR ACQUIRE
+--         Deep rebase from v22.16 after side-by-side Roblox(22) vs Teddy reference.
+--  [TS17-1] Teddy sequence is now explicit: SCAN -> ACQUIRE -> REAL HP TAG -> SNAP -> VERIFY -> KILL.
+--  [TS17-2] The pile is FIXED at the farm-field anchor; it never follows the player during acquire.
+--  [TS17-3] Already stacked mobs stay pinned while Farm flies to the next unstacked mob.
+--  [TS17-4] A mob is not accepted into the pile merely because CFrame assignment returned; one-write persistence is verified.
+--  [TS17-5] While acquiring the next mob, fast attack stays live and verified pile members remain eligible for fanout.
+--  [TS17-6] Normal quest farm and early Skip Lv10-70 use the same Teddy sequence engine.
+-- =================================================================
+-- =================================================================
 --         BOBON HUB v22.16 | TEDDY HP-PROOF ACQUIRE STACK + UI ALIGN
 --         One Brain | Single Movement Owner | ActionToken | Combat-First Farm
 --         Base: v22.15 TEDDY HP-TAG STACK | Version: v22.16
@@ -1360,8 +1370,18 @@ _G.Settings = {
     SharedBringInterval  = 0.03,
     SharedFarmHeight     = 25,
     -- v22.14: moving Teddy air-sweep replaces the old fixed q.MC pile.
-    SharedTeddyMode      = false,
-    TeddyAirSweepMode    = true,
+    SharedTeddyMode      = true,
+    TeddyAirSweepMode    = false,
+    TeddySequenceMode    = true,
+    TeddySequenceAcquireHover = 12,
+    TeddySequenceAcquireRadius = 38,
+    TeddySequenceTagTimeout = 3.25,
+    TeddySequencePullTimeout = 1.20,
+    TeddySequenceStableDelay = 0.18,
+    TeddySequenceVerifyRadius = 13,
+    TeddySequenceRetryDelay = 0.28,
+    TeddySequencePileHover = 24,
+    TeddySequenceAttackRange = 120,
     TeddyAirHoverHeight  = 28,
     TeddyAirTagHoverHeight = 16,
     TeddyAirAcquireHeight = 4,
@@ -7620,6 +7640,14 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
     self.SharedTeddyLastScanAt = 0
     self.SharedTeddyActive = false
+    self.SharedTeddyPendingAt = setmetatable({}, {__mode="k"})
+    self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
+    self.SharedTeddyRetryAfter = setmetatable({}, {__mode="k"})
+    self.SharedTeddyAcquireModel = nil
+    self.SharedTeddyAcquireRoot = nil
+    self.SharedTeddyAcquireStartedAt = 0
+    self.SharedTeddyAcquireLastHealth = nil
+    self.SharedTeddyAcquireTaggedAt = 0
     self.SharedNextProbeWaveAt = 0
     self.SharedPrimaryWatchTarget = nil
     self.SharedPrimaryWatchHealth = nil
@@ -7787,6 +7815,12 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
+    -- v22.17 Teddy sequence:
+    --   * fixed field anchor
+    --   * whole-spawn snapshot
+    --   * ONLY HP-tagged + physically acquired roots are snapped
+    --   * one-write persistence verification before they become attack-eligible
+    --   * verified roots are then held at the same anchor on Heartbeat
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
     if not self.SharedTeddyActive or not self.SharedPileCFrame or not self.SharedMobName then
         return 0, 0
@@ -7796,23 +7830,37 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     end
 
     local folder = workspace:FindFirstChild("Enemies")
-    if not folder then return 0, 0 end
+    local me = HRP()
+    if not folder or not me then return 0, 0 end
 
     local now = tick()
     local anchor = self.SharedPileCFrame.Position
-    local maxDistance = math.max(100,
+    local maxDistance = math.max(150,
         tonumber(_G.Settings.SharedTeddyMaxDistance)
         or tonumber(_G.Settings.GatherMaxDistance) or 3000)
-    local scanEvery = math.max(0.015,
+    local scanEvery = math.max(0.02,
         tonumber(_G.Settings.SharedTeddyScanInterval) or 0.03)
+    local verifyRadius = math.max(6,
+        tonumber(_G.Settings.TeddySequenceVerifyRadius)
+        or tonumber(_G.Settings.SharedTeddyVerifyRadius) or 13)
+    local stableDelay = math.max(0.10,
+        tonumber(_G.Settings.TeddySequenceStableDelay) or 0.18)
+    local acquireRadius = math.max(16,
+        tonumber(_G.Settings.TeddySequenceAcquireRadius) or 38)
+    local pullTimeout = math.max(0.55,
+        tonumber(_G.Settings.TeddySequencePullTimeout) or 1.20)
+    local retryDelay = math.max(0.15,
+        tonumber(_G.Settings.TeddySequenceRetryDelay) or 0.28)
 
     pcall(function() ExpandSimulationRadius() end)
 
     self.SharedTeddyBatch = self.SharedTeddyBatch or {}
-    self.SharedTeddyVerified = self.SharedTeddyVerified
-        or setmetatable({}, {__mode="k"})
+    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
+    self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
+    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
+    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
 
-    -- TEDDY rule: snapshot the WHOLE active spawn before moving anything.
+    -- Snapshot the full active field before moving anything.
     if forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery then
         self.SharedTeddyLastScanAt = now
         local snapshot = {}
@@ -7829,6 +7877,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                             Model = mob,
                             Humanoid = hum,
                             Root = root,
+                            Position = pos,
                         }
                     end
                 end
@@ -7837,46 +7886,327 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         self.SharedTeddyBatch = snapshot
     end
 
-    -- One tight pass: every member goes to the exact SAME anchor.
-    local kept, moved = {}, 0
+    local kept, verifiedCount = {}, 0
+    local acquireModel = self.SharedTeddyAcquireModel
+    local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
+
+    local function singleSnap(root)
+        return pcall(function()
+            local rot = root.CFrame.Rotation
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = CFrame.new(anchor) * rot
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
     for _, entry in ipairs(self.SharedTeddyBatch) do
-        local mob = entry.Model
-        local hum = mob and mob:FindFirstChildOfClass("Humanoid")
-        local root = mob and mob:FindFirstChild("HumanoidRootPart")
+        local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent
             and not root.Anchored and IsEnemyNamed(mob, self.SharedMobName) then
-            local ok = pcall(function()
-                local rot = root.CFrame.Rotation
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-                root.CFrame = CFrame.new(anchor) * rot
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-            if ok then
-                self.SharedTeddyVerified[root] = now
-                kept[#kept + 1] = entry
-                moved = moved + 1
+
+            kept[#kept + 1] = entry
+            local okPos, pos = pcall(function() return root.Position end)
+            if okPos and IsValidPos(pos) then
+                local atAnchor = (pos - anchor).Magnitude <= verifyRadius
+                local verifiedAt = self.SharedTeddyVerified[root]
+                local pendingAt = self.SharedTeddyPendingAt[root]
+
+                if verifiedAt then
+                    -- Already accepted: keep it pinned. If the server yanks it far away,
+                    -- revoke it and reacquire instead of leaving a visual ghost in the pile.
+                    if (pos - anchor).Magnitude > verifyRadius * 3.0 then
+                        self.SharedTeddyVerified[root] = nil
+                        self.SharedTeddyPendingAt[root] = nil
+                        self.SharedTeddyQualified[root] = nil
+                        self.SharedTeddyRetryAfter[root] = now + retryDelay
+                    else
+                        singleSnap(root)
+                        self.SharedTeddyVerified[root] = now
+                        verifiedCount = verifiedCount + 1
+                    end
+
+                elseif pendingAt then
+                    -- IMPORTANT: do NOT rewrite during the persistence window.
+                    -- A real Teddy-style stack must survive server correction after one write.
+                    if atAnchor and now - pendingAt >= stableDelay then
+                        self.SharedTeddyVerified[root] = now
+                        self.SharedTeddyPendingAt[root] = nil
+                        verifiedCount = verifiedCount + 1
+                    elseif not atAnchor and now - pendingAt >= stableDelay then
+                        self.SharedTeddyPendingAt[root] = nil
+                        if now - pendingAt >= pullTimeout then
+                            self.SharedTeddyQualified[root] = nil
+                            self.SharedTeddyRetryAfter[root] = now + retryDelay
+                        end
+                    elseif now - pendingAt >= pullTimeout then
+                        self.SharedTeddyPendingAt[root] = nil
+                        self.SharedTeddyQualified[root] = nil
+                        self.SharedTeddyRetryAfter[root] = now + retryDelay
+                    end
+
+                else
+                    -- A fresh mob is allowed to move only after the acquire phase caused
+                    -- real HP loss AND Farm is physically close enough (or owns the root).
+                    local qualified = self.SharedTeddyQualified[root]
+                    local closeToPlayer = (pos - me.Position).Magnitude <= acquireRadius
+                    local owns = ClientOwnsMob(root)
+                    local isAcquire = acquireRoot == root
+                    if qualified and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
+                        and (owns == true or (isAcquire and closeToPlayer)) then
+                        if singleSnap(root) then
+                            self.SharedTeddyPendingAt[root] = now
+                        end
+                    end
+                end
             end
         end
     end
+
     self.SharedTeddyBatch = kept
-    self.SharedBringCount = moved
+    self.SharedBringCount = verifiedCount
     self.SharedClassicCurrentPile = anchor
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TEDDY-ALL %d/%d"):format(moved, #kept)
+        _G.BobonDiagnostics.Bring = ("TEDDY-SEQ %d/%d"):format(verifiedCount, #kept)
         _G.BobonDiagnostics.BringCandidates = #kept
-        _G.BobonDiagnostics.BringMoved = moved
-        _G.BobonDiagnostics.BringFailed = 0
-        _G.BobonDiagnostics.BringOwned = 0
-        _G.BobonDiagnostics.BringUnknown = 0
-        _G.BobonDiagnostics.BringServerOwned = 0
-        _G.BobonDiagnostics.BringHPProven = 0
-        _G.BobonDiagnostics.BringProbing = 0
+        _G.BobonDiagnostics.BringMoved = verifiedCount
+        _G.BobonDiagnostics.BringFailed = math.max(0, #kept - verifiedCount)
     end
-    return moved, #kept
+    return verifiedCount, #kept
 end
+
+function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
+    if _G.Settings.SharedSourceFarmMode == false then return false end
+    if type(mobName) ~= "string" or mobName == "" then return false end
+    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
+
+    local prefix = tostring(statusPrefix or "Farm")
+    self:SharedEnsurePile(mobName, nil, fallbackCF)
+    if not self.SharedPileCFrame then return false end
+    self.SharedTeddyActive = true
+
+    local verified, total = self:SharedTeddyRestack(true)
+    local batch = self.SharedTeddyBatch or {}
+    local me = HRP()
+    if not me then return true end
+
+    if total <= 0 then
+        self.SharedTeddyAcquireModel = nil
+        self.SharedTeddyAcquireRoot = nil
+        self.SharedTeddyAcquireLastHealth = nil
+        self.SharedTeddyAcquireStartedAt = 0
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        _G.State.FState = "SHARED_BRING_FARM"
+        _G.State.ActionText = "Waiting Mob • " .. mobName
+        if fallbackCF and _G.State:CanRequestTravel() then
+            local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
+            TravelManager:Request(baseCF * CFrame.new(0,
+                tonumber(_G.Settings.TeddySequencePileHover) or 24, 0), "Farm", {
+                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
+                fallback = fallbackCF,
+                combatHover = true,
+                persistent = false,
+                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+        _G.BobonStatus = prefix .. ": Teddy • waiting " .. mobName
+        return true
+    end
+
+    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
+    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
+    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
+
+    local now = tick()
+    local acquire = self.SharedTeddyAcquireModel
+    local acquireHum = acquire and acquire:FindFirstChildOfClass("Humanoid")
+    local acquireRoot = acquire and acquire:FindFirstChild("HumanoidRootPart")
+
+    local function isLiveEntry(model)
+        if not model or not model.Parent then return false end
+        local h = model:FindFirstChildOfClass("Humanoid")
+        local r = model:FindFirstChild("HumanoidRootPart")
+        return h and h.Health > 0 and r and r.Parent and IsEnemyNamed(model, mobName)
+    end
+
+    if not isLiveEntry(acquire) or (acquireRoot and self.SharedTeddyVerified[acquireRoot]) then
+        self.SharedTeddyAcquireModel = nil
+        self.SharedTeddyAcquireRoot = nil
+        self.SharedTeddyAcquireStartedAt = 0
+        self.SharedTeddyAcquireLastHealth = nil
+        self.SharedTeddyAcquireTaggedAt = 0
+        acquire, acquireHum, acquireRoot = nil, nil, nil
+    end
+
+    -- Pick one real, unstacked mob and keep it until it either joins the pile or dies.
+    if not acquire then
+        local best, bestDist = nil, math.huge
+        for _, entry in ipairs(batch) do
+            local root = entry.Root
+            if root and root.Parent and not self.SharedTeddyVerified[root]
+                and not self.SharedTeddyPendingAt[root]
+                and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) then
+                    local dist = (pos - me.Position).Magnitude
+                    if dist < bestDist then
+                        best, bestDist = entry.Model, dist
+                    end
+                end
+            end
+        end
+        if best then
+            acquire = best
+            acquireHum = best:FindFirstChildOfClass("Humanoid")
+            acquireRoot = best:FindFirstChild("HumanoidRootPart")
+            self.SharedTeddyAcquireModel = best
+            self.SharedTeddyAcquireRoot = acquireRoot
+            self.SharedTeddyAcquireStartedAt = now
+            self.SharedTeddyAcquireLastHealth = acquireHum and acquireHum.Health or nil
+            self.SharedTeddyAcquireTaggedAt = 0
+        end
+    end
+
+    -- While acquiring the next mob, keep the old pile fixed and continue fast damage.
+    if acquire and acquireHum and acquireHum.Health > 0 and acquireRoot and acquireRoot.Parent then
+        _G.State.FarmTarget = acquire
+        _G.State.CurrentTarget = acquire
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "SHARED_BRING_FARM"
+        _G.State.ActionText = "Acquire Mob • " .. mobName
+
+        local acquireHover = math.max(8, tonumber(_G.Settings.TeddySequenceAcquireHover) or 12)
+        local targetCF = acquireRoot.CFrame * CFrame.new(0, acquireHover, 0)
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(targetCF, "Farm", {
+                arrivalThreshold = math.max(5, tonumber(_G.Settings.TeddySequenceAcquireRadius) or 38),
+                fallback = fallbackCF or self.SharedPileCFrame,
+                combatHover = true,
+                persistent = true,
+                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+
+        me = HRP() or me
+        local dist = (me.Position - acquireRoot.Position).Magnitude
+        local attackRange = math.max(45,
+            tonumber(_G.Settings.TeddySequenceAttackRange)
+            or tonumber(_G.Settings.FastAttackRange) or 120)
+        local farmHolds = not _G.State.IsTraveling or _G.State.MovementOwner == "Farm"
+        local attempted = false
+        local taggedBefore = self.SharedTeddyQualified[acquireRoot] ~= nil
+
+        -- Phase TAG: hit THIS exact mob only until one real HP delta is seen.
+        -- After the tag succeeds, stop damaging it so fast attack cannot kill it
+        -- before the physical acquire/snap finishes.
+        if not taggedBefore and dist <= attackRange and farmHolds then
+            PrepareCombatTarget(acquire)
+            EquipCombatTool()
+            attempted = Attack(acquire, mobName)
+            if attempted then _G.State.FState = "SHARED_ATTACK" end
+        elseif taggedBefore and farmHolds then
+            -- Teddy reference keeps damage flowing while moving to the tagged mob.
+            -- Damage the already verified pile, NOT the tagged-but-unstacked victim.
+            local pilePrimary, pileBest = nil, math.huge
+            for _, entry in ipairs(batch) do
+                local r = entry.Root
+                if r and r.Parent and self.SharedTeddyVerified[r] then
+                    local dd = (r.Position - self.SharedPileCFrame.Position).Magnitude
+                    if dd < pileBest then
+                        pilePrimary, pileBest = entry.Model, dd
+                    end
+                end
+            end
+            if pilePrimary then
+                PrepareCombatTarget(pilePrimary)
+                EquipCombatTool()
+                attempted = Attack(pilePrimary, mobName)
+                if attempted then _G.State.FState = "SHARED_ATTACK" end
+            end
+        end
+
+        local lastHP = tonumber(self.SharedTeddyAcquireLastHealth)
+        local hp = acquireHum.Health
+        if lastHP and hp < lastHP - 0.01 then
+            self.SharedTeddyQualified[acquireRoot] = now
+            self.SharedTeddyAcquireTaggedAt = now
+        end
+        self.SharedTeddyAcquireLastHealth = hp
+
+        -- Once real HP loss has been observed, stay close for the ownership handoff.
+        -- SharedTeddyRestack performs ONE snap and then verifies persistence without rewriting.
+        local tagged = self.SharedTeddyQualified[acquireRoot] ~= nil
+        if tagged then
+            self:SharedTeddyRestack(false)
+        end
+
+        local tagTimeout = math.max(1.0, tonumber(_G.Settings.TeddySequenceTagTimeout) or 3.25)
+        if now - (tonumber(self.SharedTeddyAcquireStartedAt) or now) >= tagTimeout
+            and not tagged then
+            self.SharedTeddyRetryAfter[acquireRoot] =
+                now + math.max(0.15, tonumber(_G.Settings.TeddySequenceRetryDelay) or 0.28)
+            self.SharedTeddyAcquireModel = nil
+            self.SharedTeddyAcquireRoot = nil
+            self.SharedTeddyAcquireStartedAt = 0
+            self.SharedTeddyAcquireLastHealth = nil
+            self.SharedTeddyAcquireTaggedAt = 0
+        end
+
+        local phase = tagged and "STACK" or "TAG"
+        _G.BobonStatus = ("%s: Teddy • %s %s • pile %d/%d • hit %s")
+            :format(prefix, phase, mobName, verified, total,
+                attempted and "ACTIVE" or "PROBING")
+        return true
+    end
+
+    -- Every current mob is either verified or waiting for its one-write persistence check.
+    -- Park over the fixed pile and kill; new spawns automatically reopen ACQUIRE.
+    local primary, bestDist = nil, math.huge
+    for _, entry in ipairs(batch) do
+        local root = entry.Root
+        if root and root.Parent and self.SharedTeddyVerified[root] then
+            local d = (root.Position - self.SharedPileCFrame.Position).Magnitude
+            if d < bestDist then
+                primary, bestDist = entry.Model, d
+            end
+        end
+    end
+
+    if primary then
+        _G.State.FarmTarget = primary
+        _G.State.CurrentTarget = primary
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "SHARED_ATTACK"
+        _G.State.ActionText = "Attack Pile • " .. mobName
+
+        local pileHover = math.max(12, tonumber(_G.Settings.TeddySequencePileHover) or 24)
+        local hoverCF = self.SharedPileCFrame * CFrame.new(0, pileHover, 0)
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold = _G.Settings.FarmArrivalThreshold or 15,
+                fallback = fallbackCF or self.SharedPileCFrame,
+                combatHover = true,
+                persistent = true,
+                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+
+        PrepareCombatTarget(primary)
+        EquipCombatTool()
+        local attempted = Attack(primary, mobName)
+        _G.BobonStatus = ("%s: Teddy • KILL pile %d/%d • %s")
+            :format(prefix, verified, total, attempted and "ACTIVE" or "PROBING")
+        return true
+    end
+
+    _G.State.FState = "SHARED_BRING_FARM"
+    _G.BobonStatus = ("%s: Teddy • VERIFY pile %d/%d"):format(prefix, verified, total)
+    return true
+end
+
 
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
@@ -8422,6 +8752,9 @@ end
 
 function ClusterFarmController:SharedFarmTick(mobName, fallbackCF)
     if _G.Settings.SharedSourceFarmMode == false then return false end
+    if _G.Settings.TeddySequenceMode ~= false then
+        return self:TeddySequenceFarmTick(mobName, fallbackCF, "Farm")
+    end
     if _G.Settings.TeddyAirSweepMode ~= false then
         return self:TeddyAirFarmTick(mobName, fallbackCF, "Farm")
     end
@@ -10845,7 +11178,13 @@ function SkipRouteController:Run()
     _G.State:SetMode("Farming")
     _G.State.FState = "SKIP_FARM"
 
-    -- v22.14: early skip uses the exact same continuous Teddy air-sweep engine.
+    -- v22.17: early skip uses the exact same Teddy sequence engine as normal farm.
+    -- No separate magnet and no moving pile.
+    if _G.Settings.TeddySequenceMode ~= false then
+        local skipName = route.Names and route.Names[1] or tostring(route.Display)
+        _G.State.ActiveQuestMob = skipName
+        return ClusterFarmController:TeddySequenceFarmTick(skipName, route.Fallback, "Skip")
+    end
     if _G.Settings.TeddyAirSweepMode ~= false then
         local skipName = route.Names and route.Names[1] or tostring(route.Display)
         _G.State.ActiveQuestMob = skipName
