@@ -1,6 +1,25 @@
 -- =================================================================
---         BOBON HUB v22.22 MOVING TRIO + QUEST CHECKPOINTS
---         Base: v22.21 TRIO FOLLOW BRING
+--         BOBON HUB v22.22.2 MELEE + GACHA SELF-HEAL
+--         Base: v22.22.1 TRIO DEATH-SAFE + QUEST CONTINUITY
+--
+--  v22.22.2 ECONOMY FIXES:
+--  [E222-1] Economy lock and FruitManager busy flag self-heal if a prior protected call aborts.
+--  [E222-2] Fighting-style verification now accepts the intended currency decrease as real purchase proof,
+--           matching the existing serial economy lock instead of requiring the Tool to replicate instantly.
+--  [E222-3] V1 affordability gates kept at current costs: Dark Step 150k, Electric 500k, Water Kung Fu 750k.
+--  [E222-4] Random fruit success also verifies by real Beli decrease; nil/opaque Cousin responses no longer
+--           make a successful roll look like failure. Fruit busy state is released in a finally-style path.
+--  [E222-5] Foundational V1 melee gets first refusal only when its exact purchase threshold is already met;
+--           otherwise Gacha keeps first refusal, then melee is probed in the same economy cycle.
+--  [E222-6] Moving Trio, Quest Checkpoints and effect-only dodge are untouched.
+--
+--  v22.22.1 VIDEO-24 CONFIRMED FIXES:
+--  [R24-1] Death/respawn now hard-releases moving-trio state. Stale 3/3 roots may not
+--          survive into the spawn point or keep reporting KILL 3/3 while the player is dead.
+--  [R24-2] Trio restack/attack is forbidden while Humanoid.Health <= 0.
+--  [R24-3] Trio acquire hover raised to 24 studs so three melee quest mobs stay directly
+--          below the player without standing in ordinary NPC melee range.
+--  [R24-4] Existing moving-trio selection/follow logic is otherwise unchanged.
 --  [T22-1] Bring selects at most 3 live mobs whose canonical name matches the active quest/skip mob.
 --  [T22-2] HP loss is NOT a bring gate. Explicit ownership brings immediately; unknown ownership uses
 --          a one-shot proximity persistence proof against the original snap point.
@@ -1420,7 +1439,7 @@ _G.Settings = {
     TeddyTrioFollowLeash = 110,
     TeddyTrioGroundOffset = 0,
     TeddyTrioAcquireRadius = 55,
-    TeddyTrioAcquireHover = 10,
+    TeddyTrioAcquireHover = 24,
     TeddyTrioTagTimeout = 3.0,
     TeddyTrioPullTimeout = 1.80,
     TeddyTrioRetryDelay = 0.25,
@@ -2020,6 +2039,7 @@ _G.State = {
 -- could be mistaken for Gacha success merely because Beli dropped.
 _G.BobonEconomy = {
     Busy = false,
+    BusySince = 0,
     Owner = nil,
     Wake = true,
     MeleeBlockFruitUntil = 0,
@@ -2044,8 +2064,18 @@ function _G.BobonEconomy:PauseFarm(reason, duration)
 end
 
 function _G.BobonEconomy:TryBegin(owner)
-    if self.Busy then return false end
+    local now = tick()
+    if self.Busy then
+        -- A protected caller may have errored after acquiring the lock. Never let one
+        -- stale economy owner permanently disable both melee buying and fruit gacha.
+        if now - (tonumber(self.BusySince) or now) <= 6 then return false end
+        self.Busy = false
+        self.Owner = nil
+        self.BusySince = 0
+        self:Notice("ECONOMY • stale lock recovered", 2.0)
+    end
     self.Busy = true
+    self.BusySince = now
     self.Owner = tostring(owner or "ECONOMY")
     return true
 end
@@ -2053,6 +2083,7 @@ end
 function _G.BobonEconomy:End(owner)
     if owner == nil or self.Owner == tostring(owner) then
         self.Busy = false
+        self.BusySince = 0
         self.Owner = nil
         return true
     end
@@ -7854,6 +7885,9 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     -- We intentionally do NOT destroy Animator, PlatformStand, or ChangeState here.
     -- Those older tricks made "statue/ghost" mobs in earlier Bobon builds.
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
+    -- Video 24: HRP can survive briefly after Humanoid reaches 0 HP. Never keep
+    -- rewriting a trio around a dead character; CharacterRemoving will clear the lease.
+    if not IsAlive() then return 0, 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
         return 0, 0
     end
@@ -8119,6 +8153,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     if _G.Settings.SharedSourceFarmMode == false then return false end
     if type(mobName) ~= "string" or mobName == "" then return false end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
+    if not IsAlive() then return true end
 
     local prefix = tostring(statusPrefix or "Farm")
     if self.SharedMobName and string.lower(tostring(self.SharedMobName)) ~= string.lower(mobName) then
@@ -8239,7 +8274,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
             _G.State.FState = "SHARED_BRING_FARM"
             _G.State.ActionText = "Acquire Trio • " .. mobName
 
-            local acquireHover = math.max(6, tonumber(_G.Settings.TeddyTrioAcquireHover) or 10)
+            local acquireHover = math.max(18, tonumber(_G.Settings.TeddyTrioAcquireHover) or 24)
             local acquireRadius = math.max(20, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 55)
             local attackRange = math.max(50,
                 tonumber(_G.Settings.TeddyTrioAttackRange)
@@ -10134,6 +10169,13 @@ LP.CharacterRemoving:Connect(function()
     BindPlayerDamage(nil, nil)
     HakiController:Reset()
     CombatController:Cleanup()
+    -- Video 24: SharedTeddyVerified survived character death and produced a stale
+    -- KILL 3/3 at the respawn point. Release its physical/verification state first.
+    pcall(function()
+        if ClusterFarmController and ClusterFarmController.SharedRelease then
+            ClusterFarmController:SharedRelease("CharacterRemoving")
+        end
+    end)
     FarmPositionController:ReleaseCluster()
     TravelManager:Stop("CharacterRemoving")
     _G.State:SetMode("Dead")
@@ -10154,6 +10196,13 @@ LP.CharacterAdded:Connect(function(char)
         local hum = char:WaitForChild("Humanoid", 10)
         if not hrp or not hum then return end
 
+        -- A new character must rebuild the trio from real live quest mobs. Do not
+        -- inherit any weak-table/ownership proof from the character that just died.
+        pcall(function()
+            if ClusterFarmController and ClusterFarmController.SharedRelease then
+                ClusterFarmController:SharedRelease("RespawnReset")
+            end
+        end)
 
         pcall(function() LP:WaitForChild("Data", 10) end)
 
@@ -11522,6 +11571,16 @@ function FightingStyleController:VerifyPurchase(value, beforeBeli, beforeFragmen
         WeaponInventoryCache.At = 0
         local owned, ownedName = self:ActualOwned(value, false)
         if owned then return true, ownedName end
+
+        -- Economy transactions are serialized. If the exact buy call just made the
+        -- required currency drop, that is stronger evidence than waiting for Backpack
+        -- replication, which can lag behind the RemoteFunction response.
+        if beforeBeli ~= nil and Beli() < beforeBeli then
+            return true, ownedName or (type(value) == "table" and value[1] or value)
+        end
+        if beforeFragments ~= nil and Fragments() < beforeFragments then
+            return true, ownedName or (type(value) == "table" and value[1] or value)
+        end
         task.wait(0.10)
     until tick() >= deadline or not SessionAlive() or not IsAlive()
     return false, nil
@@ -15082,6 +15141,7 @@ end
 local FruitManager = {
     LastStore = 0,
     Busy = false,
+    BusySince = 0,
     NextRollAt = 0,
     LastAttemptAt = 0,
     LastSuccessAt = 0,
@@ -15269,13 +15329,22 @@ function FruitManager:LooksLikeSuccessResult(result)
 end
 
 function FruitManager:TryRandomFruit(forceWake)
-    if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or self.Busy or not IsAlive() then return false end
+    if not _G.Settings.GetFruits or not _G.Settings.FruitEnabled or not IsAlive() then return false end
+
+    local now = tick()
+    if self.Busy then
+        -- One unexpected error inside a previous gacha attempt must not leave the
+        -- manager Busy forever. A live attempt normally finishes well below 3 seconds.
+        if now - (tonumber(self.BusySince) or now) <= 3 then return false end
+        self.Busy = false
+        self.BusySince = 0
+        self.LastResult = "recovered-stale-busy"
+    end
     if Level() < (_G.Settings.RandomFruitMinLevel or 50) then
         self.LastResult = "level<50"
         return false
     end
 
-    local now = tick()
     local confirmedCooldownUntil = (self.LastSuccessAt or 0) + (_G.Settings.RandomFruitSuccessCooldown or 7200)
     if (self.LastSuccessAt or 0) > 0 and now < confirmedCooldownUntil then return false end
     if now - (self.LastAttemptAt or 0) < (_G.Settings.RandomFruitAttemptMinGap or 0.75) then return false end
@@ -15283,79 +15352,100 @@ function FruitManager:TryRandomFruit(forceWake)
     if forceWake and now < (self.SuppressMoneyWakeUntil or 0) then return false end
 
     self.Busy = true
+    self.BusySince = now
     self.LastAttemptAt = now
     _G.State.LastRandomFruit = now
 
-    -- No NPC travel: current public implementations invoke Cousin/Buy directly.
-    -- Verify by server-observable state, not merely by pcall returning successfully.
-    local beforeBeli = Beli()
-    local beforeFruitCount = self:CountPhysicalFruits()
-    local beforeStoredCount = self:CountStoredFruits()
-    _G.BobonEconomy.LastGachaAttempt = now
-    _G.BobonEconomy:Notice("GACHA → request", 2.0)
-    local ok, result = pcall(function()
-        return CommF_:InvokeServer("Cousin", "Buy")
-    end)
-    _G.BobonEconomy:Notice("GACHA • result=" .. tostring(result), 2.5)
+    local confirmed = false
+    local runOk, runErr = xpcall(function()
+        -- Current public implementations still use Cousin/Buy directly. The return
+        -- value can be nil/opaque, so verify from server-observable currency/inventory.
+        local beforeBeli = Beli()
+        local beforeFruitCount = self:CountPhysicalFruits()
+        local beforeStoredCount = self:CountStoredFruits()
+        _G.BobonEconomy.LastGachaAttempt = now
+        _G.BobonEconomy:Notice("GACHA → request", 2.0)
 
-    if not ok then
-        self.LastResult = "invoke-error:" .. tostring(result)
-        self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 5)
-        DLog("FRUIT", "Gacha invoke failed: " .. tostring(result))
-        self.Busy = false
-        return false
-    end
+        local invokeOk, result = pcall(function()
+            return CommF_:InvokeServer("Cousin", "Buy")
+        end)
+        _G.BobonEconomy:Notice("GACHA • result=" .. tostring(result), 2.5)
 
-    local confirmed = self:LooksLikeSuccessResult(result)
-    local knownCooldown = self:LooksLikeCooldownResult(result)
-    local knownUnavailable = self:LooksLikeUnavailableResult(result)
-    if not confirmed and not knownCooldown and not knownUnavailable then
-        local deadline = tick() + (_G.Settings.RandomFruitResultWait or 1.50)
-        repeat
-            task.wait(0.12)
-            local physicalNow = self:CountPhysicalFruits()
-            if physicalNow > beforeFruitCount then
-                confirmed = true
-                break
-            end
-            if beforeStoredCount ~= nil then
-                local storedNow = self:CountStoredFruits()
-                if storedNow ~= nil and storedNow > beforeStoredCount then
+        if not invokeOk then
+            self.LastResult = "invoke-error:" .. tostring(result)
+            self.NextRollAt = tick() + (_G.Settings.RandomFruitInterval or 5)
+            DLog("FRUIT", "Gacha invoke failed: " .. tostring(result))
+            return
+        end
+
+        local knownCooldown = self:LooksLikeCooldownResult(result)
+        local knownUnavailable = self:LooksLikeUnavailableResult(result)
+        confirmed = self:LooksLikeSuccessResult(result) or Beli() < beforeBeli
+
+        if not confirmed and not knownCooldown and not knownUnavailable then
+            local deadline = tick() + (_G.Settings.RandomFruitResultWait or 1.50)
+            repeat
+                task.wait(0.12)
+                if Beli() < beforeBeli then
                     confirmed = true
                     break
                 end
-            end
-        until tick() >= deadline or not SessionAlive()
-    end
-
-    if confirmed then
-        self.LastSuccessAt = tick()
-        self.LastResult = "rolled"
-        _G.State.LastRandomFruit = self.LastSuccessAt
-        self.NextRollAt = self.LastSuccessAt + (_G.Settings.RandomFruitSuccessCooldown or 7200)
-        self.SuppressMoneyWakeUntil = self.NextRollAt
-        _G.BobonEconomy:Notice("GACHA ✓ rolled", 4.0)
-        DLog("FRUIT", "Random fruit VERIFIED from anywhere")
-        task.wait(0.20)
-        pcall(function() self:StoreBackpackFruits(true) end)
-    else
-        self.LastResult = "server-rejected:" .. tostring(result)
-        local delay = _G.Settings.RandomFruitUnknownRetry or 4
-        if knownCooldown then
-            delay = math.max(delay, _G.Settings.RandomFruitCooldownRejectDelay or 30)
-            self.SuppressMoneyWakeUntil = tick() + delay
-        elseif knownUnavailable then
-            delay = math.max(delay, _G.Settings.RandomFruitRejectRetry or 12)
-            self.SuppressMoneyWakeUntil = 0
-        else
-            self.SuppressMoneyWakeUntil = 0
+                local physicalNow = self:CountPhysicalFruits()
+                if physicalNow > beforeFruitCount then
+                    confirmed = true
+                    break
+                end
+                if beforeStoredCount ~= nil then
+                    local storedNow = self:CountStoredFruits()
+                    if storedNow ~= nil and storedNow > beforeStoredCount then
+                        confirmed = true
+                        break
+                    end
+                end
+            until tick() >= deadline or not SessionAlive()
         end
-        self.NextRollAt = tick() + delay
-        _G.BobonEconomy:Notice("GACHA ↻ " .. tostring(result), 3.0)
-        DLog("FRUIT", "Gacha not verified; result=" .. tostring(result) .. " retry=" .. tostring(delay))
-    end
 
+        if confirmed then
+            self.LastSuccessAt = tick()
+            self.LastResult = "rolled"
+            _G.State.LastRandomFruit = self.LastSuccessAt
+            self.NextRollAt = self.LastSuccessAt + (_G.Settings.RandomFruitSuccessCooldown or 7200)
+            self.SuppressMoneyWakeUntil = self.NextRollAt
+            _G.BobonEconomy:Notice("GACHA ✓ rolled", 4.0)
+            DLog("FRUIT", "Random fruit VERIFIED from Cousin/Buy")
+            task.wait(0.20)
+            pcall(function() self:StoreBackpackFruits(true) end)
+        else
+            self.LastResult = "server-rejected:" .. tostring(result)
+            local delay = _G.Settings.RandomFruitUnknownRetry or 4
+            if knownCooldown then
+                delay = math.max(delay, _G.Settings.RandomFruitCooldownRejectDelay or 30)
+                self.SuppressMoneyWakeUntil = tick() + delay
+            elseif knownUnavailable then
+                delay = math.max(delay, _G.Settings.RandomFruitRejectRetry or 12)
+                self.SuppressMoneyWakeUntil = 0
+            else
+                self.SuppressMoneyWakeUntil = 0
+            end
+            self.NextRollAt = tick() + delay
+            _G.BobonEconomy:Notice("GACHA ↻ " .. tostring(result), 3.0)
+            DLog("FRUIT", "Gacha not verified; result=" .. tostring(result) .. " retry=" .. tostring(delay))
+        end
+    end, function(err)
+        return tostring(err)
+    end)
+
+    -- Finally-style release: even an unexpected helper/UI/inventory error cannot
+    -- permanently disable future random-fruit attempts.
     self.Busy = false
+    self.BusySince = 0
+    if not runOk then
+        self.LastResult = "worker-error:" .. tostring(runErr)
+        self.NextRollAt = tick() + 2
+        _G.BobonEconomy:Notice("GACHA ERROR • " .. tostring(runErr), 4.0)
+        DLog("FRUIT", self.LastResult)
+        return false
+    end
     return confirmed
 end
 
@@ -15430,34 +15520,73 @@ pcall(function()
     end
 end)
 
--- v21.33 SINGLE ECONOMY WORKER — GACHA FIRST, then ALL MELEE.
--- One serial worker remains, so Beli transactions cannot race each other.
--- Gacha always gets first refusal when its client cooldown allows an attempt.
--- After success OR rejection, the worker re-reads balance and immediately probes melee.
+-- v22.22.2 SINGLE ECONOMY WORKER — CORE MELEE MILESTONE + GACHA
+-- Foundational V1 styles are purchased first only when their exact threshold is already met.
+-- Otherwise Gacha retains first refusal, and melee is always probed in the same cycle.
 task.spawn(function()
-    while SessionAlive() and task.wait(_G.Settings.EconomyTick or 0.25) do
-        if not IsAlive() then continue end
+    while SessionAlive() do
+        task.wait(_G.Settings.EconomyTick or 0.25)
+        local cycleOk, cycleErr = pcall(function()
+            if not IsAlive() then return end
 
-        if _G.Settings.GetFruits and _G.Settings.FruitEnabled
-            and _G.BobonEconomy:TryBegin("GACHA") then
-            local okGacha, rolled = pcall(function()
-                FruitManager:StoreBackpackFruits()
-                return FruitManager:TryRandomFruit(_G.BobonEconomy.Wake == true)
-            end)
-            _G.BobonEconomy:End("GACHA")
-            if not okGacha then
-                _G.BobonEconomy:Notice("GACHA ERROR • " .. tostring(rolled), 4.0)
+            -- Recover a stale cross-feature economy lock before deciding priority.
+            if _G.BobonEconomy.Busy
+                and tick() - (tonumber(_G.BobonEconomy.BusySince) or tick()) > 6 then
+                _G.BobonEconomy:End(nil)
+                _G.BobonEconomy:Notice("ECONOMY • stale lock recovered", 2.0)
             end
-        end
-        _G.BobonEconomy.Wake = false
 
-        if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee
-            and _G.BobonEconomy:TryBegin("MELEE") then
-            local okMelee, bought = pcall(function() return FightingStyleController:PurchaseTick() end)
-            _G.BobonEconomy:End("MELEE")
-            if not okMelee then
-                _G.BobonEconomy:Notice("MELEE ERROR • " .. tostring(bought), 4.0)
+            local beliNow = Beli()
+            local coreMeleeReady = false
+            if _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee then
+                coreMeleeReady = (not FightingStyleController:ActualOwned({"Dark Step","Black Leg"}, false) and beliNow >= 150000)
+                    or (not FightingStyleController:ActualOwned({"Electric","Electro"}, false) and beliNow >= 500000)
+                    or (not FightingStyleController:ActualOwned({"Water Kung Fu","Fishman Karate"}, false) and beliNow >= 750000)
             end
+
+            if coreMeleeReady and _G.BobonEconomy:TryBegin("MELEE") then
+                local okMelee, bought = pcall(function() return FightingStyleController:PurchaseTick() end)
+                _G.BobonEconomy:End("MELEE")
+                if not okMelee then
+                    _G.BobonEconomy:Notice("MELEE ERROR • " .. tostring(bought), 4.0)
+                end
+
+                -- Re-check after the purchase attempt. If a foundational style is still
+                -- immediately affordable, do not let Gacha spend that exact milestone
+                -- before the next retry can claim it.
+                beliNow = Beli()
+                coreMeleeReady = (not FightingStyleController:ActualOwned({"Dark Step","Black Leg"}, false) and beliNow >= 150000)
+                    or (not FightingStyleController:ActualOwned({"Electric","Electro"}, false) and beliNow >= 500000)
+                    or (not FightingStyleController:ActualOwned({"Water Kung Fu","Fishman Karate"}, false) and beliNow >= 750000)
+            end
+
+            if not coreMeleeReady and _G.Settings.GetFruits and _G.Settings.FruitEnabled
+                and _G.BobonEconomy:TryBegin("GACHA") then
+                local okGacha, rolled = pcall(function()
+                    FruitManager:StoreBackpackFruits()
+                    return FruitManager:TryRandomFruit(_G.BobonEconomy.Wake == true)
+                end)
+                _G.BobonEconomy:End("GACHA")
+                if not okGacha then
+                    _G.BobonEconomy:Notice("GACHA ERROR • " .. tostring(rolled), 4.0)
+                end
+            end
+            _G.BobonEconomy.Wake = false
+
+            if not coreMeleeReady and _G.Settings.AutoFightingStyles and _G.Settings.AutoBuyMelee
+                and _G.BobonEconomy:TryBegin("MELEE") then
+                local okMelee, bought = pcall(function() return FightingStyleController:PurchaseTick() end)
+                _G.BobonEconomy:End("MELEE")
+                if not okMelee then
+                    _G.BobonEconomy:Notice("MELEE ERROR • " .. tostring(bought), 4.0)
+                end
+            end
+        end)
+
+        if not cycleOk then
+            _G.BobonEconomy:End(nil)
+            _G.BobonEconomy:Notice("ECONOMY ERROR • " .. tostring(cycleErr), 4.0)
+            DLog("ECON", tostring(cycleErr))
         end
     end
 end)
