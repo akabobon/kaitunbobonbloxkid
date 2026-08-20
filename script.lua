@@ -1,3 +1,8 @@
+-- v22.29.2 REAL BRING + DAMAGE FIX
+-- VIDEO EVIDENCE: Gladiator quest remained 6/8 for ~29s and Beli stayed static.
+-- FIX: never veto BodyMover solely from ClientOwnsMob(false) on REAL; prove by physical persistence.
+-- FIX: attack starts with kaiv2 0.125 + FULL hit-list and rotates only after real zero-HP-delta proof.
+-- FIX: adaptive CombatController fallback is used if direct public packet shapes still produce zero damage.
 -- BOBON HUB v22.29.1 | KAIV2 FULL PROGRESSION + REAL BODY-MOVER + SAFE HOPLOW
 -- Rebuilt from v22.28.8. kaiv2 is used as the progression reference, not as a second runtime loop.
 -- FARM: one fixed quest-mob pile using BodyPosition/BodyGyro/BodyVelocity + ownership request.
@@ -1757,17 +1762,17 @@ _G.Settings = {
     ReferenceVideoHoverHeight = 20,
     ReferenceVideoSideOffset = 7,
     ReferenceVideoBringTrigger = 75,
-    ReferenceVideoBringRadius = 350,
+    ReferenceVideoBringRadius = 500,
     ReferenceVideoTargetRange = 85,
-    ReferenceVideoAttackRange = 100,
-    ReferenceVideoAttackInterval = 0.03,
+    ReferenceVideoAttackRange = 120,
+    ReferenceVideoAttackInterval = 0.14,
     ReferenceVideoMaxTargets = 32,
     -- v22.27: never manufacture visual-only/immortal mobs.
     ReferenceVideoOwnerSafeBring = true,
     ReferenceVideoGhostReleaseDistance = 16,
     ReferenceVideoFanoutMaxTargets = 12,
     ReferenceVideoFanoutGap = 0.018,
-    ReferenceVideoAttackInterval = 0.075,
+    ReferenceVideoAttackInterval = 0.14,
     TeddyAllMobProbeInterval = 0.10,
     TeddyAllMobProbeTimeout = 2.40,
     TeddyAllMobProbeMinAttempts = 2,
@@ -8663,6 +8668,7 @@ end
 
 function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     if _G.Settings.GatherMobs == false then return 0, 0, 0, 0 end
+
     local me = HRP()
     local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
     local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
@@ -8671,7 +8677,7 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
         return 0, 0, 0, 0
     end
 
-    local trigger = math.max(10, tonumber(_G.Settings.ReferenceVideoBringTrigger) or 50)
+    local trigger = math.max(25, tonumber(_G.Settings.ReferenceVideoBringTrigger) or 90)
     if (me.Position - primaryRoot.Position).Magnitude > trigger then
         return 0, 0, 0, 0
     end
@@ -8679,61 +8685,61 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     pcall(function() ExpandSimulationRadius() end)
 
     self.ReferenceVideoPulled = self.ReferenceVideoPulled or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
     self.ReferenceVideoOriginalCF = self.ReferenceVideoOriginalCF or setmetatable({}, {__mode="k"})
     self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
     self.ReferenceVideoMoveState = self.ReferenceVideoMoveState or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
 
-    local radius = math.max(trigger, tonumber(_G.Settings.ReferenceVideoBringRadius) or 200)
+    -- Large enough for the whole active quest field, but still bounded to the same mob name.
+    local radius = math.max(500, tonumber(_G.Settings.ReferenceVideoBringRadius) or 500)
     local entries = self:ReferenceVideoCollect(mobName, primaryRoot.Position, radius)
     local pilePos = primaryRoot.Position
-    local moved, confirmed, blocked = 1, 1, 0
     local now = tick()
-    local restoreQuarantine = math.max(0.20, tonumber(_G.Settings.ReferenceVideoRestoreQuarantine) or 0.45)
-    local settleDistance = 7
-    local hardReleaseDistance = radius + 150
+    local moved, confirmed, blocked = 1, 1, 0
+    local settleDistance = 10
+    local attackPileDistance = 24
+    local hardReleaseDistance = radius + 200
 
     local function destroyMover(root)
         if not root then return end
         pcall(function()
-            local bp = root:FindFirstChild("BobonBringBP") or root:FindFirstChild("BringBP")
-            if bp then bp:Destroy() end
-            local bg = root:FindFirstChild("BobonBringBG") or root:FindFirstChild("BringBG")
-            if bg then bg:Destroy() end
-            local bv = root:FindFirstChild("BobonBringBV") or root:FindFirstChild("FarmingVelocity")
-            if bv then bv:Destroy() end
-        end)
-    end
-
-    local function noCollide(model)
-        pcall(function()
-            for _, part in ipairs(model:GetDescendants()) do
-                if part:IsA("BasePart") then part.CanCollide = false end
+            for _, name in ipairs({"BobonBringBP", "BobonBringBG", "BobonBringBV", "BringBP", "BringBG", "FarmingVelocity"}) do
+                local obj = root:FindFirstChild(name)
+                if obj then obj:Destroy() end
             end
         end)
     end
 
     local function requestOwnership(root)
+        -- Match the old working source more closely: read executor globals directly.
         pcall(function()
-            local env = (type(getgenv) == "function" and getgenv()) or _G
-            local synTable = type(rawget(env, "syn")) == "table" and rawget(env, "syn") or nil
-            local requestFn = (synTable and synTable.request_network_ownership)
-                or rawget(env, "requestnetworkownership")
-                or rawget(env, "request_network_ownership")
-            local setFn = (synTable and synTable.set_network_ownership)
-                or rawget(env, "setnetworkownership")
-                or rawget(env, "set_network_ownership")
+            local synObj = type(syn) == "table" and syn or nil
+            local requestFn = (synObj and synObj.request_network_ownership)
+                or requestnetworkownership or request_network_ownership
+            local setFn = (synObj and synObj.set_network_ownership)
+                or setnetworkownership or set_network_ownership
             if type(requestFn) == "function" then requestFn(root) end
             if type(setFn) == "function" then setFn(root, LP) end
         end)
     end
 
-    -- Cleanup movers left by dead/despawned/out-of-field mobs.
+    local function prepareMob(model, root)
+        pcall(function()
+            if root.Anchored then root.Anchored = false end
+            for _, part in ipairs(model:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = false end
+            end
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    -- Cleanup stale movers without using ownership API as an authority signal.
     for root, state in pairs(self.ReferenceVideoMoveState) do
         local model = root and root.Parent
         local hum = model and model:FindFirstChildOfClass("Humanoid")
-        local invalid = not root or not root.Parent or not model or not IsEnemyNamed(model, mobName)
-            or not hum or hum.Health <= 0
+        local invalid = not root or not root.Parent or not model
+            or not IsEnemyNamed(model, mobName) or not hum or hum.Health <= 0
         if not invalid then
             local okPos, pos = pcall(function() return root.Position end)
             invalid = (not okPos) or (pos - pilePos).Magnitude > hardReleaseDistance
@@ -8747,14 +8753,14 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
         end
     end
 
-    -- Primary is the real server anchor. Every secondary is pulled to THIS SAME point.
-    noCollide(primary)
+    -- The primary remains the real server anchor; all secondaries are pulled to exactly its point.
+    prepareMob(primary, primaryRoot)
+    destroyMover(primaryRoot)
 
     for _, entry in ipairs(entries) do
-        local mob, root = entry.Model, entry.Root
-        if mob and mob.Parent and root and root.Parent and mob ~= primary then
-            local ignored = (self.ReferenceVideoIgnoreUntil[root] or 0) > now
-            if ignored then
+        local mob, root, hum = entry.Model, entry.Root, entry.Humanoid
+        if mob and mob.Parent and root and root.Parent and hum and hum.Health > 0 and mob ~= primary then
+            if (self.ReferenceVideoIgnoreUntil[root] or 0) > now then
                 blocked = blocked + 1
             else
                 if not self.ReferenceVideoOriginalCF[root] then
@@ -8763,122 +8769,100 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
                 end
 
                 requestOwnership(root)
-                noCollide(mob)
+                prepareMob(mob, root)
 
-                local owner = ClientOwnsMob(root)
                 local state = self.ReferenceVideoMoveState[root]
                 if type(state) ~= "table" then
                     state = {
                         StartedAt = now,
-                        LastMoveAt = now,
                         LastPos = root.Position,
+                        LastMoveAt = now,
+                        NearSince = nil,
                         Confirmed = false,
                         FailSince = 0,
                     }
                     self.ReferenceVideoMoveState[root] = state
                 end
 
-                -- Explicit owner=false is unsafe. Unknown ownership on Real is allowed to
-                -- PROBE via BodyPosition, but it must physically persist at the pile first.
-                if owner == false then
+                -- IMPORTANT REAL FIX: do NOT reject owner==false here.
+                -- Real's isnetworkowner answer is not reliable enough after an ownership request.
+                local okMover = pcall(function()
+                    local bv = root:FindFirstChild("BobonBringBV")
+                    if not bv then
+                        bv = Instance.new("BodyVelocity")
+                        bv.Name = "BobonBringBV"
+                        bv.Parent = root
+                    end
+                    bv.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+                    bv.P = 50000
+                    bv.Velocity = Vector3.zero
+
+                    local bp = root:FindFirstChild("BobonBringBP")
+                    if not bp then
+                        bp = Instance.new("BodyPosition")
+                        bp.Name = "BobonBringBP"
+                        bp.Parent = root
+                    end
+                    bp.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+                    bp.P = 500000
+                    bp.D = 5000
+                    bp.Position = pilePos
+
+                    local bg = root:FindFirstChild("BobonBringBG")
+                    if not bg then
+                        bg = Instance.new("BodyGyro")
+                        bg.Name = "BobonBringBG"
+                        bg.Parent = root
+                    end
+                    bg.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+                    bg.P = 10000
+                    bg.D = 1000
+                    bg.CFrame = primaryRoot.CFrame
+                end)
+
+                if not okMover then
                     destroyMover(root)
-                    self.ReferenceVideoPulled[root] = nil
-                    self.ReferenceVideoGhostBlocked[root] = true
-                    self.ReferenceVideoIgnoreUntil[root] = now + restoreQuarantine
-                    state.Confirmed = false
-                    state.FailSince = now
                     blocked = blocked + 1
                 else
-                    local okMover = pcall(function()
-                        if root.Anchored then root.Anchored = false end
+                    local pos = root.Position
+                    local dist = (pos - pilePos).Magnitude
+                    local delta = state.LastPos and (pos - state.LastPos).Magnitude or math.huge
 
-                        local bv = root:FindFirstChild("BobonBringBV")
-                        if not bv then
-                            bv = Instance.new("BodyVelocity")
-                            bv.Name = "BobonBringBV"
-                            bv.Parent = root
-                        end
-                        bv.MaxForce = Vector3.new(1e7, 1e7, 1e7)
-                        bv.P = 10000
-                        bv.Velocity = Vector3.zero
+                    if delta >= 0.5 then
+                        state.LastMoveAt = now
+                        state.LastPos = pos
+                        state.FailSince = 0
+                    elseif dist > attackPileDistance then
+                        state.FailSince = state.FailSince ~= 0 and state.FailSince or now
+                    else
+                        state.FailSince = 0
+                    end
 
-                        local bp = root:FindFirstChild("BobonBringBP")
-                        if not bp then
-                            bp = Instance.new("BodyPosition")
-                            bp.Name = "BobonBringBP"
-                            bp.Parent = root
-                        end
-                        bp.MaxForce = Vector3.new(1e7, 1e7, 1e7)
-                        bp.P = 500000
-                        bp.D = 5000
-                        bp.Position = pilePos
-
-                        local bg = root:FindFirstChild("BobonBringBG")
-                        if not bg then
-                            bg = Instance.new("BodyGyro")
-                            bg.Name = "BobonBringBG"
-                            bg.Parent = root
-                        end
-                        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
-                        bg.P = 10000
-                        bg.D = 1000
-                        bg.CFrame = CFrame.new(pilePos)
-
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                    end)
-
-                    if okMover then
-                        local pos = root.Position
-                        local dist = (pos - pilePos).Magnitude
-                        local delta = state.LastPos and (pos - state.LastPos).Magnitude or math.huge
-
-                        if delta >= 0.75 then
-                            state.LastMoveAt = now
-                            state.LastPos = pos
-                            state.FailSince = 0
-                        elseif dist > settleDistance then
-                            state.FailSince = state.FailSince ~= 0 and state.FailSince or now
-                        else
-                            state.FailSince = 0
-                        end
-
-                        -- Real may not expose isnetworkowner. Persistence at the pile for a short
-                        -- window is the fallback proof that this is not a client-only ghost pull.
-                        if dist <= settleDistance then
-                            state.NearSince = state.NearSince or now
-                            if owner == true or now - state.NearSince >= 0.18 then
-                                state.Confirmed = true
-                                self.ReferenceVideoPulled[root] = now
-                                self.ReferenceVideoGhostBlocked[root] = nil
-                                confirmed = confirmed + 1
-                            end
-                        else
-                            state.NearSince = nil
-                        end
-
-                        -- If the BodyPosition cannot move the mob for >1.35s while still far
-                        -- from the pile, server ownership won. Remove the mover and quarantine.
-                        if state.FailSince ~= 0 and now - state.FailSince > 1.35 then
-                            destroyMover(root)
-                            local restoreCF = self.ReferenceVideoOriginalCF[root]
-                            pcall(function()
-                                if restoreCF and owner ~= true then root.CFrame = restoreCF end
-                                root.AssemblyLinearVelocity = Vector3.zero
-                                root.AssemblyAngularVelocity = Vector3.zero
-                            end)
-                            state.Confirmed = false
-                            state.FailSince = 0
-                            state.NearSince = nil
-                            self.ReferenceVideoPulled[root] = nil
-                            self.ReferenceVideoGhostBlocked[root] = true
-                            self.ReferenceVideoIgnoreUntil[root] = now + restoreQuarantine
-                            blocked = blocked + 1
-                        else
-                            moved = moved + 1
+                    if dist <= settleDistance then
+                        state.NearSince = state.NearSince or now
+                        -- Physical persistence is the proof.  No executor ownership answer is required.
+                        if now - state.NearSince >= 0.10 then
+                            state.Confirmed = true
+                            self.ReferenceVideoPulled[root] = now
+                            self.ReferenceVideoGhostBlocked[root] = nil
+                            confirmed = confirmed + 1
                         end
                     else
+                        state.NearSince = nil
+                    end
+
+                    moved = moved + 1
+
+                    -- If the server completely refuses the physics pull, clean it instead of
+                    -- leaving an immortal local statue. Retry later after a short quarantine.
+                    if state.FailSince ~= 0 and now - state.FailSince > 2.0 then
                         destroyMover(root)
+                        state.Confirmed = false
+                        state.FailSince = 0
+                        state.NearSince = nil
+                        self.ReferenceVideoPulled[root] = nil
+                        self.ReferenceVideoGhostBlocked[root] = true
+                        self.ReferenceVideoIgnoreUntil[root] = now + 0.60
                         blocked = blocked + 1
                     end
                 end
@@ -8888,7 +8872,7 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
 
     self.SharedBringCount = confirmed
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "REAL-BODYPOSITION-PILE"
+        _G.BobonDiagnostics.Bring = "REAL-PHYSICS-PERSIST-PILE"
         _G.BobonDiagnostics.BringCandidates = #entries
         _G.BobonDiagnostics.BringOwned = confirmed
         _G.BobonDiagnostics.BringMoved = moved
@@ -8907,25 +8891,17 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
         return false, 0
     end
 
-    local targetRange = math.max(10, tonumber(_G.Settings.ReferenceVideoTargetRange) or 70)
+    local targetRange = math.max(20, tonumber(_G.Settings.ReferenceVideoTargetRange) or 90)
     if (me.Position - primaryRoot.Position).Magnitude > targetRange then
         if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-APPROACH" end
         return false, 0
     end
 
-    if not CombatController:ResolveRemotes() then
-        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-REMOTES" end
-        return false, 0
-    end
-
     self.ReferenceVideoPulled = self.ReferenceVideoPulled or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
     self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoMoveState = self.ReferenceVideoMoveState or setmetatable({}, {__mode="k"})
 
-    -- Observe the PREVIOUS batch before issuing another. pcall/FireServer success is
-    -- never promoted to damage proof; only a real Humanoid.Health decrease counts.
-    local proofDelay = math.max(0.08,
-        tonumber(_G.Settings.ReferenceVideoBatchProofDelay) or 0.12)
+    local proofDelay = math.max(0.10, tonumber(_G.Settings.ReferenceVideoBatchProofDelay) or 0.14)
     local watch = self.ReferenceVideoBatchWatch
     if watch and now - (watch.SentAt or now) >= proofDelay then
         local damaged = 0
@@ -8934,135 +8910,111 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
             local hum = mob and mob.Parent and mob:FindFirstChildOfClass("Humanoid")
             if hum then
                 local hp = tonumber(hum.Health) or 0
-                if hp < (tonumber(row.Health) or hp) - 0.01 then
-                    damaged = damaged + 1
-                end
+                if hp < (tonumber(row.Health) or hp) - 0.01 then damaged = damaged + 1 end
             elseif mob and not mob.Parent then
-                -- Despawn immediately after a real attack is also consistent with a kill.
                 damaged = damaged + 1
             end
         end
 
         self.ReferenceVideoLastDamageCount = damaged
         if damaged > 0 then
-            self.ReferenceVideoWorkingShape = watch.Shape
             self.ReferenceVideoNoDamageStreak = 0
+            self.ReferenceVideoWorkingShape = watch.Shape
+            self.ReferenceVideoActiveShape = watch.Shape
         else
-            self.ReferenceVideoNoDamageStreak =
-                (tonumber(self.ReferenceVideoNoDamageStreak) or 0) + 1
-            -- We have two observed source shapes: the decompiled reference removes
-            -- the base tuple from the hit list; a current public implementation keeps it.
-            -- Switch only after TWO real zero-delta observations.
+            self.ReferenceVideoNoDamageStreak = (tonumber(self.ReferenceVideoNoDamageStreak) or 0) + 1
             if self.ReferenceVideoNoDamageStreak >= 2 then
-                self.ReferenceVideoCandidateShape =
-                    (watch.Shape == "REF-REST") and "PUBLIC-FULL" or "REF-REST"
                 self.ReferenceVideoNoDamageStreak = 0
+                local order = {"KAIV2-FULL", "LEGACY-FULL", "REF-REST", "ADAPTIVE"}
+                local current = watch.Shape or "KAIV2-FULL"
+                local idx = 1
+                for i, name in ipairs(order) do if name == current then idx = i break end end
+                self.ReferenceVideoCandidateShape = order[(idx % #order) + 1]
+                self.ReferenceVideoActiveShape = self.ReferenceVideoCandidateShape
+                self.ReferenceVideoWorkingShape = nil
             end
         end
         self.ReferenceVideoBatchWatch = nil
     elseif watch then
-        -- Do not stack another registered attack inside the same causal window.
         return false, tonumber(watch.Count) or 0
     end
 
-    local interval = math.max(proofDelay,
-        tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.075)
-    if now - (tonumber(self.ReferenceVideoLastAttack) or 0) < interval then
-        return false, 0
-    end
+    local interval = math.max(proofDelay, tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.14)
+    if now - (tonumber(self.ReferenceVideoLastAttack) or 0) < interval then return false, 0 end
 
-    local attackRange = math.max(targetRange,
-        tonumber(_G.Settings.ReferenceVideoAttackRange) or 80)
-    local entries = self:ReferenceVideoCollect(mobName, me.Position, attackRange)
-    if #entries == 0 then
-        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-HITS" end
-        return false, 0
-    end
+    local attackRange = math.max(120, tonumber(_G.Settings.ReferenceVideoAttackRange) or 120)
+    local entries = self:ReferenceVideoCollect(mobName, primaryRoot.Position, attackRange)
+    if #entries == 0 then return false, 0 end
 
     local safe = {}
     for _, entry in ipairs(entries) do
-        local root = entry.Root
-        local mob = entry.Model
-        local blocked = root and self.ReferenceVideoGhostBlocked[root] == true
+        local mob, root, hum = entry.Model, entry.Root, entry.Humanoid
         local ignored = root and (self.ReferenceVideoIgnoreUntil[root] or 0) > now
-
-        if not blocked and not ignored and root and self.ReferenceVideoPulled[root] then
-            local owner = ClientOwnsMob(root)
-            local state = self.ReferenceVideoMoveState and self.ReferenceVideoMoveState[root]
-            local mover = root:FindFirstChild("BobonBringBP")
-            local persistenceConfirmed = type(state) == "table" and state.Confirmed == true
-                and mover ~= nil
-            -- Explicit false always loses authority. Unknown ownership (common on Real)
-            -- remains attackable only after the BodyPosition pull physically persisted.
-            if owner == false or (owner == nil and not persistenceConfirmed) then
-                self.ReferenceVideoGhostBlocked[root] = true
-                blocked = true
-            end
-        end
-
-        if not blocked and not ignored and mob and mob.Parent then
-            local hum = mob:FindFirstChildOfClass("Humanoid")
-            local part = mob:FindFirstChild("Head") or root
-            if hum and hum.Health > 0 and part and part:IsA("BasePart") then
-                safe[#safe + 1] = {Model=mob, Part=part, Root=root, Humanoid=hum}
+        if not ignored and mob and mob.Parent and root and root.Parent and hum and hum.Health > 0 then
+            local pileDist = (root.Position - primaryRoot.Position).Magnitude
+            -- Primary is always valid. Secondaries become valid once the physics pile is actually close.
+            if mob == primary or pileDist <= 28 then
+                local part = mob:FindFirstChild("Head") or root
+                if part and part:IsA("BasePart") then
+                    safe[#safe + 1] = {Model=mob, Part=part, Root=root, Humanoid=hum}
+                end
             end
         end
     end
+    if #safe == 0 then return false, 0 end
 
-    if #safe == 0 then
-        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-GHOST-BLOCKED" end
-        return false, 0
-    end
-
-    -- Keep the live primary as base-part when it is present, matching the reference
-    -- loop's stable victim. Otherwise use a bounded rotating base among the real batch.
-    local baseIndex = nil
-    for i, entry in ipairs(safe) do
-        if entry.Model == primary then baseIndex = i; break end
-    end
-    if not baseIndex then
-        self.ReferenceVideoBatchCursor =
-            ((tonumber(self.ReferenceVideoBatchCursor) or 0) % #safe) + 1
-        baseIndex = self.ReferenceVideoBatchCursor
-    end
-
+    local baseIndex = 1
+    for i, entry in ipairs(safe) do if entry.Model == primary then baseIndex = i break end end
     local base = safe[baseIndex]
     local fullList, restList, snapshot = {}, {}, {}
     for i, entry in ipairs(safe) do
         local tuple = {entry.Model, entry.Part}
         fullList[#fullList + 1] = tuple
         if i ~= baseIndex then restList[#restList + 1] = tuple end
-        snapshot[#snapshot + 1] = {
-            Model = entry.Model,
-            Health = tonumber(entry.Humanoid.Health) or 0,
-        }
+        snapshot[#snapshot + 1] = {Model=entry.Model, Health=tonumber(entry.Humanoid.Health) or 0}
     end
 
-    local shape = self.ReferenceVideoWorkingShape
-        or self.ReferenceVideoCandidateShape
-        or "REF-REST"
+    local shape = self.ReferenceVideoCandidateShape
+        or self.ReferenceVideoWorkingShape
+        or self.ReferenceVideoActiveShape
+        or "KAIV2-FULL"
+    self.ReferenceVideoActiveShape = shape
     self.ReferenceVideoCandidateShape = nil
-
     self.ReferenceVideoLastAttack = now
     _G.State.LastAttackTime = now
 
-    local okAttack = pcall(function()
-        CombatController.RegisterAttack:FireServer(0)
-    end)
-    local okHit = false
-    if okAttack then
-        okHit = pcall(function()
-            if shape == "PUBLIC-FULL" then
-                CombatController.RegisterHit:FireServer(base.Part, fullList)
+    local attempted = false
+    if shape == "ADAPTIVE" then
+        -- Reuse Bobon's backend discovery/token/helper logic if all public direct shapes failed.
+        attempted = Attack(primary, mobName) == true
+    else
+        if not CombatController:ResolveRemotes() then
+            if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "NO-REGISTER-REMOTES" end
+            return false, #safe
+        end
+        local okAttack = pcall(function()
+            if shape == "KAIV2-FULL" then
+                -- Exact rhythm observed in kaiv2: RegisterAttack(0.125).
+                CombatController.RegisterAttack:FireServer(0.125)
             else
-                -- Exact decompiled reference:
-                -- RegisterHit(table.remove(AOE,1)[2], remainingAOE)
-                CombatController.RegisterHit:FireServer(base.Part, restList)
+                CombatController.RegisterAttack:FireServer(0)
             end
         end)
+        local okHit = false
+        if okAttack then
+            okHit = pcall(function()
+                if shape == "REF-REST" then
+                    CombatController.RegisterHit:FireServer(base.Part, restList)
+                else
+                    -- Keep the base target in the list. This is critical when only one mob is present.
+                    CombatController.RegisterHit:FireServer(base.Part, fullList)
+                end
+            end)
+        end
+        attempted = okAttack and okHit
     end
 
-    if okAttack and okHit then
+    if attempted then
         self.ReferenceVideoBatchWatch = {
             SentAt = now,
             Targets = snapshot,
@@ -9072,14 +9024,12 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
     end
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Net = "VIDEO7951-ONE-SWING-BATCH"
+        _G.BobonDiagnostics.Net = "REAL-HP-PROOF"
         _G.BobonDiagnostics.Targets = #safe
-        _G.BobonDiagnostics.Packet = (okAttack and okHit)
-            and ("VIDEO7951-" .. shape .. " x" .. tostring(#safe)
-                .. " dmg" .. tostring(tonumber(self.ReferenceVideoLastDamageCount) or 0))
-            or "VIDEO7951-DISPATCH-ERROR"
+        _G.BobonDiagnostics.Packet = tostring(shape) .. " x" .. tostring(#safe)
+            .. " dmg" .. tostring(tonumber(self.ReferenceVideoLastDamageCount) or 0)
     end
-    return okAttack and okHit, #safe
+    return attempted, #safe
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
@@ -19420,7 +19370,7 @@ end
 
 print("[BobonHub v22.7] Full Script Loaded Successfully!")
 print("[BobonHub v22.7] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
-print("[BobonHub v22.29.1] Core: KAIV2 progression | REAL BodyMover pile | Safe HopLowServer")
+print("[BobonHub v22.29.2] Core: KAIV2 progression | REAL BodyMover pile | Safe HopLowServer")
 print("[BobonHub v22.7] Modules: HP-Proof QuestFarm | Ability V3/V4 | Mastery Skills | Material Prep | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
 print("[BobonHub v22.7] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
 print("[BobonHub v22.7] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
