@@ -1,43 +1,4 @@
 -- =================================================================
---         BOBON HUB v22.28.0 VERIFIED BATCH + GHOST RESTORE
---         Base: v22.27.0 SERVER-SAFE VIDEO FARM
---
---  v22.28.0 ROBLOX(29) CONFIRMED ROOT FIX:
---  [V228-1] Removed per-victim RegisterAttack fanout. Roblox(29) shows one real kill while
---           later victims receive effects without equivalent kills; the older source itself
---           documents that one registered swing can be consumed by only the first victim
---           when several RegisterHit calls are fired from the same attack window.
---  [V228-2] Restored the reference combat shape: ONE RegisterAttack(0) + ONE RegisterHit
---           for the whole current AOE batch. Primary/base-part is selected once per swing.
---  [V228-3] Reference-exact payload (base part + remaining hit tuples) is tried first.
---           If two causally observed batches produce zero real Humanoid HP delta, the code
---           tries the other currently-public full-list batch shape; real HP delta selects
---           the working shape. pcall success never counts as damage proof.
---  [V228-4] A pulled NPC that loses ownership is immediately restored to its captured
---           pre-pull CFrame, quarantined briefly, and only then becomes attackable again.
---           This mirrors the reference source's restore/ignore behavior and removes statues.
---  [V228-5] Primary is sticky until death/despawn/name change. The farm no longer re-runs
---           nearest-target selection every tick and accidentally moves the cluster anchor.
--- =================================================================
--- =================================================================
---         BOBON HUB v22.27.0 SERVER-SAFE VIDEO FARM
---         Base: v22.26.0 VIDEO7951 REFERENCE FARM LOOP
---
---  v22.27.0 IMMORTAL/GHOST MOB ROOT FIX:
---  [V227-1] Never CFrame a secondary NPC unless ClientOwnsMob(root) == true.
---           A successful local CFrame write is NOT treated as a successful bring.
---  [V227-2] Pulled mobs that lose ownership enter GHOST-BLOCKED state and are
---           excluded from RegisterHit until they snap back to a real position or
---           ownership is regained. This prevents visually stacked immortal statues.
---  [V227-3] Unowned/unknown mobs stay at their live server position. They remain
---           valid future primaries instead of being turned into local-only ghosts.
---  [V227-4] Cluster damage uses a fresh RegisterAttack + single-target RegisterHit
---           for every safe victim in the current 80-stud circle. This avoids the
---           one-swing batch case where only the first stacked victim consumes damage.
---  [V227-5] HUD exposes owned/blocked/hit counts so a future recording immediately
---           distinguishes ownership failure from combat dispatch failure.
--- =================================================================
--- =================================================================
 --         BOBON HUB v22.26.0 VIDEO7951 REFERENCE FARM LOOP
 --         Base: v22.25.0 CONCURRENT STABLE PILE
 --
@@ -1628,12 +1589,6 @@ _G.Settings = {
     ReferenceVideoAttackRange = 80,
     ReferenceVideoAttackInterval = 0.03,
     ReferenceVideoMaxTargets = 32,
-    -- v22.27: never manufacture visual-only/immortal mobs.
-    ReferenceVideoOwnerSafeBring = true,
-    ReferenceVideoGhostReleaseDistance = 16,
-    ReferenceVideoFanoutMaxTargets = 12,
-    ReferenceVideoFanoutGap = 0.018,
-    ReferenceVideoAttackInterval = 0.075,
     TeddyAllMobProbeInterval = 0.10,
     TeddyAllMobProbeTimeout = 2.40,
     TeddyAllMobProbeMinAttempts = 2,
@@ -8404,77 +8359,54 @@ function ClusterFarmController:ReferenceVideoCollect(mobName, center, radius)
 end
 
 function ClusterFarmController:ReferenceVideoPrimary(mobName)
-    local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    if not folder or not me or type(mobName) ~= "string" then
-        self.ReferenceVideoPrimaryModel = nil
-        self.ReferenceVideoPrimaryName = nil
-        return nil
-    end
-
-    local function valid(mob)
-        if not mob or not mob.Parent or not IsEnemyNamed(mob, mobName) then return false end
-        local hum = mob:FindFirstChildOfClass("Humanoid")
-        local root = mob:FindFirstChild("HumanoidRootPart")
-        if not hum or hum.Health <= 0 or not root or not root.Parent or root.Anchored then return false end
-        local okPos, pos = pcall(function() return root.Position end)
-        return okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-    end
-
-    -- The reference source keeps the detected mob in its repeat-loop until that
-    -- exact model dies. Do the same instead of reselecting nearest every main tick.
-    local sticky = self.ReferenceVideoPrimaryModel
-    if self.ReferenceVideoPrimaryName == mobName and valid(sticky) then
-        return sticky
-    end
+    local folder = workspace:FindFirstChild("Enemies")
+    if not me or not folder then return nil end
 
     local best, bestDist = nil, math.huge
     for _, mob in ipairs(folder:GetChildren()) do
-        if valid(mob) then
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
-            local dist = (root.Position - me.Position).Magnitude
-            if dist < bestDist then
-                best, bestDist = mob, dist
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
+                    local dist = (pos - me.Position).Magnitude
+                    if dist < bestDist then
+                        best, bestDist = mob, dist
+                    end
+                end
             end
         end
     end
-
-    self.ReferenceVideoPrimaryModel = best
-    self.ReferenceVideoPrimaryName = best and mobName or nil
     return best
 end
 
 function ClusterFarmController:ReferenceVideoBring(mobName, primary)
-    if _G.Settings.GatherMobs == false then return 0, 0, 0, 0 end
+    if _G.Settings.GatherMobs == false then return 0, 0 end
     local me = HRP()
     local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
     local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
     if not me or not primaryRoot or not primaryRoot.Parent
         or not primaryHum or primaryHum.Health <= 0 then
-        return 0, 0, 0, 0
+        return 0, 0
     end
 
     local trigger = math.max(10, tonumber(_G.Settings.ReferenceVideoBringTrigger) or 50)
     if (me.Position - primaryRoot.Position).Magnitude > trigger then
-        return 0, 0, 0, 0
+        return 0, 0
     end
 
     pcall(function() ExpandSimulationRadius() end)
-
-    self.ReferenceVideoPulled = self.ReferenceVideoPulled or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoOriginalCF = self.ReferenceVideoOriginalCF or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
 
     local radius = math.max(trigger,
         tonumber(_G.Settings.ReferenceVideoBringRadius) or 200)
     local entries = self:ReferenceVideoCollect(mobName, primaryRoot.Position, radius)
     local primaryCF = primaryRoot.CFrame
-    local moved, ownedCount, blocked = 0, 0, 0
-    local now = tick()
-    local restoreQuarantine = math.max(0.20,
-        tonumber(_G.Settings.ReferenceVideoRestoreQuarantine) or 0.45)
+    local moved = 0
 
+    -- The reference source calls sizepart() while close. It only removes collision;
+    -- it does not PlatformStand/freeze the NPC. Keep the same behavior.
     local function noCollide(model)
         pcall(function()
             for _, part in ipairs(model:GetDescendants()) do
@@ -8485,24 +8417,16 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
         end)
     end
 
-    -- Primary remains untouched by the magnet and is always the real server anchor.
     noCollide(primary)
-    moved = moved + 1
 
     for i, entry in ipairs(entries) do
         local mob, root = entry.Model, entry.Root
-        if mob and mob.Parent and root and root.Parent and mob ~= primary then
-            local owner = ClientOwnsMob(root)
-            local ignored = (self.ReferenceVideoIgnoreUntil[root] or 0) > now
-
-            if owner == true and not ignored then
-                self.ReferenceVideoGhostBlocked[root] = nil
-                if not self.ReferenceVideoOriginalCF[root] then
-                    local okCF, cf = pcall(function() return root.CFrame end)
-                    if okCF then self.ReferenceVideoOriginalCF[root] = cf end
-                end
-                noCollide(mob)
-
+        if mob and mob.Parent and root and root.Parent then
+            noCollide(mob)
+            if mob ~= primary then
+                -- Reference BringMob writes continuously while the player is near the
+                -- primary. Do not gate on isnetworkowner/HP proof: proximity +
+                -- SimulationRadius is the ownership acquisition mechanism.
                 local ring = (i - 1) % 8
                 local angle = ring * (math.pi / 4)
                 local r = 1.25
@@ -8515,44 +8439,20 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
                 end)
-                if okMove then
-                    self.ReferenceVideoPulled[root] = now
-                    moved = moved + 1
-                    ownedCount = ownedCount + 1
-                end
+                if okMove then moved = moved + 1 end
             else
-                blocked = blocked + 1
-
-                -- Confirmed reference behavior: if a mob we moved is no longer safe,
-                -- restore it instead of leaving a client-side statue at the pile.
-                if self.ReferenceVideoPulled[root] then
-                    local restoreCF = self.ReferenceVideoOriginalCF[root]
-                    pcall(function()
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        if restoreCF then root.CFrame = restoreCF end
-                    end)
-                    self.ReferenceVideoPulled[root] = nil
-                    self.ReferenceVideoGhostBlocked[root] = true
-                    self.ReferenceVideoIgnoreUntil[root] = now + restoreQuarantine
-                elseif not ignored then
-                    -- Never-pulled mobs are still at their real position and can be hit
-                    -- normally. Clear stale quarantine once its bounded delay expires.
-                    self.ReferenceVideoGhostBlocked[root] = nil
-                end
+                moved = moved + 1
             end
         end
     end
 
     self.SharedBringCount = moved
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "VIDEO7951-RESTORE-SAFE"
+        _G.BobonDiagnostics.Bring = "VIDEO7951-PRIMARY-PILE"
         _G.BobonDiagnostics.BringCandidates = #entries
-        _G.BobonDiagnostics.BringOwned = ownedCount
         _G.BobonDiagnostics.BringMoved = moved
-        _G.BobonDiagnostics.BringUnknown = blocked
     end
-    return moved, #entries, ownedCount, blocked
+    return moved, #entries
 end
 
 function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
@@ -8571,61 +8471,13 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
         return false, 0
     end
 
-    if not CombatController:ResolveRemotes() then
-        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-REMOTES" end
+    local interval = math.max(0.015, tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.03)
+    if now - (tonumber(self.ReferenceVideoLastAttack) or 0) < interval then
         return false, 0
     end
 
-    self.ReferenceVideoPulled = self.ReferenceVideoPulled or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
-
-    -- Observe the PREVIOUS batch before issuing another. pcall/FireServer success is
-    -- never promoted to damage proof; only a real Humanoid.Health decrease counts.
-    local proofDelay = math.max(0.08,
-        tonumber(_G.Settings.ReferenceVideoBatchProofDelay) or 0.12)
-    local watch = self.ReferenceVideoBatchWatch
-    if watch and now - (watch.SentAt or now) >= proofDelay then
-        local damaged = 0
-        for _, row in ipairs(watch.Targets or {}) do
-            local mob = row.Model
-            local hum = mob and mob.Parent and mob:FindFirstChildOfClass("Humanoid")
-            if hum then
-                local hp = tonumber(hum.Health) or 0
-                if hp < (tonumber(row.Health) or hp) - 0.01 then
-                    damaged = damaged + 1
-                end
-            elseif mob and not mob.Parent then
-                -- Despawn immediately after a real attack is also consistent with a kill.
-                damaged = damaged + 1
-            end
-        end
-
-        self.ReferenceVideoLastDamageCount = damaged
-        if damaged > 0 then
-            self.ReferenceVideoWorkingShape = watch.Shape
-            self.ReferenceVideoNoDamageStreak = 0
-        else
-            self.ReferenceVideoNoDamageStreak =
-                (tonumber(self.ReferenceVideoNoDamageStreak) or 0) + 1
-            -- We have two observed source shapes: the decompiled reference removes
-            -- the base tuple from the hit list; a current public implementation keeps it.
-            -- Switch only after TWO real zero-delta observations.
-            if self.ReferenceVideoNoDamageStreak >= 2 then
-                self.ReferenceVideoCandidateShape =
-                    (watch.Shape == "REF-REST") and "PUBLIC-FULL" or "REF-REST"
-                self.ReferenceVideoNoDamageStreak = 0
-            end
-        end
-        self.ReferenceVideoBatchWatch = nil
-    elseif watch then
-        -- Do not stack another registered attack inside the same causal window.
-        return false, tonumber(watch.Count) or 0
-    end
-
-    local interval = math.max(proofDelay,
-        tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.075)
-    if now - (tonumber(self.ReferenceVideoLastAttack) or 0) < interval then
+    if not CombatController:ResolveRemotes() then
+        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-REMOTES" end
         return false, 0
     end
 
@@ -8637,62 +8489,21 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
         return false, 0
     end
 
-    local safe = {}
+    local hitList = {}
     for _, entry in ipairs(entries) do
-        local root = entry.Root
-        local mob = entry.Model
-        local blocked = root and self.ReferenceVideoGhostBlocked[root] == true
-        local ignored = root and (self.ReferenceVideoIgnoreUntil[root] or 0) > now
-
-        if not blocked and not ignored and root and self.ReferenceVideoPulled[root] then
-            if ClientOwnsMob(root) ~= true then
-                self.ReferenceVideoGhostBlocked[root] = true
-                blocked = true
-            end
-        end
-
-        if not blocked and not ignored and mob and mob.Parent then
-            local hum = mob:FindFirstChildOfClass("Humanoid")
-            local part = mob:FindFirstChild("Head") or root
-            if hum and hum.Health > 0 and part and part:IsA("BasePart") then
-                safe[#safe + 1] = {Model=mob, Part=part, Root=root, Humanoid=hum}
-            end
+        local part = entry.Model:FindFirstChild("Head") or entry.Root
+        if part and part:IsA("BasePart") then
+            hitList[#hitList + 1] = {entry.Model, part}
         end
     end
+    if #hitList == 0 then return false, 0 end
 
-    if #safe == 0 then
-        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-GHOST-BLOCKED" end
-        return false, 0
-    end
-
-    -- Keep the live primary as base-part when it is present, matching the reference
-    -- loop's stable victim. Otherwise use a bounded rotating base among the real batch.
-    local baseIndex = nil
-    for i, entry in ipairs(safe) do
-        if entry.Model == primary then baseIndex = i; break end
-    end
-    if not baseIndex then
-        self.ReferenceVideoBatchCursor =
-            ((tonumber(self.ReferenceVideoBatchCursor) or 0) % #safe) + 1
-        baseIndex = self.ReferenceVideoBatchCursor
-    end
-
-    local base = safe[baseIndex]
-    local fullList, restList, snapshot = {}, {}, {}
-    for i, entry in ipairs(safe) do
-        local tuple = {entry.Model, entry.Part}
-        fullList[#fullList + 1] = tuple
-        if i ~= baseIndex then restList[#restList + 1] = tuple end
-        snapshot[#snapshot + 1] = {
-            Model = entry.Model,
-            Health = tonumber(entry.Humanoid.Health) or 0,
-        }
-    end
-
-    local shape = self.ReferenceVideoWorkingShape
-        or self.ReferenceVideoCandidateShape
-        or "REF-REST"
-    self.ReferenceVideoCandidateShape = nil
+    -- Exact AttackFunction shape recovered from the reference source:
+    -- RegisterAttack(0), remove the first rig from the list, then use that rig's
+    -- hit part as RegisterHit arg #1 and the remaining rigs as arg #2.
+    local first = table.remove(hitList, 1)
+    local basePart = first and first[2]
+    if not basePart then return false, 0 end
 
     self.ReferenceVideoLastAttack = now
     _G.State.LastAttackTime = now
@@ -8700,37 +8511,18 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
     local okAttack = pcall(function()
         CombatController.RegisterAttack:FireServer(0)
     end)
-    local okHit = false
-    if okAttack then
-        okHit = pcall(function()
-            if shape == "PUBLIC-FULL" then
-                CombatController.RegisterHit:FireServer(base.Part, fullList)
-            else
-                -- Exact decompiled reference:
-                -- RegisterHit(table.remove(AOE,1)[2], remainingAOE)
-                CombatController.RegisterHit:FireServer(base.Part, restList)
-            end
-        end)
-    end
-
-    if okAttack and okHit then
-        self.ReferenceVideoBatchWatch = {
-            SentAt = now,
-            Targets = snapshot,
-            Shape = shape,
-            Count = #safe,
-        }
-    end
+    local okHit = pcall(function()
+        CombatController.RegisterHit:FireServer(basePart, hitList)
+    end)
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Net = "VIDEO7951-ONE-SWING-BATCH"
-        _G.BobonDiagnostics.Targets = #safe
+        _G.BobonDiagnostics.Net = "VIDEO7951-LEGACY-2"
+        _G.BobonDiagnostics.Targets = #entries
         _G.BobonDiagnostics.Packet = (okAttack and okHit)
-            and ("VIDEO7951-" .. shape .. " x" .. tostring(#safe)
-                .. " dmg" .. tostring(tonumber(self.ReferenceVideoLastDamageCount) or 0))
+            and ("VIDEO7951-AOE x" .. tostring(#entries))
             or "VIDEO7951-DISPATCH-ERROR"
     end
-    return okAttack and okHit, #safe
+    return okAttack and okHit, #entries
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
@@ -8790,8 +8582,8 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     _G.State.FarmTarget = primary
     _G.State.CurrentTarget = primary
     _G.State.ClusterMode = "OFF"
-    _G.State.FState = "VIDEO7951_VERIFIED_BATCH_FARM"
-    _G.State.ActionText = "Verified Batch Farm • " .. mobName
+    _G.State.FState = "VIDEO7951_REFERENCE_FARM"
+    _G.State.ActionText = "Reference Farm • " .. mobName
 
     -- Reference melee geometry is +7 horizontal, +20 vertical from the live mob.
     local side = tonumber(_G.Settings.ReferenceVideoSideOffset) or 7
@@ -8811,14 +8603,13 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     -- while movement keeps following the same live primary.
     PrepareCombatTarget(primary)
     EquipCombatTool()
-    local brought, candidates, owned, blocked = self:ReferenceVideoBring(mobName, primary)
+    local brought, candidates = self:ReferenceVideoBring(mobName, primary)
     local attacked, hitCount = self:ReferenceVideoAttack(mobName, primary)
 
     local distance = (me.Position - root.Position).Magnitude
-    _G.BobonStatus = ("%s: VERIFIED VIDEO • %s • dist %.0f • bring %d/%d • owned %d • blocked %d • batch %d %s")
+    _G.BobonStatus = ("%s: VIDEO LOOP • %s • dist %.0f • bring %d/%d • AOE %d • hit %s")
         :format(prefix, tostring(mobName), distance,
             tonumber(brought) or 0, tonumber(candidates) or 0,
-            tonumber(owned) or 0, tonumber(blocked) or 0,
             tonumber(hitCount) or 0, attacked and "ACTIVE" or "FOLLOW")
 
     return true
