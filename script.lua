@@ -1,3 +1,5 @@
+-- BOBON HUB v22.28.7 REAL | FARM FIELD-FALLBACK FIX | VISIBLE ERROR HOP ONLY | NO REJOIN
+-- BOBON HUB v22.28.6 REAL-COMPAT | VISIBLE ERROR -> HOP ONLY | NO REJOIN
 -- BOBON HUB v22.28.4 REAL-COMPAT | local-register + game-error recovery + English UI
 -- =================================================================
 --         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
@@ -1266,55 +1268,68 @@ end
 if not LP then error("[BobonHub] LocalPlayer unavailable") end
 
 
--- v22.28.3 GLOBAL ERROR RECOVERY
--- Any real Bobon module error requests ONE rejoin of the current server.
--- If that rejoin fails asynchronously, times out, or throws immediately,
--- recovery falls back to the existing low-player HopManager. No hop spam.
+-- v22.28.6 REAL VISIBLE-ERROR HOP ONLY
+-- No rejoin path exists in this build.
+-- A server hop is requested ONLY for a NEW live error emitted through LogService.MessageOut
+-- after this execution starts. Old F9/LogHistory entries and ScriptContext-only errors do not hop.
 _G.BobonErrorRecovery = {
-    AwaitingRejoin = false,
-    LastTeleportAt = 0,
+    LastHopAt = 0,
     LastErrorAt = 0,
     LastSource = "",
     LastDetail = "",
+    PendingVisibleError = nil,
+    PendingWorker = false,
 }
 
-function _G.BobonErrorRecovery:HopFallback(detail)
-    self.AwaitingRejoin = false
-    _G.BobonStatus = "Error recovery • hopping to another server"
-    if _G.BobonHopManager and type(_G.BobonHopManager.Request) == "function" then
-        _G.BobonHopManager.LastHop = 0
-        return _G.BobonHopManager:Request("error-recovery: " .. tostring(detail), true)
-    end
-    return pcall(function()
-        TeleportSvc:Teleport(game.PlaceId, LP)
-    end)
-end
-
-function _G.BobonErrorRecovery:Rejoin(source, detail)
-    if not SessionAlive() or self.AwaitingRejoin then return false end
+function _G.BobonErrorRecovery:HopVisibleError(source, detail)
+    if not SessionAlive() then return false end
     local now = tick()
-    -- Avoid a broken module causing a teleport storm in the same process.
-    if now - (self.LastTeleportAt or 0) < 35 then return false end
-    self.LastTeleportAt = now
-    self.AwaitingRejoin = true
-    self.LastSource = tostring(source or "unknown")
+    -- One visible error may print its stack several times in the same moment.
+    if now - (self.LastHopAt or 0) < 20 then return false end
+    self.LastHopAt = now
+    self.LastErrorAt = now
+    self.LastSource = tostring(source or "VisibleError")
     self.LastDetail = tostring(detail or "unknown")
-    _G.BobonStatus = "Error recovery • rejoining current server"
-    pcall(function()
-        if _G.State and _G.State.SetMode then _G.State:SetMode("ServerHop") end
-    end)
+    _G.BobonStatus = "Visible error • hopping server"
 
-    local ok, err = pcall(function()
-        TeleportSvc:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
-    end)
-    if not ok then
-        return self:HopFallback("rejoin-call-failed: " .. tostring(err))
+    local function requestLowPlayerHop()
+        local manager = _G.BobonHopManager
+        if manager and type(manager.Request) == "function" then
+            manager.LastHop = 0
+            return manager:Request("visible-error: " .. self.LastSource, true)
+        end
+        return false
     end
 
-    -- A successful TeleportToPlaceInstance call can still fail later without throwing.
-    task.delay(12, function()
-        if SessionAlive() and _G.BobonErrorRecovery == self and self.AwaitingRejoin then
-            self:HopFallback("rejoin-timeout")
+    if requestLowPlayerHop() then return true end
+
+    -- HopManager is declared later in this file. Queue this one visible error until
+    -- that controller exists instead of rejoining or repeatedly teleporting.
+    self.PendingVisibleError = {
+        Source = self.LastSource,
+        Detail = self.LastDetail,
+    }
+    if self.PendingWorker then return true end
+    self.PendingWorker = true
+    task.spawn(function()
+        local deadline = tick() + 20
+        while SessionAlive() and tick() < deadline do
+            local manager = _G.BobonHopManager
+            if manager and type(manager.Request) == "function" then
+                local pending = self.PendingVisibleError
+                self.PendingVisibleError = nil
+                self.PendingWorker = false
+                manager.LastHop = 0
+                manager:Request("visible-error: " .. tostring(pending and pending.Source or self.LastSource), true)
+                return
+            end
+            task.wait(0.25)
+        end
+        self.PendingWorker = false
+        -- Last resort is still a DIFFERENT server, never the current JobId.
+        if SessionAlive() and self.PendingVisibleError then
+            self.PendingVisibleError = nil
+            pcall(function() TeleportSvc:Teleport(game.PlaceId, LP) end)
         end
     end)
     return true
@@ -1323,144 +1338,69 @@ end
 function _G.BobonReportError(source, detail, fatal)
     local label = tostring(source or "Unknown")
     local message = tostring(detail or "unknown error")
+    -- Internal Bobon module faults remain visible in F9 for diagnosis, but they do NOT
+    -- teleport by themselves. Only a live on-screen MessageError/FATAL below may hop.
     warn("[BobonHub] Module Error: " .. label .. ": " .. message)
-    if not SessionAlive() then return false end
-    _G.BobonErrorRecovery.LastErrorAt = tick()
-    _G.BobonErrorRecovery.LastSource = label
-    _G.BobonErrorRecovery.LastDetail = message
-    -- Module errors are treated as kaitun faults. `fatal` is retained for diagnostics;
-    -- all genuine module errors use the same one-rejoin-then-hop policy requested by user.
-    return _G.BobonErrorRecovery:Rejoin(label, message)
+    if _G.BobonErrorRecovery then
+        _G.BobonErrorRecovery.LastErrorAt = tick()
+        _G.BobonErrorRecovery.LastSource = label
+        _G.BobonErrorRecovery.LastDetail = message
+    end
+    return false
 end
 
-pcall(function()
-    TeleportSvc.TeleportInitFailed:Connect(function(player, result, message)
-        local recovery = _G.BobonErrorRecovery
-        if player ~= LP or not SessionAlive() or not recovery or not recovery.AwaitingRejoin then return end
-        recovery:HopFallback(tostring(result) .. " • " .. tostring(message))
-    end)
-end)
-
-
--- v22.28.5 REAL GAME-CLIENT ERROR WATCH
--- Real may not forward every game LocalScript warning/error through MessageOut.
--- Use three compatible paths: MessageOut, ScriptContext.Error and a bounded LogHistory poll.
--- Known Blox Fruits cosmetic/death/feature-client errors are ignored so they cannot cause rejoin loops.
-_G.BobonGameErrorWatch = _G.BobonGameErrorWatch or {
+_G.BobonGameErrorWatch = {
     LastSignature = "",
     LastAt = 0,
-    Seen = {},
-    HistoryPrimed = false,
 }
 
-function _G.BobonHandleGameLog(message, messageType, stackTrace)
+function _G.BobonHandleVisibleGameLog(message, messageType)
     if not SessionAlive() or not _G.BobonErrorRecovery then return false end
     local raw = tostring(message or "")
-    if stackTrace and tostring(stackTrace) ~= "" then
-        raw = raw .. "\n" .. tostring(stackTrace)
-    end
     local low = string.lower(raw)
 
-    -- Confirmed game-side noise from the supplied REAL screenshots. These do not
-    -- prove Bobon failed and may recur on every server, so never rejoin for them.
+    -- Confirmed Blox Fruits noise from REAL screenshots: never hop for these.
     if string.find(low, "cloud instance must exist under terrain", 1, true)
         or string.find(low, "font family sourcesans failed to load", 1, true)
         or string.find(low, "the npc model is in over 50k y axis", 1, true)
         or string.find(low, "report this error plz", 1, true)
         or string.find(low, "humanoid is not a valid member of model", 1, true)
         or string.find(low, "re/collecteddragonegg", 1, true)
-        or string.find(low, "prehistoricislandclient", 1, true) then
+        or string.find(low, "prehistoricislandclient", 1, true)
+        or string.find(low, "[bobonhub] module error:", 1, true) then
         return false
     end
 
-    -- Bobon module errors already call BobonReportError directly.
-    if string.find(raw, "[BobonHub] Module Error:", 1, true) then return false end
-
-    local fatalAsset = string.find(low, "fatal", 1, true)
-        and (string.find(low, "getfeaturedfruits", 1, true)
-            or string.find(low, "replicatedstorage.modules.asset", 1, true)
-            or string.find(low, "uicontroller", 1, true))
-
-    local hardClientError = messageType == Enum.MessageType.MessageError
-        and not string.find(low, "humanoid is not a valid member", 1, true)
-        and not string.find(low, "collecteddragonegg", 1, true)
-
-    if not fatalAsset and not hardClientError then return false end
+    -- A yellow FATAL line is treated as a visible fatal error; ordinary warnings are not.
+    local visibleFatal = string.find(low, "fatal", 1, true) ~= nil
+    local visibleError = messageType == Enum.MessageType.MessageError
+    if not visibleFatal and not visibleError then return false end
 
     local signature = string.sub(low, 1, 240)
     local now = tick()
     local watch = _G.BobonGameErrorWatch
-    if watch.LastSignature == signature and now - (watch.LastAt or 0) < 15 then return false end
+    if watch.LastSignature == signature and now - (watch.LastAt or 0) < 20 then return false end
     watch.LastSignature = signature
     watch.LastAt = now
 
-    return _G.BobonErrorRecovery:Rejoin(
-        fatalAsset and "GameFatalAsset" or "GameClientError",
+    return _G.BobonErrorRecovery:HopVisibleError(
+        visibleFatal and "VisibleFATAL" or "VisibleError",
         string.sub(raw, 1, 350)
     )
 end
 
+-- Live output only. No ScriptContext listener and NO GetLogHistory polling.
 pcall(function()
     game:GetService("LogService").MessageOut:Connect(function(message, messageType)
-        _G.BobonHandleGameLog(message, messageType, nil)
+        _G.BobonHandleVisibleGameLog(message, messageType)
     end)
 end)
 
--- ScriptContext catches actual LocalScript runtime errors even when Real does not
--- surface them through LogService.MessageOut.
-pcall(function()
-    game:GetService("ScriptContext").Error:Connect(function(message, stackTrace, scriptInstance)
-        local detail = tostring(message or "")
-        if typeof(scriptInstance) == "Instance" then
-            pcall(function() detail = detail .. "\nScript: " .. tostring(scriptInstance:GetFullName()) end)
-        end
-        _G.BobonHandleGameLog(detail, Enum.MessageType.MessageError, stackTrace)
-    end)
-end)
-
--- Last-resort REAL compatibility path. Prime existing history first, then inspect
--- only newly observed signatures so stale F9 entries never trigger a teleport.
-task.spawn(function()
-    while SessionAlive() and task.wait(1.5) do
-        pcall(function()
-            local history = game:GetService("LogService"):GetLogHistory()
-            if type(history) ~= "table" then return end
-            local watch = _G.BobonGameErrorWatch
-            local from = math.max(1, #history - 80)
-            if not watch.HistoryPrimed then
-                for i = from, #history do
-                    local entry = history[i]
-                    local msg = tostring((entry and (entry.message or entry.Message)) or "")
-                    if msg ~= "" then watch.Seen[string.sub(string.lower(msg),1,280)] = tick() end
-                end
-                watch.HistoryPrimed = true
-                return
-            end
-            for i = from, #history do
-                local entry = history[i]
-                local msg = tostring((entry and (entry.message or entry.Message)) or "")
-                if msg ~= "" then
-                    local sig = string.sub(string.lower(msg),1,280)
-                    if not watch.Seen[sig] then
-                        watch.Seen[sig] = tick()
-                        local mt = entry and (entry.messageType or entry.MessageType) or Enum.MessageType.MessageOutput
-                        _G.BobonHandleGameLog(msg, mt, nil)
-                    end
-                end
-            end
-        end)
-    end
-end)
-
--- v22.28.5 REAL confirmed screenshot fix:
--- [R285-1] Bobon UI prefers gethui/CoreGui and hard-locks Checker labels against game localization.
--- [R285-2] REAL error capture uses MessageOut + ScriptContext.Error + GetLogHistory polling.
--- [R285-3] Snowman/Death, 50k-Y and CollectedDragonEgg are confirmed game-side noise and never rejoin-loop.
--- [R285-4] FATAL GetFeaturedFruits/Asset/UIController triggers rejoin; failed rejoin falls back to low-player hop.
--- [R284-1] Legacy AutoLocalize guard retained.
--- [R284-2] Known Blox Fruits NPC-death/streaming warnings are ignored by recovery.
--- [R284-3] FATAL Asset/GetFeaturedFruits/UIController and other genuine client errors rejoin once; teleport failure falls back to hop.
--- [R284-4] No farm/combat/progression algorithm changes.
+-- [R286-1] Rejoin removed completely.
+-- [R286-2] Hop only on a NEW live visible MessageError/FATAL.
+-- [R286-3] No historical-log polling, so an old FATAL cannot trigger a new hop.
+-- [R286-4] Known Snowman/Death/50k-Y/CollectedDragonEgg noise is ignored.
+-- [R286-5] Bobon module warnings are diagnostic only and never teleport directly.
 
 -- v19.0 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
 -- had not replicated within 10 seconds. Show a full-screen bootstrap HUD immediately
@@ -9030,23 +8970,16 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     if not primary then
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "VIDEO7951_WAIT_SPAWN"
-        _G.State.ActionText = "Waiting Spawn • " .. mobName
+        _G.State.FState = "FIELD_ACQUIRE_FALLBACK"
+        _G.State.ActionText = "Searching field • " .. mobName
+        _G.BobonStatus = prefix .. ": searching live " .. mobName
 
-        -- Reference source waits ~60 studs above the known spawn marker.
-        if fallbackCF and _G.State:CanRequestTravel() then
-            local waitCF = fallbackCF * CFrame.new(0, 60, 0)
-            TravelManager:Request(waitCF, "Farm", {
-                arrivalThreshold = math.max(8, tonumber(_G.Settings.FarmArrivalThreshold) or 12),
-                fallback = fallbackCF,
-                combatHover = true,
-                persistent = true,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-        _G.BobonStatus = prefix .. ": waiting live " .. mobName
-        return true
+        -- v22.28.7: IMPORTANT — do NOT claim this tick when the reference loop has
+        -- no real primary. Returning true here used to make MainController stop at
+        -- q.MC forever, so the field-sweep/legacy acquire code below never ran.
+        -- Return false and let the persistent field scanner patrol/stream the spawn;
+        -- as soon as a real mob appears, ReferenceVideoPrimary owns the next tick again.
+        return false
     end
 
     local hum = primary:FindFirstChildOfClass("Humanoid")
@@ -18023,6 +17956,7 @@ local HopManager = {
     LastHop = 0, Visited = {}, AwaitingTeleport = false,
     RetryScheduled = false, RetryReason = nil,
 }
+_G.BobonHopManager = HopManager
 local function FindDroppedFruit()
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) then return obj end
@@ -18794,10 +18728,14 @@ task.spawn(function()
             -- v21.38 NORMAL QUEST FARM: source-shared BN loop is authoritative.
             -- It intentionally bypasses ClusterPhase / ownership / damage-lease logic.
             if _G.Settings.SharedSourceFarmMode ~= false then
-                if _G.State.ClusterMode ~= "OFF" then
-                    FarmPositionController:ReleaseCluster()
-                end
-                if ClusterFarmController:SharedFarmTick(questMobName, q.MC) then
+                -- v22.28.7: Reference/Teddy is authoritative only when it actually
+                -- acquired a live mob. If it returns false, KEEP the fallback cluster
+                -- state alive so field sweep can search instead of being reset every tick.
+                local sharedHandled = ClusterFarmController:SharedFarmTick(questMobName, q.MC)
+                if sharedHandled then
+                    if _G.State.ClusterMode ~= "OFF" then
+                        FarmPositionController:ReleaseCluster()
+                    end
                     return
                 end
             end
