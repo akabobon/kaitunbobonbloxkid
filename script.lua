@@ -1,6 +1,29 @@
 -- =================================================================
---         BOBON HUB v22.22.8 IMMORTAL-MOB GUARD
---         Base: v22.22.7 SAFE REFERENCE MERGE
+--         BOBON HUB v22.23.1 LONG-RANGE REAL-HIT FARM
+--         Base: v22.23.0 REAL-HIT SEED ANCHOR BRING
+--
+--  v22.23.1 LONG-RANGE REAL-HIT FARM:
+--  [LR231-1] Shared quest farm may attack from a configurable long range before approaching the mob.
+--  [LR231-2] Long-range dispatch is still accepted only by real Humanoid.Health delta; visual/packet success never counts.
+--  [LR231-3] Seed phase stops Farm travel as soon as it enters the long-range window, so the player can remain far above/away.
+--  [LR231-4] If a long-range seed probe produces no HP delta, Farm temporarily falls back to the normal 100-stud window instead of stalling forever.
+--  [LR231-5] Proven anchor/secondary proof attacks use the same bounded long-range window; bring/quest/Saber/melee logic is otherwise unchanged.
+--
+--  v22.23.0 REAL-HIT SEED ANCHOR BRING:
+--  [A230-1] No mandatory park/centroid gate. Farm first attacks ONE untouched real quest mob at its live position.
+--  [A230-2] Bring stays OFF until that seed mob shows a REAL Humanoid.Health decrease; that exact mob becomes the anchor.
+--  [A230-3] Other same-name mobs are pulled to the proven anchor, never to an arbitrary field/player point.
+--  [A230-4] A pulled secondary is not fan-out eligible from CFrame/ownership/persistence alone; it must itself lose real HP.
+--  [A230-5] Secondary no-damage timeout restores its pre-pull position and retries later; no immortal visual ghost remains.
+--  [A230-6] Proven secondaries keep an HP-liveness lease; if damage stops they are revoked/restored automatically.
+--  [A230-7] When the seed anchor dies, visual pulls are released and a fresh real mob must earn HP proof before bring restarts.
+--
+--  v22.22.9 PARK-FIRST SERVER-SAFE TRIO:
+--  [P229-1] Remote bring is DISARMED while the player is travelling/respawning. It scans first, parks once at a server-safe coverage point, then arms the pull.
+--  [P229-2] Trio selection is pruned until every original spawn position is inside the real server-valid attack sphere from the parked hover. No wide 3-mob visual pile.
+--  [P229-3] owner=false/nil may use a visual soft pin only while its original server-shadow position is inside that safe sphere; real Humanoid HP delta remains mandatory proof.
+--  [P229-4] Removes the old fill-to-3 fallback that could append a far mob outside the local cluster and create no-damage ghosts.
+--  [P229-5] Verified mobs are never towed while the stand-off point is not reached. Reset/quest travel cannot remote-magnet from the spawn NPC or mid-flight.
 --
 --  v22.22.8 IMMORTAL-MOB GUARD:
 --  [I228-1] Explicit owner=false roots are never promoted by visual CFrame persistence alone.
@@ -1500,13 +1523,12 @@ _G.Settings = {
     TeddySequenceRetryDelay = 0.28,
     TeddySequencePileHover = 24,
     TeddySequenceAttackRange = 120,
-    -- v22.21 trio-follow bring: maximum three quest mobs under the player.
+    -- v22.23.0: REAL-HIT SEED -> ANCHOR -> PROVE EACH SECONDARY.
     TeddyTrioMax = 3,
     TeddyTrioFieldRange = 1800,
-    -- v22.22.7: choose one dense same-name spawn cluster before remote pulling.
-    TeddyTrioClusterRadius = 260,
+    TeddyTrioClusterRadius = 260, -- compatibility only; no mandatory centroid parking
     TeddyTrioClusterSearchRadius = 1800,
-    TeddyTrioUseClusterStandPoint = true,
+    TeddyTrioUseClusterStandPoint = false,
     TeddyTrioFollowInterval = 0.03,
     TeddyTrioFollowVerifyRadius = 18,
     TeddyTrioFollowLeash = 110,
@@ -1517,8 +1539,6 @@ _G.Settings = {
     TeddyTrioPullTimeout = 1.80,
     TeddyTrioRetryDelay = 0.25,
     TeddyTrioAttackRange = 120,
-    -- v22.22.3: remote-first bring. Safe rule: true owner = instant pull;
-    -- nil owner = two-phase persistence trial; false owner = settle then close acquire.
     TeddyTrioRemoteFirst = true,
     TeddyTrioRemoteMaxDistance = 1800,
     TeddyTrioRemoteOwnerSettle = 0.18,
@@ -1527,18 +1547,31 @@ _G.Settings = {
     TeddyTrioRemoteSecondHold = 0.22,
     TeddyTrioRemoteProofRadius = 10,
     TeddyTrioRemoteRejectRadius = 34,
-    TeddyTrioRemoteRetry = 0.85,
+    TeddyTrioRemoteRetry = 0.55,
     TeddyTrioRemoteMaxFails = 1,
-    -- v22.22.8: never trust explicit server ownership from a visual-only CFrame result.
-    TeddyTrioAllowFalseOwnerSnap = false,
+    TeddyTrioAllowFalseOwnerSnap = true, -- only an unproven visual trial
     TeddyTrioNoDamageTimeout = 1.60,
-    TeddyTrioGhostRetry = 2.50,
-    TeddyTrioDamageProofTTL = 3.00,
-    -- v22.22.5: stay at one safe field hover and remote-magnet; never chase each mob.
-    TeddyTrioStandOffRemoteOnly = true,
-    TeddyTrioStandOffHeight = 30,
+    TeddyTrioGhostRetry = 1.20,
+    TeddyTrioDamageProofTTL = 4.00,
+    TeddyTrioStandOffRemoteOnly = false,
+    TeddyTrioStandOffHeight = 30, -- compatibility only
     TeddyTrioStandOffArrival = 12,
+    TeddyTrioServerSafeRange = 100, -- compatibility only; HP proof is authoritative
+    TeddyTrioPullArmRadius = 15,
     TeddyTrioStandOffOwnerRetry = 0.20,
+    TeddyTrioSeedHover = 24,
+    TeddyTrioSeedAttackRange = 100,
+    -- v22.23.1: bounded remote-hit window. Server reality is still proven only by HP delta.
+    TeddyLongRangeHitEnabled = true,
+    TeddyLongRangeAttackRange = 300,
+    TeddyLongRangeFallbackRange = 100,
+    TeddyLongRangeProbeTimeout = 1.20,
+    TeddyLongRangeFallbackHold = 3.00,
+    TeddyTrioSeedProofTimeout = 2.20,
+    TeddyTrioAnchorHover = 24,
+    TeddyTrioSecondaryProofTimeout = 1.35,
+    TeddyTrioMemberNoDamageTimeout = 2.60,
+    TeddyTrioSecondaryRetry = 1.10,
     TeddyAirHoverHeight  = 28,
     TeddyAirTagHoverHeight = 16,
     TeddyAirAcquireHeight = 4,
@@ -4199,7 +4232,13 @@ function CombatController:CollectTargets(preferred, mobName, maxRange)
         and ClusterFarmController:IsAttackCluster(mobName) == true
     local sharedFarmActive = _G.Settings.SharedSourceFarmMode ~= false
         and _G.State and _G.State.Mode == "Farming"
-        and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+        and (_G.State.FState == "SHARED_ATTACK"
+            or _G.State.FState == "SHARED_BRING_FARM"
+            or _G.State.FState == "SEED_REAL_ATTACK"
+            or _G.State.FState == "SEED_CONFIRMED"
+            or _G.State.FState == "ANCHOR_ATTACK"
+            or _G.State.FState == "SECONDARY_HP_PROOF"
+            or _G.State.FState == "SECONDARY_CONFIRMED")
     -- v22.11.1: early skip uses a same-frame direct-magnet mark instead of
     -- ClusterFarmController ownership/proof admission. Kept inside this function
     -- so no extra top-level local is allocated in the giant Luau chunk.
@@ -5166,9 +5205,16 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
         _G.BobonDiagnostics.Packet = "SAFE-HOVER"
         return false
     end
+    local longRangeFarm = _G.State and _G.Settings.TeddyLongRangeHitEnabled ~= false
+        and (tonumber(_G.State.LongRangeFarmAttackUntil) or 0) >= now
+        and not candidateInputBackend
     local candidateRange = candidateInputBackend
         and (_G.Settings.ClientAttackRange or 8)
-        or (_G.Settings.FastAttackRange or 100)
+        or (longRangeFarm
+            and math.max(_G.Settings.FastAttackRange or 100,
+                tonumber(_G.State.LongRangeFarmAttackRange)
+                    or tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
+            or (_G.Settings.FastAttackRange or 100))
     local me = HRP()
     local okPreferred, preferredPosition = pcall(function()
         return preferredRoot.Parent and preferredRoot.Position or nil
@@ -5266,9 +5312,16 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
             return false
         end
     end
+    local longRangeDispatch = _G.State and _G.Settings.TeddyLongRangeHitEnabled ~= false
+        and (tonumber(_G.State.LongRangeFarmAttackUntil) or 0) >= now
+        and not inputBackend
     local range = inputBackend
         and (_G.Settings.ClientAttackRange or 8)
-        or (_G.Settings.FastAttackRange or 100)
+        or (longRangeDispatch
+            and math.max(_G.Settings.FastAttackRange or 100,
+                tonumber(_G.State.LongRangeFarmAttackRange)
+                    or tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
+            or (_G.Settings.FastAttackRange or 100))
     if (preferredPosition - me.Position).Magnitude > range then
         if self.PendingBackend then self:AbortPending("APPROACHING") end
         _G.BobonDiagnostics.Packet = "APPROACHING"
@@ -5309,7 +5362,11 @@ function CombatController:Attack(tool, kind, preferredModel, preferredHum, prefe
     local dispatchEntries = entries
     local sharedFarmFanout = _G.Settings.SharedSourceFarmMode ~= false
         and _G.State and _G.State.Mode == "Farming"
-        and (_G.State.FState == "SHARED_ATTACK" or _G.State.FState == "SHARED_BRING_FARM")
+        and (_G.State.FState == "SHARED_ATTACK"
+            or _G.State.FState == "SHARED_BRING_FARM"
+            or _G.State.FState == "ANCHOR_ATTACK"
+            or _G.State.FState == "SECONDARY_HP_PROOF"
+            or _G.State.FState == "SECONDARY_CONFIRMED")
     local clusterFanout = _G.State
         and (_G.State.ClusterMode ~= "OFF" or sharedFarmFanout)
         and not IsClientInputBackend(backend)
@@ -7833,7 +7890,34 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedTrioRemoteFails = setmetatable({}, {__mode="k"})
     self.SharedTrioOwnerProbeUntil = setmetatable({}, {__mode="k"})
     self.SharedTrioProofLease = setmetatable({}, {__mode="k"})
+    -- v22.23: restore any visual-only secondary before forgetting its origin.
+    if type(self.SharedTrioOriginalPos) == "table" then
+        for root, origin in pairs(self.SharedTrioOriginalPos) do
+            if root and root.Parent and typeof(origin) == "Vector3" then
+                pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.CFrame = CFrame.new(origin) * rot
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end
+    end
     self.SharedTrioDamageProven = setmetatable({}, {__mode="k"})
+    self.SharedTrioShadowSafe = setmetatable({}, {__mode="k"})
+    self.SharedTrioOriginalPos = setmetatable({}, {__mode="k"})
+    self.SharedTrioPulled = setmetatable({}, {__mode="k"})
+    self.SharedTrioLastHealth = setmetatable({}, {__mode="k"})
+    self.SharedTrioLastDamageAt = setmetatable({}, {__mode="k"})
+    self.SharedTrioPullArmed = false
+    self.SharedTrioSeedModel = nil
+    self.SharedTrioSeedLastHealth = nil
+    self.SharedTrioSeedStartedAt = 0
+    self.SharedTrioSeedAttempted = false
+    self.SharedTrioProofTarget = nil
+    self.SharedTrioProofLastHealth = nil
+    self.SharedTrioProofStartedAt = 0
+    self.SharedAnchorModel = nil
     self.SharedTrioRemotePendingCount = 0
     self.SharedTrioFieldCenter = nil
     self.SharedTrioClusterCenter = nil
@@ -8005,17 +8089,8 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
-    -- v22.22.3 REMOTE-FIRST MOVING TRIO
-    -- Safe remote order:
-    --   1) Expand simulation radius, then give explicit-owner environments a short
-    --      ownership-settle window before Farm starts chasing anything.
-    --   2) owner==true -> remote pull immediately.
-    --   3) owner==nil -> ONE remote movement trial, then observe it without rewriting.
-    --      It must survive two persistence phases before becoming a follow lease.
-    --   4) owner==false or failed remote proof -> normal close acquire fallback.
-    --
-    -- This avoids the old false-success/statue failure: no unverified mob has
-    -- WalkSpeed/AutoRotate changed and no failed remote trial is attacked as stacked.
+    -- v22.23.0: pull only AFTER one untouched real mob has produced a real HP delta.
+    -- Position/ownership/CFrame persistence alone never promotes a secondary.
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
     if not IsAlive() then return 0, 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
@@ -8025,285 +8100,93 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    if not folder or not me then return 0, 0 end
+    local anchor = self.SharedAnchorModel
+    local anchorHum = anchor and anchor:FindFirstChildOfClass("Humanoid")
+    local anchorRoot = anchor and anchor:FindFirstChild("HumanoidRootPart")
+    if not folder or not me or not anchor or not anchor.Parent or not anchorHum
+        or anchorHum.Health <= 0 or not anchorRoot or not anchorRoot.Parent
+        or not IsEnemyNamed(anchor, self.SharedMobName) then
+        return 0, 0
+    end
 
     local now = tick()
     local maxSlots = math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3, 1, 3)
-    local scanEvery = math.max(0.02, tonumber(_G.Settings.SharedTeddyScanInterval) or 0.04)
     local fieldRange = math.max(220, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
-    local verifyRadius = math.max(8, tonumber(_G.Settings.TeddyTrioFollowVerifyRadius) or 18)
-    local stableDelay = math.max(0.08, tonumber(_G.Settings.TeddySequenceStableDelay) or 0.12)
-    local acquireRadius = math.max(20, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 55)
     local followEvery = math.max(0.02, tonumber(_G.Settings.TeddyTrioFollowInterval) or 0.03)
-    local leash = math.max(70, tonumber(_G.Settings.TeddyTrioFollowLeash) or 110)
-    local retryDelay = math.max(0.12, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.25)
+    local memberTimeout = math.max(1.2,
+        tonumber(_G.Settings.TeddyTrioMemberNoDamageTimeout) or 2.60)
+    local retryDelay = math.max(0.25,
+        tonumber(_G.Settings.TeddyTrioSecondaryRetry)
+            or tonumber(_G.Settings.TeddyTrioRetryDelay) or 1.10)
 
-    local remoteFirst = _G.Settings.TeddyTrioRemoteFirst ~= false
-    local remoteMaxDistance = math.max(220,
-        tonumber(_G.Settings.TeddyTrioRemoteMaxDistance) or fieldRange)
-    local remoteOwnerSettle = math.clamp(
-        tonumber(_G.Settings.TeddyTrioRemoteOwnerSettle) or 0.18, 0.08, 0.45)
-    local remoteProofTime = math.clamp(
-        tonumber(_G.Settings.TeddyTrioRemoteProofTime)
-            or tonumber(_G.Settings.ClusterRemotePullProofTime) or 0.20,
-        0.12, 0.55)
-    local remoteProofChecks = math.clamp(
-        math.floor(tonumber(_G.Settings.TeddyTrioRemoteProofChecks)
-            or tonumber(_G.Settings.ClusterRemotePullProofChecks) or 3),
-        2, 6)
-    local remoteSecondHold = math.clamp(
-        tonumber(_G.Settings.TeddyTrioRemoteSecondHold) or 0.16, 0.08, 0.35)
-    local remoteProofRadius = math.max(6,
-        tonumber(_G.Settings.TeddyTrioRemoteProofRadius) or 10)
-    local remoteRejectRadius = math.max(remoteProofRadius + 8,
-        tonumber(_G.Settings.TeddyTrioRemoteRejectRadius) or 30)
-    local remoteRetry = math.max(0.15,
-        tonumber(_G.Settings.TeddyTrioRemoteRetry)
-            or tonumber(_G.Settings.ClusterRemotePullRetry) or 0.35)
-    local remoteMaxFails = math.clamp(
-        math.floor(tonumber(_G.Settings.TeddyTrioRemoteMaxFails) or 1), 1, 3)
+    self.SharedTeddyBatch = self.SharedTeddyBatch or {}
+    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
+    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
+    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
+    self.SharedTrioLastFollow = self.SharedTrioLastFollow or setmetatable({}, {__mode="k"})
+    self.SharedTrioDamageProven = self.SharedTrioDamageProven or setmetatable({}, {__mode="k"})
+    self.SharedTrioOriginalPos = self.SharedTrioOriginalPos or setmetatable({}, {__mode="k"})
+    self.SharedTrioPulled = self.SharedTrioPulled or setmetatable({}, {__mode="k"})
+    self.SharedTrioLastHealth = self.SharedTrioLastHealth or setmetatable({}, {__mode="k"})
+    self.SharedTrioLastDamageAt = self.SharedTrioLastDamageAt or setmetatable({}, {__mode="k"})
 
     pcall(function() ExpandSimulationRadius() end)
 
-    self.SharedTeddyActive = true
-    self.SharedTeddyBatch = self.SharedTeddyBatch or {}
-    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-    self.SharedTrioPendingPos = self.SharedTrioPendingPos or setmetatable({}, {__mode="k"})
-    self.SharedTrioLastFollow = self.SharedTrioLastFollow or setmetatable({}, {__mode="k"})
-    self.SharedTrioRemoteProof = self.SharedTrioRemoteProof or setmetatable({}, {__mode="k"})
-    self.SharedTrioRemoteFails = self.SharedTrioRemoteFails or setmetatable({}, {__mode="k"})
-    self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
-    self.SharedTrioProofLease = self.SharedTrioProofLease or setmetatable({}, {__mode="k"})
-    self.SharedTrioDamageProven = self.SharedTrioDamageProven or setmetatable({}, {__mode="k"})
+    -- Exact requested anchor: the live position of the mob that already lost HP.
+    local anchorPos = anchorRoot.Position
+    self.SharedPileCFrame = CFrame.new(anchorPos)
+    self.SharedClassicCurrentPile = anchorPos
+    self.SharedTrioPullArmed = true
 
-    local center = self.SharedTrioFieldCenter or me.Position
-    local selected, selectedRoots = {}, setmetatable({}, {__mode="k"})
-
-    -- Keep current members first so an already-acquired trio does not get replaced
-    -- just because it followed the player away from the original camp center.
-    for _, entry in ipairs(self.SharedTeddyBatch) do
-        if #selected >= maxSlots then break end
-        local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
-        if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent
-            and not root.Anchored and IsEnemyNamed(mob, self.SharedMobName) then
-            local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
-                -- Preserve the real spawn-side position. Once this mob follows underfoot,
-                -- its live Position is no longer useful for deciding which remaining mobs
-                -- belong to the same local pack.
-                entry.Origin = entry.Origin or entry.Position or pos
-                entry.Position = pos
-                selected[#selected + 1] = entry
-                selectedRoots[root] = true
-            end
-        end
+    -- Anchor proof was earned before any bring write. Keep its real-HP lease fresh.
+    local anchorHP = tonumber(anchorHum.Health) or 0
+    local anchorPrevHP = tonumber(self.SharedTrioLastHealth[anchorRoot])
+    if anchorPrevHP == nil or anchorHP > anchorPrevHP + 0.01 then
+        self.SharedTrioLastDamageAt[anchorRoot] = now
+    elseif anchorHP < anchorPrevHP - 0.01 then
+        self.SharedTrioDamageProven[anchorRoot] = now
+        self.SharedTrioLastDamageAt[anchorRoot] = now
     end
+    self.SharedTrioLastHealth[anchorRoot] = anchorHP
+    self.SharedTeddyVerified[anchorRoot] = now
+    self.SharedTeddyQualified[anchorRoot] = now
+    self.SharedTrioDamageProven[anchorRoot] = self.SharedTrioDamageProven[anchorRoot] or now
+    self.SharedTrioLastDamageAt[anchorRoot] = self.SharedTrioLastDamageAt[anchorRoot] or now
 
-    -- Fill to three with exact same-name quest mobs only. v22.22.7 chooses a
-    -- dense LOCAL cluster first, borrowing the useful BringRange idea from the
-    -- reference source without its BodyPosition/ChangeState freeze path.
-    if #selected < maxSlots
-        and (forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery) then
-        self.SharedTeddyLastScanAt = now
-        local extras = {}
-        local searchRange = math.max(220,
-            tonumber(_G.Settings.TeddyTrioClusterSearchRadius) or fieldRange)
-        local clusterRadius = math.max(80,
-            tonumber(_G.Settings.TeddyTrioClusterRadius) or 260)
+    local selected = {{
+        Model=anchor, Humanoid=anchorHum, Root=anchorRoot,
+        Position=anchorPos, Origin=anchorPos, IsAnchor=true,
+    }}
 
-        for _, mob in ipairs(folder:GetChildren()) do
-            if IsEnemyNamed(mob, self.SharedMobName) then
-                local hum = mob:FindFirstChildOfClass("Humanoid")
-                local root = mob:FindFirstChild("HumanoidRootPart")
-                if hum and hum.Health > 0 and root and root.Parent and not root.Anchored
-                    and not selectedRoots[root] then
-                    local okPos, pos = pcall(function() return root.Position end)
-                    if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                        and IsSubmergedPosition(pos) == IsSubmergedPosition(center)
-                        and ((pos - center).Magnitude <= searchRange
-                            or (pos - me.Position).Magnitude <= math.min(searchRange, 500)) then
-                        extras[#extras + 1] = {
-                            Model = mob,
-                            Humanoid = hum,
-                            Root = root,
-                            Position = pos,
-                            Origin = pos,
-                            Dist = (pos - me.Position).Magnitude,
+    local candidates = {}
+    local center = self.SharedTrioFieldCenter or anchorPos
+    for _, mob in ipairs(folder:GetChildren()) do
+        if mob ~= anchor and IsEnemyNamed(mob, self.SharedMobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local ok, pos = pcall(function() return root.Position end)
+                if ok and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
+                    local origin = self.SharedTrioOriginalPos[root] or pos
+                    if (origin - center).Magnitude <= fieldRange
+                        or (origin - anchorPos).Magnitude <= fieldRange then
+                        self.SharedTrioOriginalPos[root] = origin
+                        candidates[#candidates + 1] = {
+                            Model=mob, Humanoid=hum, Root=root,
+                            Position=pos, Origin=origin,
+                            Dist=(origin-anchorPos).Magnitude,
                         }
                     end
                 end
             end
         end
-
-        if #extras > 0 then
-            local chosen = {}
-            local chosenCenter = nil
-
-            if #selected > 0 then
-                -- A partially verified batch stays tied to its ORIGINAL spawn cluster.
-                local sum = Vector3.zero
-                local count = 0
-                for _, entry in ipairs(selected) do
-                    local origin = entry.Origin or entry.Position
-                    if origin and IsValidPos(origin) then
-                        sum = sum + origin
-                        count = count + 1
-                    end
-                end
-                chosenCenter = count > 0 and (sum / count) or center
-                table.sort(extras, function(a, b)
-                    return (a.Origin - chosenCenter).Magnitude < (b.Origin - chosenCenter).Magnitude
-                end)
-                for _, entry in ipairs(extras) do
-                    if #selected + #chosen >= maxSlots then break end
-                    if (entry.Origin - chosenCenter).Magnitude <= clusterRadius * 1.45 then
-                        chosen[#chosen + 1] = entry
-                    end
-                end
-                -- If the live spawn is unusually spread out, fill the remaining slot(s)
-                -- with the nearest exact-name candidate instead of stalling forever.
-                if #selected + #chosen < maxSlots then
-                    local used = setmetatable({}, {__mode="k"})
-                    for _, entry in ipairs(chosen) do used[entry.Root] = true end
-                    for _, entry in ipairs(extras) do
-                        if #selected + #chosen >= maxSlots then break end
-                        if not used[entry.Root] then
-                            chosen[#chosen + 1] = entry
-                            used[entry.Root] = true
-                        end
-                    end
-                end
-            else
-                -- No existing members: find the densest group of up to three.
-                local bestGroup, bestCenter, bestCount, bestScore = nil, nil, -1, -math.huge
-                for _, seed in ipairs(extras) do
-                    local group = {}
-                    for _, entry in ipairs(extras) do
-                        if (entry.Origin - seed.Origin).Magnitude <= clusterRadius then
-                            group[#group + 1] = entry
-                        end
-                    end
-                    table.sort(group, function(a, b)
-                        return (a.Origin - seed.Origin).Magnitude < (b.Origin - seed.Origin).Magnitude
-                    end)
-                    while #group > maxSlots do table.remove(group) end
-
-                    if #group > 0 then
-                        local sum = Vector3.zero
-                        for _, entry in ipairs(group) do sum = sum + entry.Origin end
-                        local centroid = sum / #group
-                        local spread = 0
-                        for _, entry in ipairs(group) do
-                            spread = spread + (entry.Origin - centroid).Magnitude
-                        end
-                        spread = spread / #group
-                        local fieldDist = (centroid - center).Magnitude
-                        -- Count dominates; then prefer a tight pack close to the intended quest field.
-                        local score = (#group * 1000000) - (spread * 100) - fieldDist
-                        if #group > bestCount or (#group == bestCount and score > bestScore) then
-                            bestGroup, bestCenter, bestCount, bestScore = group, centroid, #group, score
-                        end
-                    end
-                end
-                chosen = bestGroup or {}
-                chosenCenter = bestCenter
-            end
-
-            for _, entry in ipairs(chosen) do
-                if #selected >= maxSlots then break end
-                if not selectedRoots[entry.Root] then
-                    selected[#selected + 1] = entry
-                    selectedRoots[entry.Root] = true
-                end
-            end
-
-            -- Stable centroid is based on Origin positions, not the moving underfoot pile.
-            local sum = Vector3.zero
-            local count = 0
-            for _, entry in ipairs(selected) do
-                local origin = entry.Origin or entry.Position
-                if origin and IsValidPos(origin) then
-                    sum = sum + origin
-                    count = count + 1
-                end
-            end
-            if count > 0 then
-                self.SharedTrioClusterCenter = sum / count
-            elseif chosenCenter then
-                self.SharedTrioClusterCenter = chosenCenter
-            end
-        end
+    end
+    table.sort(candidates, function(a,b) return a.Dist < b.Dist end)
+    for _, entry in ipairs(candidates) do
+        if #selected >= maxSlots then break end
+        selected[#selected + 1] = entry
     end
     self.SharedTeddyBatch = selected
-
-    -- Moving under-foot pile. Raycast ignores the character + NPCs so the Y target
-    -- is the actual map surface rather than another enemy's body.
-    me = HRP() or me
-    local fallbackDepth = math.clamp(
-        tonumber(_G.Settings.SharedFarmHeight)
-            or tonumber(_G.Settings.FarmHeight) or 25,
-        10, 34
-    )
-    local pileY = me.Position.Y - fallbackDepth
-    pcall(function()
-        local params = RaycastParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
-        local ignore = {folder}
-        local c = Char()
-        if c then ignore[#ignore + 1] = c end
-        params.FilterDescendantsInstances = ignore
-        params.IgnoreWater = false
-        local hit = workspace:Raycast(
-            me.Position + Vector3.new(0, 5, 0),
-            Vector3.new(0, -220, 0),
-            params
-        )
-        if hit and hit.Position and IsValidPos(hit.Position) then
-            local newY = hit.Position.Y + 2
-            -- Vertical hysteresis prevents a tunnel roof / stair edge from instantly
-            -- throwing a verified pile to a different floor while X/Z follows normally.
-            local oldY = tonumber(self.SharedTrioGroundY)
-            if oldY == nil or math.abs(newY - oldY) <= 18 then
-                self.SharedTrioGroundY = newY
-            elseif math.abs(me.Position.Y - newY) <= fallbackDepth + 10 then
-                self.SharedTrioGroundY = newY
-            end
-        end
-    end)
-    if tonumber(self.SharedTrioGroundY) then pileY = self.SharedTrioGroundY end
-
-    local pilePos = Vector3.new(
-        me.Position.X,
-        pileY + (tonumber(_G.Settings.TeddyTrioGroundOffset) or 0),
-        me.Position.Z
-    )
-    if not IsSubmergedPosition(pilePos) then
-        pilePos = Vector3.new(pilePos.X, math.max(_G.Settings.MinY or 10, pilePos.Y), pilePos.Z)
-    end
-    self.SharedPileCFrame = CFrame.new(pilePos)
-    self.SharedClassicCurrentPile = pilePos
-
-    local acquireModel = self.SharedTeddyAcquireModel
-    local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
-
-    local function preparePhysical(mob, hum, root)
-        -- Do not freeze Humanoid movement/rotation. Earlier hard-freeze variants
-        -- could leave locally held NPCs looking like statues after ownership changed.
-        -- The moving pile already rewrites only owned/proven roots, so collision
-        -- softening is enough here and is fully restored on release.
-        self:SharedRemember(root, "Part")
-        pcall(function()
-            root.CanCollide = false
-            local head = mob:FindFirstChild("Head")
-            if head and head:IsA("BasePart") then
-                self:SharedRemember(head, "Part")
-                head.CanCollide = false
-            end
-        end)
-    end
 
     local function snap(root, pos)
         return pcall(function()
@@ -8316,237 +8199,112 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end)
     end
 
-    local function failRemote(mob, root)
-        self.SharedTrioRemoteProof[root] = nil
-        self.SharedTrioOwnerProbeUntil[root] = nil
-        self.SharedTrioProofLease[root] = nil
-        if _G.Settings.TeddyTrioStandOffRemoteOnly ~= false then
-            -- Stand-off mode never converts a failed far proof into a per-mob chase.
-            -- Reset the fail budget after a short backoff and probe again from here.
-            self.SharedTrioRemoteFails[root] = 0
-        else
-            self.SharedTrioRemoteFails[root] =
-                (tonumber(self.SharedTrioRemoteFails[root]) or 0) + 1
+    local function revoke(entry, reason)
+        local mob, root = entry.Model, entry.Root
+        self.SharedTeddyVerified[root] = nil
+        self.SharedTeddyQualified[root] = nil
+        self.SharedTrioDamageProven[root] = nil
+        self.SharedTrioPulled[root] = nil
+        self.SharedTrioLastHealth[root] = nil
+        self.SharedTrioLastDamageAt[root] = nil
+        self.SharedTeddyRetryAfter[root] = now + retryDelay
+        if self.SharedTrioProofTarget == mob then
+            self.SharedTrioProofTarget = nil
+            self.SharedTrioProofLastHealth = nil
+            self.SharedTrioProofStartedAt = 0
         end
-        self.SharedTeddyRetryAfter[root] = now + remoteRetry
-        -- Do not restore an old position here. The server remains authoritative
-        -- and will already have snapped a failed remote trial to its real position.
-        if mob then self:SharedRestoreOne(mob) end
+        local origin = self.SharedTrioOriginalPos[root]
+        if origin and IsValidPos(origin) then
+            pcall(function()
+                local rot = root.CFrame.Rotation
+                root.CFrame = CFrame.new(origin) * rot
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+        self:SharedRestoreOne(mob)
+        if reason then DLog("TRIO-PROOF", tostring(reason) .. ": " .. tostring(mob and mob.Name)) end
     end
 
-    local verifiedCount = 0
-    local remotePendingCount = 0
-
-    for _, entry in ipairs(selected) do
+    local verifiedCount, pendingCount = 1, 0
+    for i=2,#selected do
+        local entry = selected[i]
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent then
-            local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) then
-                local verifiedAt = self.SharedTeddyVerified[root]
-                local pendingAt = self.SharedTeddyPendingAt[root]
-                local pendingPos = self.SharedTrioPendingPos[root]
-                local remoteProof = self.SharedTrioRemoteProof[root]
-                local owner = ClientOwnsMob(root)
+            local hp = tonumber(hum.Health) or 0
+            local prev = tonumber(self.SharedTrioLastHealth[root])
+            if prev == nil or hp > prev + 0.01 then
+                self.SharedTrioLastDamageAt[root] = now
+            elseif hp < prev - 0.01 then
+                -- Only REAL server-observed HP movement promotes the secondary.
+                self.SharedTrioDamageProven[root] = now
+                self.SharedTrioLastDamageAt[root] = now
+                self.SharedTeddyVerified[root] = now
+                self.SharedTeddyQualified[root] = now
+            end
+            self.SharedTrioLastHealth[root] = hp
 
-                -- Near-acquire compatibility proof from v22.22.
-                if not verifiedAt and pendingAt and pendingPos then
-                    if now - pendingAt >= stableDelay then
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTrioPendingPos[root] = nil
-                        if (pos - pendingPos).Magnitude <= verifyRadius then
-                            self.SharedTeddyVerified[root] = now
-                            self.SharedTeddyQualified[root] = now
-                            self.SharedTrioLastFollow[root] = 0
-                            self.SharedTrioRemoteFails[root] = 0
-                            verifiedAt = now
-                        else
-                            self.SharedTeddyRetryAfter[root] = now + retryDelay
-                        end
-                    end
-                end
-
-                -- UNKNOWN-owner remote proof. There are NO rewrites while this runs.
-                -- Passing phase 1 merely starts a second no-write hold; only phase 2
-                -- promotes the mob to a moving follow lease.
-                if not verifiedAt and remoteProof then
-                    remotePendingCount = remotePendingCount + 1
-                    local distProof = (pos - remoteProof.Anchor).Magnitude
-                    if distProof <= remoteProofRadius then
-                        if now - (remoteProof.LastCheckAt or 0) >= 0.045 then
-                            remoteProof.LastCheckAt = now
-                            remoteProof.Checks = (remoteProof.Checks or 0) + 1
-                        end
-
-                        if not remoteProof.Phase2At
-                            and now - (remoteProof.StartedAt or now) >= remoteProofTime
-                            and (remoteProof.Checks or 0) >= remoteProofChecks then
-                            remoteProof.Phase2At = now
-                        elseif remoteProof.Phase2At
-                            and now - remoteProof.Phase2At >= remoteSecondHold then
-                            self.SharedTrioRemoteProof[root] = nil
-                            self.SharedTeddyVerified[root] = now
-                            self.SharedTeddyQualified[root] = now
-                            self.SharedTrioProofLease[root] = now
-                            self.SharedTrioLastFollow[root] = 0
-                            self.SharedTrioRemoteFails[root] = 0
-                            verifiedAt = now
-                            remotePendingCount = math.max(0, remotePendingCount - 1)
-                        end
-                    elseif distProof >= remoteRejectRadius
-                        or now - (remoteProof.StartedAt or now)
-                            > remoteProofTime + remoteSecondHold + 0.45 then
-                        failRemote(mob, root)
-                        remoteProof = nil
-                        remotePendingCount = math.max(0, remotePendingCount - 1)
-                    end
-                end
-
-                if verifiedAt then
-                    local proofLease = self.SharedTrioProofLease[root]
-                    local damageAt = self.SharedTrioDamageProven[root]
-                    local damageFresh = damageAt ~= nil
-                        and now - damageAt <= math.max(1.0,
-                            tonumber(_G.Settings.TeddyTrioDamageProofTTL) or 3.0)
-                    if owner == false and not damageFresh then
-                        -- v22.22.8 NO-GHOST invariant: explicit server ownership cannot be
-                        -- upgraded by local position persistence alone.
-                        self.SharedTeddyVerified[root] = nil
-                        self.SharedTeddyQualified[root] = nil
-                        self.SharedTeddyPendingAt[root] = nil
-                        self.SharedTrioPendingPos[root] = nil
-                        self.SharedTrioRemoteProof[root] = nil
-                        self.SharedTrioProofLease[root] = nil
-                        self.SharedTrioDamageProven[root] = nil
-                        self.SharedTeddyRetryAfter[root] = now
-                            + math.max(retryDelay, tonumber(_G.Settings.TeddyTrioGhostRetry) or 2.5)
-                        self:SharedRestoreOne(mob)
-                    else
-                        local driftBefore = (pos - pilePos).Magnitude
-                        local verifiedSince = tonumber(self.SharedTeddyQualified[root]) or verifiedAt
-                        local staleUnknown = owner == nil
-                            and driftBefore > leash
-                            and now - verifiedSince > math.max(0.14, followEvery * 3)
-                        local staleProof = owner == false and proofLease
-                            and driftBefore > leash
-                            and now - proofLease > math.max(0.14, followEvery * 3)
-                        if staleUnknown or staleProof then
-                            self.SharedTeddyVerified[root] = nil
-                            self.SharedTeddyQualified[root] = nil
-                            self.SharedTrioRemoteProof[root] = nil
-                            self.SharedTrioProofLease[root] = nil
-                            self.SharedTeddyRetryAfter[root] = now + remoteRetry
-                            self:SharedRestoreOne(mob)
-                        else
-                            preparePhysical(mob, hum, root)
-                            if now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
-                                self.SharedTrioLastFollow[root] = now
-                                snap(root, pilePos)
-                            end
-                            self.SharedTeddyVerified[root] = now
-                            verifiedCount = verifiedCount + 1
-                        end
-                    end
+            local damageAt = self.SharedTrioDamageProven[root]
+            local lastDamage = tonumber(self.SharedTrioLastDamageAt[root]) or 0
+            if damageAt then
+                if now - lastDamage > memberTimeout then
+                    revoke(entry, "LIVENESS-EXPIRED")
+                    pendingCount = pendingCount + 1
                 else
-                    local distPlayer = (pos - me.Position).Magnitude
-                    local closeToPlayer = distPlayer <= acquireRadius
-                    local isAcquire = acquireRoot == root
-                    local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
-                    local remoteFails = tonumber(self.SharedTrioRemoteFails[root]) or 0
-
-                    if retryReady and owner == true then
-                        -- Strongest path: actual ownership means all three can be pulled
-                        -- from far in the same scan without visiting them.
-                        self.SharedTrioOwnerProbeUntil[root] = nil
-                        self.SharedTrioRemoteProof[root] = nil
-                        self.SharedTrioProofLease[root] = nil
-                        preparePhysical(mob, hum, root)
-                        if snap(root, pilePos) then
-                            self.SharedTeddyVerified[root] = now
-                            self.SharedTeddyQualified[root] = now
+                    self.SharedTeddyVerified[root] = now
+                    self.SharedTeddyQualified[root] = now
+                    if now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
+                        self.SharedTrioLastFollow[root] = now
+                        snap(root, anchorPos)
+                    end
+                    verifiedCount = verifiedCount + 1
+                end
+            else
+                local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
+                if retryReady then
+                    -- Pull is only an UNTRUSTED trial until this exact mob loses HP.
+                    if not self.SharedTrioPulled[root] then
+                        self.SharedTrioOriginalPos[root] = self.SharedTrioOriginalPos[root] or entry.Origin
+                        if snap(root, anchorPos) then
+                            self.SharedTrioPulled[root] = now
+                            self.SharedTrioLastHealth[root] = hp
                             self.SharedTrioLastFollow[root] = now
-                            self.SharedTrioRemoteFails[root] = 0
-                            verifiedCount = verifiedCount + 1
                         end
-
-                    elseif remoteFirst and retryReady and owner == false
-                        and distPlayer <= remoteMaxDistance and remoteFails < remoteMaxFails then
-                        -- v22.22.8: owner=false is authoritative. Keep SimulationRadius hot,
-                        -- but never CFrame a root that the executor explicitly reports as
-                        -- server-owned. The old one-shot false-owner snap was the immortal
-                        -- visual-ghost path seen in the supplied screenshot.
-                        local untilAt = tonumber(self.SharedTrioOwnerProbeUntil[root]) or 0
-                        if untilAt <= 0 then
-                            self.SharedTrioOwnerProbeUntil[root] = now + remoteOwnerSettle
-                            remotePendingCount = remotePendingCount + 1
-                        elseif now < untilAt then
-                            remotePendingCount = remotePendingCount + 1
-                        else
-                            self.SharedTrioOwnerProbeUntil[root] = nil
-                            self.SharedTeddyRetryAfter[root] = now
-                                + math.max(remoteRetry,
-                                    tonumber(_G.Settings.TeddyTrioStandOffOwnerRetry) or 0.20)
-                            remotePendingCount = remotePendingCount + 1
-                            self.SharedTrioRemoteProof[root] = nil
-                            self.SharedTrioProofLease[root] = nil
-                            self.SharedTrioDamageProven[root] = nil
-                        end
-
-                    elseif remoteFirst and retryReady and owner == nil
-                        and distPlayer <= remoteMaxDistance
-                        and remoteFails < remoteMaxFails
-                        and not remoteProof and not pendingAt then
-                        -- No owner API exists. One far CFrame write is allowed only as a
-                        -- trial. We deliberately do NOT freeze Humanoid/CanCollide here.
-                        if snap(root, pilePos) then
-                            self.SharedTrioRemoteProof[root] = {
-                                Anchor = pilePos,
-                                StartedAt = now,
-                                LastCheckAt = 0,
-                                Checks = 0,
-                                Phase2At = nil,
-                            }
-                            remotePendingCount = remotePendingCount + 1
-                        else
-                            failRemote(mob, root)
-                        end
-
-                    elseif retryReady and owner == nil and isAcquire and closeToPlayer
-                        and not self.SharedTeddyPendingAt[root]
-                        and not self.SharedTrioRemoteProof[root] then
-                        -- Remote proof already failed or was disabled: close fallback.
-                        -- Only now do we apply temporary physical preparation.
-                        preparePhysical(mob, hum, root)
-                        if snap(root, pilePos) then
-                            self.SharedTeddyPendingAt[root] = now
-                            self.SharedTrioPendingPos[root] = pilePos
-                        end
+                    elseif now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
+                        self.SharedTrioLastFollow[root] = now
+                        snap(root, anchorPos)
                     end
                 end
+                pendingCount = pendingCount + 1
             end
         end
     end
 
     self.SharedBringCount = verifiedCount
-    self.SharedTrioRemotePendingCount = remotePendingCount
+    self.SharedTrioRemotePendingCount = pendingCount
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TRIO-REMOTE %d/%d • probe %d")
-            :format(verifiedCount, #selected, remotePendingCount)
+        _G.BobonDiagnostics.Bring = ("SEED-ANCHOR %d/%d • proof %d")
+            :format(verifiedCount, #selected, pendingCount)
         _G.BobonDiagnostics.BringCandidates = #selected
         _G.BobonDiagnostics.BringMoved = verifiedCount
-        _G.BobonDiagnostics.BringFailed = math.max(0, #selected - verifiedCount)
+        _G.BobonDiagnostics.BringFailed = math.max(0, #selected-verifiedCount)
     end
     return verifiedCount, #selected
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    -- v22.22.5 STAND-OFF REMOTE MAGNET
-    -- The player does NOT visit unresolved mobs one-by-one. Farm parks once above the
-    -- active quest field, keeps SimulationRadius hot, and lets SharedTeddyRestack pull
-    -- every usable same-name root into the under-foot pile from that fixed safe hover.
+    -- v22.23.1: v22.23 real-hit anchor flow + bounded long-range attack window:
+    -- REAL MOB -> HP DELTA -> THAT MOB IS ANCHOR -> PULL OTHERS -> HP-PROVE EACH SECONDARY.
     if _G.Settings.SharedSourceFarmMode == false then return false end
     if type(mobName) ~= "string" or mobName == "" then return false end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
-    if not IsAlive() then return true end
+    if not IsAlive() then
+        self.SharedTrioPullArmed = false
+        self.SharedAnchorModel = nil
+        self.SharedTrioSeedModel = nil
+        self.SharedTrioProofTarget = nil
+        return true
+    end
 
     local prefix = tostring(statusPrefix or "Farm")
     if self.SharedMobName and string.lower(tostring(self.SharedMobName)) ~= string.lower(mobName) then
@@ -8554,167 +8312,367 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     end
     self.SharedMobName = mobName
     self.SharedTeddyActive = true
-
     if typeof(fallbackCF) == "CFrame" then
         self.SharedTrioFieldCenter = fallbackCF.Position
     elseif typeof(fallbackCF) == "Vector3" then
         self.SharedTrioFieldCenter = fallbackCF
-    elseif self.SharedTrioFieldCenter == nil then
-        local h = HRP()
-        self.SharedTrioFieldCenter = h and h.Position or nil
     end
 
     self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
+    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
     self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-    self.SharedTrioRemoteProof = self.SharedTrioRemoteProof or setmetatable({}, {__mode="k"})
-    self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
+    self.SharedTrioDamageProven = self.SharedTrioDamageProven or setmetatable({}, {__mode="k"})
+    self.SharedTrioOriginalPos = self.SharedTrioOriginalPos or setmetatable({}, {__mode="k"})
+    self.SharedTrioPulled = self.SharedTrioPulled or setmetatable({}, {__mode="k"})
+    self.SharedTrioLastHealth = self.SharedTrioLastHealth or setmetatable({}, {__mode="k"})
+    self.SharedTrioLastDamageAt = self.SharedTrioLastDamageAt or setmetatable({}, {__mode="k"})
 
-    -- Hard-clear the old close-acquire route. This is the key behavioral change:
-    -- no HumanoidRootPart from a quest mob becomes a TravelManager destination.
-    self.SharedTeddyAcquireModel = nil
-    self.SharedTeddyAcquireRoot = nil
-    self.SharedTeddyAcquireStartedAt = 0
-    self.SharedTeddyAcquireTaggedAt = 0
-
+    local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    if not me then return true end
+    if not folder or not me then return true end
+    local now = tick()
 
-    -- Park at one high field point. fallbackCF is q.MC / current quest farm center;
-    -- the mob pile then follows this player X/Z and stays on the ground below it.
-    local baseCF = nil
-    if typeof(fallbackCF) == "CFrame" then
-        baseCF = fallbackCF
-    elseif typeof(fallbackCF) == "Vector3" then
-        baseCF = CFrame.new(fallbackCF)
-    elseif self.SharedTrioFieldCenter then
-        baseCF = CFrame.new(self.SharedTrioFieldCenter)
-    else
-        baseCF = CFrame.new(me.Position)
+    local function validMob(m)
+        if not m or not m.Parent or not IsEnemyNamed(m, mobName) then return false end
+        local h = m:FindFirstChildOfClass("Humanoid")
+        local r = m:FindFirstChild("HumanoidRootPart")
+        return h ~= nil and h.Health > 0 and r ~= nil and r.Parent ~= nil
+            and not r.Anchored and IsAllowedWorldPosition(r.Position)
     end
 
-    local standHeight = math.clamp(
-        tonumber(_G.Settings.TeddyTrioStandOffHeight) or 30,
-        18, 45
-    )
-    local standBase = baseCF
-    if _G.Settings.TeddyTrioUseClusterStandPoint ~= false
-        and self.SharedTrioClusterCenter and IsValidPos(self.SharedTrioClusterCenter) then
-        -- Move ONCE to the stable centroid of the three original spawn positions.
-        -- This improves simulation/ownership coverage without chasing Mob1→Mob2→Mob3.
-        standBase = CFrame.new(self.SharedTrioClusterCenter)
-    end
-    local standCF = standBase * CFrame.new(0, standHeight, 0)
-    if _G.State:CanRequestTravel() then
-        TravelManager:Request(standCF, "Farm", {
-            arrivalThreshold = math.max(7, tonumber(_G.Settings.TeddyTrioStandOffArrival) or 12),
-            fallback = fallbackCF or baseCF,
-            combatHover = true,
-            persistent = true,
-            speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-        })
-    end
-
-    pcall(function() ExpandSimulationRadius() end)
-    local verified, total = self:SharedTeddyRestack(true)
-    local batch = self.SharedTeddyBatch or {}
-
-    if total <= 0 then
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Stand-off • Waiting " .. mobName
-        _G.BobonStatus = prefix .. ": Trio • waiting " .. mobName
-        return true
-    end
-
-    -- Restack again after the movement/simulation request. Explicit owner=true roots
-    -- can enter the pile immediately; unknown-owner trials continue without player travel.
-    pcall(function() ExpandSimulationRadius() end)
-    verified, total = self:SharedTeddyRestack(false)
-
-    local wanted = math.min(math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3, 1, 3), total)
-    local primary = nil
-    for _, entry in ipairs(batch) do
-        local root = entry.Root
-        local hum = entry.Humanoid
-        if root and root.Parent and hum and hum.Health > 0 and self.SharedTeddyVerified[root] then
-            primary = entry.Model
-            break
+    local function restoreVisualPulls()
+        if type(self.SharedTrioOriginalPos) == "table" then
+            for root, origin in pairs(self.SharedTrioOriginalPos) do
+                if root and root.Parent and typeof(origin) == "Vector3" then
+                    pcall(function()
+                        local rot = root.CFrame.Rotation
+                        root.CFrame = CFrame.new(origin) * rot
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                end
+            end
         end
+        self.SharedTeddyBatch = {}
+        self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
+        self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
+        self.SharedTrioDamageProven = setmetatable({}, {__mode="k"})
+        self.SharedTrioOriginalPos = setmetatable({}, {__mode="k"})
+        self.SharedTrioPulled = setmetatable({}, {__mode="k"})
+        self.SharedTrioLastHealth = setmetatable({}, {__mode="k"})
+        self.SharedTrioLastDamageAt = setmetatable({}, {__mode="k"})
+        self.SharedTrioPullArmed = false
+        self.SharedPileCFrame = nil
+        self.SharedBringCount = 0
     end
 
-    -- Damage never waits for all three. As soon as one remote member is proven, keep
-    -- attacking it while the remaining slots continue to remote-acquire in parallel.
-    local attempted = false
-    if primary then
-        _G.State.FarmTarget = primary
-        _G.State.CurrentTarget = primary
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_ATTACK"
-        _G.State.ActionText = verified < wanted
-            and ("Stand-off Magnet + Attack • " .. mobName)
-            or ("Attack Remote Trio • " .. mobName)
-        PrepareCombatTarget(primary)
-        EquipCombatTool()
-        attempted = Attack(primary, mobName)
+    -- The anchor must always be a mob that earned HP proof BEFORE it was pulled.
+    local anchor = self.SharedAnchorModel
+    if anchor and not validMob(anchor) then
+        restoreVisualPulls()
+        self.SharedAnchorModel = nil
+        self.SharedTrioSeedModel = nil
+        self.SharedTrioSeedLastHealth = nil
+        self.SharedTrioSeedStartedAt = 0
+        self.SharedTrioSeedAttempted = false
+        self.SharedTrioLongRangeFallbackUntil = 0
+        self.SharedTrioProofTarget = nil
+        self.SharedTrioProofLastHealth = nil
+        self.SharedTrioProofStartedAt = 0
+        anchor = nil
+    end
 
-        -- v22.22.8: SharedFarmTick returns before the legacy/global damage watchdog.
-        -- Validate REAL Humanoid HP here so a visual remote pull can never be attacked
-        -- forever when the server still owns that NPC.
-        if self:SharedPrimaryNoDamage(primary, attempted == true) then
-            local root = primary:FindFirstChild("HumanoidRootPart")
-            if root then
-                self.SharedTeddyVerified[root] = nil
-                self.SharedTeddyQualified[root] = nil
-                self.SharedTeddyPendingAt[root] = nil
-                self.SharedTrioPendingPos[root] = nil
-                self.SharedTrioRemoteProof[root] = nil
-                self.SharedTrioProofLease[root] = nil
-                self.SharedTrioDamageProven[root] = nil
-                self.SharedTrioOwnerProbeUntil[root] = nil
-                self.SharedTeddyRetryAfter[root] = tick()
-                    + math.max(0.8, tonumber(_G.Settings.TeddyTrioGhostRetry) or 2.5)
+    -- PHASE 1: attack ONE untouched real mob at its live position. Bring is OFF.
+    if not anchor then
+        self.SharedTrioPullArmed = false
+        local seed = self.SharedTrioSeedModel
+        if not validMob(seed) then
+            seed = nil
+            local bestDist = math.huge
+            local fieldCenter = self.SharedTrioFieldCenter
+            local fieldRange = math.max(220, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
+            for _, mob in ipairs(folder:GetChildren()) do
+                if validMob(mob) then
+                    local root = mob:FindFirstChild("HumanoidRootPart")
+                    local pos = root.Position
+                    if not fieldCenter or (pos-fieldCenter).Magnitude <= fieldRange then
+                        local d = (pos-me.Position).Magnitude
+                        if d < bestDist then seed, bestDist = mob, d end
+                    end
+                end
             end
-            self:SharedRestoreOne(primary)
-            local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
-            if failingBackend then
-                CombatController:FailBackend(failingBackend, "TEDDY-REAL-HP-NO-DAMAGE")
-            else
-                CombatController:AbortPending("TEDDY-REAL-HP-NO-DAMAGE")
-            end
-            self.SharedPrimaryRecoveryUntil = tick()
-                + math.max(0.35, tonumber(_G.Settings.SharedPrimaryRecoveryCooldown) or 1.0)
+            self.SharedTrioSeedModel = seed
+            self.SharedTrioSeedLastHealth = nil
+            self.SharedTrioSeedStartedAt = now
+            self.SharedTrioSeedAttempted = false
+            -- Never inherit visual verification into the next real seed.
+            self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
+            self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
+        end
+
+        if not seed then
             _G.State.FarmTarget = nil
             _G.State.CurrentTarget = nil
-            _G.State.FState = "SHARED_REJECT_GHOST"
-            _G.State.ActionText = "Reject Ghost • " .. mobName
-            _G.BobonStatus = prefix .. ": Rejecting no-damage mob • " .. mobName
-            if _G.BobonDiagnostics then
-                _G.BobonDiagnostics.Bring = "TRIO-GHOST-REJECT"
+            _G.State.FState = "SEED_WAIT"
+            _G.State.ActionText = "Waiting Real Mob • " .. mobName
+            _G.BobonStatus = prefix .. ": waiting real " .. mobName
+            if fallbackCF and _G.State:CanRequestTravel() then
+                local cf = typeof(fallbackCF)=="CFrame" and fallbackCF or CFrame.new(fallbackCF)
+                TravelManager:Request(cf * CFrame.new(0, tonumber(_G.Settings.TeddyTrioSeedHover) or 24, 0), "Farm", {
+                    arrivalThreshold=18, fallback=fallbackCF, combatHover=true, persistent=false,
+                })
             end
             return true
         end
 
-        verified, total = self:SharedTeddyRestack(false)
-    else
-        self:SharedPrimaryNoDamage(nil, false)
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Stand-off Remote Magnet • " .. mobName
+        local hum = seed:FindFirstChildOfClass("Humanoid")
+        local root = seed:FindFirstChild("HumanoidRootPart")
+        local hp = tonumber(hum.Health) or 0
+        local prev = tonumber(self.SharedTrioSeedLastHealth)
+        if prev ~= nil and hp < prev - 0.01 then
+            -- CAUSAL REAL HP DELTA. Only now may any bring begin.
+            self.SharedAnchorModel = seed
+            self.SharedTrioSeedModel = nil
+            self.SharedTrioSeedLastHealth = nil
+            self.SharedTrioSeedStartedAt = 0
+            self.SharedTrioSeedAttempted = false
+            self.SharedTrioLongRangeFallbackUntil = 0
+            self.SharedTrioPullArmed = true
+            self.SharedPileCFrame = CFrame.new(root.Position)
+            self.SharedTrioDamageProven[root] = now
+            self.SharedTrioLastHealth[root] = hp
+            self.SharedTrioLastDamageAt[root] = now
+            self.SharedTeddyVerified[root] = now
+            self.SharedTeddyQualified[root] = now
+            _G.State.FarmTarget = seed
+            _G.State.CurrentTarget = seed
+            _G.State.FState = "SEED_CONFIRMED"
+            _G.State.ActionText = "Real Hit Confirmed • Anchor " .. mobName
+            _G.BobonStatus = prefix .. ": REAL HIT ✓ • anchor locked • pulling next"
+            if _G.BobonDiagnostics then _G.BobonDiagnostics.Bring = "SEED-HP-PROVEN" end
+            return true
+        end
+        self.SharedTrioSeedLastHealth = hp
+
+        local seedHover = math.max(8, tonumber(_G.Settings.TeddyTrioSeedHover) or 24)
+        me = HRP() or me
+        local flatDist = (Vector3.new(me.Position.X,0,me.Position.Z)
+            - Vector3.new(root.Position.X,0,root.Position.Z)).Magnitude
+        local normalRange = math.max(35, tonumber(_G.Settings.TeddyLongRangeFallbackRange)
+            or tonumber(_G.Settings.TeddyTrioSeedAttackRange) or 100)
+        local longRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
+            and math.max(normalRange, tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
+            or normalRange
+        local forceClose = now < (tonumber(self.SharedTrioLongRangeFallbackUntil) or 0)
+        local attackRange = forceClose and normalRange or longRange
+
+        -- Long-range first: once inside the allowed remote-hit window, STOP moving closer.
+        -- Only a real HP delta can validate this; a rejected remote hit falls back to 100 studs.
+        if flatDist > attackRange then
+            local seedCF = root.CFrame * CFrame.new(0, seedHover, 0)
+            if _G.State:CanRequestTravel() then
+                TravelManager:Request(seedCF, "Farm", {
+                    arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
+                    fallback=fallbackCF, combatHover=true, persistent=true,
+                    speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+                })
+            end
+        elseif _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+            TravelManager:Stop("LongRangeSeedWindow")
+        end
+
+        local attempted = false
+        _G.State.FarmTarget = seed
+        _G.State.CurrentTarget = seed
+        if flatDist <= attackRange then
+            _G.State.LongRangeFarmAttackRange = attackRange
+            _G.State.LongRangeFarmAttackUntil = now + 0.30
+            PrepareCombatTarget(seed)
+            EquipCombatTool()
+            attempted = Attack(seed, mobName)
+            self.SharedTrioSeedAttempted = self.SharedTrioSeedAttempted or attempted
+        end
+
+        local longProbeTimeout = math.max(0.6, tonumber(_G.Settings.TeddyLongRangeProbeTimeout) or 1.20)
+        local proofTimeout = math.max(longProbeTimeout, tonumber(_G.Settings.TeddyTrioSeedProofTimeout) or 2.20)
+        local elapsed = now - (tonumber(self.SharedTrioSeedStartedAt) or now)
+        if self.SharedTrioSeedAttempted and elapsed >= longProbeTimeout
+            and flatDist > normalRange and not forceClose then
+            -- Long-range packet reached the dispatch layer but the server gave no HP proof.
+            -- Treat that as RANGE rejection first, not a broken backend. Approach only to the
+            -- normal verified window for a bounded time and retry the same untouched seed.
+            self.SharedTrioLongRangeFallbackUntil = now
+                + math.max(1.0, tonumber(_G.Settings.TeddyLongRangeFallbackHold) or 3.00)
+            self.SharedTrioSeedStartedAt = now
+            self.SharedTrioSeedLastHealth = hp
+            self.SharedTrioSeedAttempted = false
+            if CombatController.PendingBackend then
+                CombatController:AbortPending("LONG-RANGE-NO-HP-FALLBACK")
+            end
+        elseif self.SharedTrioSeedAttempted and elapsed >= proofTimeout then
+            -- At normal range, continued no-HP is now a real combat backend problem.
+            local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
+            if failingBackend then CombatController:FailBackend(failingBackend, "SEED-REAL-HP-NO-DELTA")
+            else CombatController:AbortPending("SEED-REAL-HP-NO-DELTA") end
+            self.SharedTrioSeedStartedAt = now
+            self.SharedTrioSeedLastHealth = hp
+            self.SharedTrioSeedAttempted = false
+        end
+
+        _G.State.FState = "SEED_REAL_ATTACK"
+        _G.State.ActionText = "Real HP Proof • " .. mobName
+        _G.BobonStatus = ("%s: REAL HIT PROOF • %s • hit %s")
+            :format(prefix, mobName, attempted and "ACTIVE" or "APPROACH")
+        return true
     end
 
-    local remotePending = tonumber(self.SharedTrioRemotePendingCount) or 0
-    if verified < wanted then
-        _G.BobonStatus = ("%s: Trio • REMOTE MAGNET %d/%d • probe %d • hit %s")
-            :format(prefix, verified, wanted, remotePending,
-                attempted and "ACTIVE" or "WAIT")
+    -- PHASE 2: seed is proven. Stay above THAT live mob and pull others to it.
+    local anchorHum = anchor:FindFirstChildOfClass("Humanoid")
+    local anchorRoot = anchor:FindFirstChild("HumanoidRootPart")
+    if not anchorHum or anchorHum.Health <= 0 or not anchorRoot then return true end
+    local anchorHover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover) or 24)
+    me = HRP() or me
+    local anchorFlatDist = (Vector3.new(me.Position.X,0,me.Position.Z)
+        - Vector3.new(anchorRoot.Position.X,0,anchorRoot.Position.Z)).Magnitude
+    local anchorLongRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
+        and math.max(_G.Settings.FastAttackRange or 100,
+            tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
+        or (_G.Settings.FastAttackRange or 100)
+    if anchorFlatDist > anchorLongRange then
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(anchorRoot.CFrame * CFrame.new(0, anchorHover, 0), "Farm", {
+                arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
+                fallback=fallbackCF, combatHover=true, persistent=true,
+                speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+    elseif _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
+        TravelManager:Stop("LongRangeAnchorWindow")
+    end
+
+    local verified, total = self:SharedTeddyRestack(true)
+    local batch = self.SharedTeddyBatch or {}
+
+    -- Choose ONE unproven pulled secondary. It gets its own causal HP proof.
+    local proof = self.SharedTrioProofTarget
+    local proofEntry = nil
+    if proof then
+        for _, entry in ipairs(batch) do
+            if entry.Model == proof then proofEntry=entry; break end
+        end
+        if not proofEntry or not validMob(proof)
+            or self.SharedTrioDamageProven[proofEntry.Root] then
+            proof = nil
+            proofEntry = nil
+            self.SharedTrioProofTarget = nil
+            self.SharedTrioProofLastHealth = nil
+            self.SharedTrioProofStartedAt = 0
+        end
+    end
+    if not proof then
+        for i=2,#batch do
+            local entry=batch[i]
+            local root=entry.Root
+            if root and root.Parent and self.SharedTrioPulled[root]
+                and not self.SharedTrioDamageProven[root]
+                and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
+                proof, proofEntry = entry.Model, entry
+                self.SharedTrioProofTarget = proof
+                self.SharedTrioProofLastHealth = entry.Humanoid.Health
+                self.SharedTrioProofStartedAt = now
+                break
+            end
+        end
+    end
+
+    local attackTarget = anchor
+    local phase = "ANCHOR_ATTACK"
+    if proof and proofEntry then
+        local hum, root = proofEntry.Humanoid, proofEntry.Root
+        local hp = tonumber(hum.Health) or 0
+        local prev = tonumber(self.SharedTrioProofLastHealth)
+        if prev ~= nil and hp < prev - 0.01 then
+            -- Secondary itself took REAL damage after the pull. It is now safe fan-out.
+            self.SharedTrioDamageProven[root] = now
+            self.SharedTrioLastDamageAt[root] = now
+            self.SharedTrioLastHealth[root] = hp
+            self.SharedTeddyVerified[root] = now
+            self.SharedTeddyQualified[root] = now
+            self.SharedTrioProofTarget = nil
+            self.SharedTrioProofLastHealth = nil
+            self.SharedTrioProofStartedAt = 0
+            verified, total = self:SharedTeddyRestack(false)
+            attackTarget = anchor
+            phase = "SECONDARY_CONFIRMED"
+        else
+            self.SharedTrioProofLastHealth = hp
+            local timeout = math.max(0.8,
+                tonumber(_G.Settings.TeddyTrioSecondaryProofTimeout) or 1.35)
+            if now - (tonumber(self.SharedTrioProofStartedAt) or now) >= timeout then
+                -- Pull failed server reality. Restore it. Do NOT rotate combat backend:
+                -- the untouched anchor already proved the backend can deal damage.
+                local origin = self.SharedTrioOriginalPos[root]
+                if origin and IsValidPos(origin) then
+                    pcall(function()
+                        local rot=root.CFrame.Rotation
+                        root.CFrame=CFrame.new(origin)*rot
+                        root.AssemblyLinearVelocity=Vector3.zero
+                        root.AssemblyAngularVelocity=Vector3.zero
+                    end)
+                end
+                self.SharedTrioPulled[root] = nil
+                self.SharedTrioDamageProven[root] = nil
+                self.SharedTeddyVerified[root] = nil
+                self.SharedTeddyQualified[root] = nil
+                self.SharedTrioLastHealth[root] = nil
+                self.SharedTrioLastDamageAt[root] = nil
+                self.SharedTeddyRetryAfter[root] = now
+                    + math.max(0.5, tonumber(_G.Settings.TeddyTrioSecondaryRetry) or 1.10)
+                self:SharedRestoreOne(proof)
+                self.SharedTrioProofTarget = nil
+                self.SharedTrioProofLastHealth = nil
+                self.SharedTrioProofStartedAt = 0
+                _G.State.FState = "SECONDARY_REJECT"
+                _G.State.ActionText = "Reject Ghost Secondary • " .. mobName
+                _G.BobonStatus = prefix .. ": pulled mob had NO HP delta • restored"
+                if _G.BobonDiagnostics then _G.BobonDiagnostics.Bring = "SECONDARY-NO-HP-REJECT" end
+                return true
+            end
+            attackTarget = proof
+            phase = "SECONDARY_HP_PROOF"
+        end
+    end
+
+    _G.State.FarmTarget = attackTarget
+    _G.State.CurrentTarget = attackTarget
+    _G.State.ClusterMode = "OFF"
+    _G.State.FState = phase
+    _G.State.LongRangeFarmAttackRange = anchorLongRange
+    _G.State.LongRangeFarmAttackUntil = now + 0.30
+    PrepareCombatTarget(attackTarget)
+    EquipCombatTool()
+    local attempted = Attack(attackTarget, mobName)
+
+    -- Anchor was real before bring. If its HP stalls, rotate combat backend but do not
+    -- destroy the anchor/pile immediately; secondary liveness remains HP-based.
+    if attackTarget == anchor and self:SharedPrimaryNoDamage(anchor, attempted == true) then
+        local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
+        if failingBackend then CombatController:FailBackend(failingBackend, "ANCHOR-HP-STALLED")
+        else CombatController:AbortPending("ANCHOR-HP-STALLED") end
+        self:SharedPrimaryNoDamage(nil, false)
+    end
+
+    verified, total = self:SharedTeddyRestack(false)
+    local pending = tonumber(self.SharedTrioRemotePendingCount) or 0
+    local wanted = math.min(math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3,1,3), total)
+    if phase == "SECONDARY_HP_PROOF" and proof then
+        _G.State.ActionText = "Proving Pulled Mob • " .. mobName
+        _G.BobonStatus = ("%s: ANCHOR ✓ • proving pulled mob • safe %d/%d")
+            :format(prefix, verified, wanted)
     else
-        _G.BobonStatus = ("%s: Trio • KILL %d/%d • %s")
-            :format(prefix, verified, wanted, attempted and "ACTIVE" or "PROBING")
+        _G.State.ActionText = "Anchor Bring • " .. mobName
+        _G.BobonStatus = ("%s: ANCHOR ✓ • bring %d/%d • unproven %d • hit %s")
+            :format(prefix, verified, wanted, pending, attempted and "ACTIVE" or "WAIT")
     end
     return true
 end
@@ -8816,10 +8774,15 @@ function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
 
     if _G.Settings.SharedTeddyMode ~= false then
         local at = self.SharedTeddyVerified and self.SharedTeddyVerified[root]
+        local damageAt = self.SharedTrioDamageProven and self.SharedTrioDamageProven[root]
+        local lastDamage = self.SharedTrioLastDamageAt and self.SharedTrioLastDamageAt[root]
         local anchorCF = self.SharedPileCFrame
-        if not at or not anchorCF then return false end
+        -- v22.23: visual CFrame/ownership/persistence is never enough.
+        if not at or not damageAt or not lastDamage or not anchorCF then return false end
         local ttl = math.max(0.10, tonumber(_G.Settings.SharedTeddyVerifyTTL) or 0.35)
         if tick() - at > ttl then return false end
+        local liveTTL = math.max(1.2, tonumber(_G.Settings.TeddyTrioMemberNoDamageTimeout) or 2.60)
+        if tick() - lastDamage > liveTTL then return false end
         local ok, pos = pcall(function() return root.Position end)
         if not ok or not IsValidPos(pos) then return false end
         local radius = math.max(5, tonumber(_G.Settings.SharedTeddyVerifyRadius) or 12)
