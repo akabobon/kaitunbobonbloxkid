@@ -1,6 +1,19 @@
 -- =================================================================
---         BOBON HUB v22.22.4 SOURCE AUDIT + QUEST/SABER/BRING HARDENING
---         Base: v22.22.3 REMOTE-FIRST TRIO + VIDEO25 FIX
+--         BOBON HUB v22.22.5 STAND-OFF REMOTE MAGNET
+--         Base: v22.22.4 SOURCE AUDIT FIXED
+--
+--  v22.22.5 VIDEO-REFERENCE BRING FIXES:
+--  [S225-1] Farm no longer flies to each unresolved quest mob. It moves once to a
+--           stable high stand-off point over the active quest field and stays there.
+--  [S225-2] While standing off, SimulationRadius is refreshed continuously and all
+--           three same-name quest mobs are remote-probed in parallel. owner=true
+--           roots snap to the moving pile immediately; owner=nil uses persistence proof.
+--  [S225-3] Failed unknown-owner remote proof retries from the stand-off point instead
+--           of switching to per-mob close acquire. No fake STACKED/3-of-3 state.
+--  [S225-4] Explicit owner=false roots are never frozen/CFramed. The controller keeps
+--           re-requesting simulation ownership while the player remains at the field center.
+--  [S225-5] Verified members are attacked continuously while the remaining slots are
+--           still being remote-acquired, matching the supplied video behavior.
 --
 --  v22.22.4 SOURCE AUDIT FIXES:
 --  [A224-1] Release artifact desync fixed: the GitHub-ready script.lua is generated
@@ -1483,6 +1496,11 @@ _G.Settings = {
     TeddyTrioRemoteRejectRadius = 34,
     TeddyTrioRemoteRetry = 0.45,
     TeddyTrioRemoteMaxFails = 1,
+    -- v22.22.5: stay at one safe field hover and remote-magnet; never chase each mob.
+    TeddyTrioStandOffRemoteOnly = true,
+    TeddyTrioStandOffHeight = 30,
+    TeddyTrioStandOffArrival = 12,
+    TeddyTrioStandOffOwnerRetry = 0.20,
     TeddyAirHoverHeight  = 28,
     TeddyAirTagHoverHeight = 16,
     TeddyAirAcquireHeight = 4,
@@ -8153,8 +8171,14 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     local function failRemote(mob, root)
         self.SharedTrioRemoteProof[root] = nil
         self.SharedTrioOwnerProbeUntil[root] = nil
-        self.SharedTrioRemoteFails[root] =
-            (tonumber(self.SharedTrioRemoteFails[root]) or 0) + 1
+        if _G.Settings.TeddyTrioStandOffRemoteOnly ~= false then
+            -- Stand-off mode never converts a failed far proof into a per-mob chase.
+            -- Reset the fail budget after a short backoff and probe again from here.
+            self.SharedTrioRemoteFails[root] = 0
+        else
+            self.SharedTrioRemoteFails[root] =
+                (tonumber(self.SharedTrioRemoteFails[root]) or 0) + 1
+        end
         self.SharedTeddyRetryAfter[root] = now + remoteRetry
         -- Do not restore an old position here. The server remains authoritative
         -- and will already have snapped a failed remote trial to its real position.
@@ -8294,7 +8318,15 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                             remotePendingCount = remotePendingCount + 1
                         else
                             self.SharedTrioOwnerProbeUntil[root] = nil
-                            self.SharedTrioRemoteFails[root] = remoteMaxFails
+                            if _G.Settings.TeddyTrioStandOffRemoteOnly ~= false then
+                                -- Stay at the field hover and keep asking for ownership;
+                                -- do not select this NPC as a travel/acquire destination.
+                                self.SharedTrioRemoteFails[root] = 0
+                                self.SharedTeddyRetryAfter[root] = now
+                                    + math.max(0.10, tonumber(_G.Settings.TeddyTrioStandOffOwnerRetry) or 0.20)
+                            else
+                                self.SharedTrioRemoteFails[root] = remoteMaxFails
+                            end
                         end
 
                     elseif remoteFirst and retryReady and owner == nil
@@ -8345,10 +8377,10 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    -- v22.22 MOVING TRIO FARM
-    -- Build up to three quest mobs. Existing held members follow beneath the player
-    -- while Farm approaches the next member; if ownership of all three is already
-    -- available, SharedTeddyRestack brings the whole trio in one pass.
+    -- v22.22.5 STAND-OFF REMOTE MAGNET
+    -- The player does NOT visit unresolved mobs one-by-one. Farm parks once above the
+    -- active quest field, keeps SimulationRadius hot, and lets SharedTeddyRestack pull
+    -- every usable same-name root into the under-foot pile from that fixed safe hover.
     if _G.Settings.SharedSourceFarmMode == false then return false end
     if type(mobName) ~= "string" or mobName == "" then return false end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
@@ -8376,215 +8408,105 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     self.SharedTrioRemoteProof = self.SharedTrioRemoteProof or setmetatable({}, {__mode="k"})
     self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
 
-    local verified, total = self:SharedTeddyRestack(true)
-    local batch = self.SharedTeddyBatch or {}
+    -- Hard-clear the old close-acquire route. This is the key behavioral change:
+    -- no HumanoidRootPart from a quest mob becomes a TravelManager destination.
+    self.SharedTeddyAcquireModel = nil
+    self.SharedTeddyAcquireRoot = nil
+    self.SharedTeddyAcquireStartedAt = 0
+    self.SharedTeddyAcquireTaggedAt = 0
+
     local me = HRP()
     if not me then return true end
 
+    -- Park at one high field point. fallbackCF is q.MC / current quest farm center;
+    -- the mob pile then follows this player X/Z and stays on the ground below it.
+    local baseCF = nil
+    if typeof(fallbackCF) == "CFrame" then
+        baseCF = fallbackCF
+    elseif typeof(fallbackCF) == "Vector3" then
+        baseCF = CFrame.new(fallbackCF)
+    elseif self.SharedTrioFieldCenter then
+        baseCF = CFrame.new(self.SharedTrioFieldCenter)
+    else
+        baseCF = CFrame.new(me.Position)
+    end
+
+    local standHeight = math.clamp(
+        tonumber(_G.Settings.TeddyTrioStandOffHeight) or 30,
+        18, 45
+    )
+    local standCF = baseCF * CFrame.new(0, standHeight, 0)
+    if _G.State:CanRequestTravel() then
+        TravelManager:Request(standCF, "Farm", {
+            arrivalThreshold = math.max(7, tonumber(_G.Settings.TeddyTrioStandOffArrival) or 12),
+            fallback = fallbackCF or baseCF,
+            combatHover = true,
+            persistent = true,
+            speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+        })
+    end
+
+    pcall(function() ExpandSimulationRadius() end)
+    local verified, total = self:SharedTeddyRestack(true)
+    local batch = self.SharedTeddyBatch or {}
+
     if total <= 0 then
-        self.SharedTeddyAcquireModel = nil
-        self.SharedTeddyAcquireRoot = nil
-        self.SharedTeddyAcquireStartedAt = 0
-        self.SharedTeddyAcquireTaggedAt = 0
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
+        _G.State.ClusterMode = "OFF"
         _G.State.FState = "SHARED_BRING_FARM"
-        _G.State.ActionText = "Waiting Quest Mob • " .. mobName
-
-        if fallbackCF and _G.State:CanRequestTravel() then
-            local baseCF = typeof(fallbackCF) == "CFrame" and fallbackCF or CFrame.new(fallbackCF)
-            TravelManager:Request(baseCF * CFrame.new(0,
-                tonumber(_G.Settings.TeddySequencePileHover) or 24, 0), "Farm", {
-                arrivalThreshold = _G.Settings.ClusterFieldPatrolArrival or 18,
-                fallback = fallbackCF,
-                combatHover = true,
-                persistent = false,
-                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
+        _G.State.ActionText = "Stand-off • Waiting " .. mobName
         _G.BobonStatus = prefix .. ": Trio • waiting " .. mobName
         return true
     end
 
-    local now = tick()
-    local acquire = self.SharedTeddyAcquireModel
+    -- Restack again after the movement/simulation request. Explicit owner=true roots
+    -- can enter the pile immediately; unknown-owner trials continue without player travel.
+    pcall(function() ExpandSimulationRadius() end)
+    verified, total = self:SharedTeddyRestack(false)
 
-    local function liveInBatch(model)
-        if not model or not model.Parent or not IsEnemyNamed(model, mobName) then return false end
-        local h = model:FindFirstChildOfClass("Humanoid")
-        local r = model:FindFirstChild("HumanoidRootPart")
-        if not h or h.Health <= 0 or not r or not r.Parent then return false end
-        for _, entry in ipairs(batch) do
-            if entry.Model == model then return true end
-        end
-        return false
-    end
-
-    if not liveInBatch(acquire) then
-        acquire = nil
-        self.SharedTeddyAcquireModel = nil
-        self.SharedTeddyAcquireRoot = nil
-        self.SharedTeddyAcquireStartedAt = 0
-        self.SharedTeddyAcquireTaggedAt = 0
-    else
-        local r = acquire:FindFirstChild("HumanoidRootPart")
-        if r and self.SharedTeddyVerified[r] then
-            acquire = nil
-            self.SharedTeddyAcquireModel = nil
-            self.SharedTeddyAcquireRoot = nil
-            self.SharedTeddyAcquireStartedAt = 0
-            self.SharedTeddyAcquireTaggedAt = 0
-        end
-    end
-
-    -- Choose one unresolved slot. Existing verified mobs continue to follow the
-    -- player through SharedTeddyRestack while this target is approached.
-    if not acquire and verified < math.min(3, total) then
-        local best, bestDist = nil, math.huge
-        for _, entry in ipairs(batch) do
-            local root = entry.Root
-            if root and root.Parent
-                and not self.SharedTeddyVerified[root]
-                and not self.SharedTeddyPendingAt[root]
-                and not self.SharedTrioRemoteProof[root]
-                and now >= (tonumber(self.SharedTrioOwnerProbeUntil[root]) or 0)
-                and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
-                local okPos, pos = pcall(function() return root.Position end)
-                if okPos and IsValidPos(pos) then
-                    local d = (pos - me.Position).Magnitude
-                    if d < bestDist then
-                        best, bestDist = entry.Model, d
-                    end
-                end
-            end
-        end
-        if best then
-            acquire = best
-            self.SharedTeddyAcquireModel = best
-            self.SharedTeddyAcquireRoot = best:FindFirstChild("HumanoidRootPart")
-            self.SharedTeddyAcquireStartedAt = now
-            self.SharedTeddyAcquireTaggedAt = 0 -- repurposed as "near since"
-        end
-    end
-
-    if acquire then
-        local hum = acquire:FindFirstChildOfClass("Humanoid")
-        local root = acquire:FindFirstChild("HumanoidRootPart")
-        if hum and hum.Health > 0 and root and root.Parent then
-            _G.State.FarmTarget = acquire
-            _G.State.CurrentTarget = acquire
-            _G.State.ClusterMode = "OFF"
-            _G.State.FState = "SHARED_BRING_FARM"
-            _G.State.ActionText = "Acquire Trio • " .. mobName
-
-            local acquireHover = math.max(18, tonumber(_G.Settings.TeddyTrioAcquireHover) or 24)
-            local acquireRadius = math.max(20, tonumber(_G.Settings.TeddyTrioAcquireRadius) or 55)
-            local attackRange = math.max(50,
-                tonumber(_G.Settings.TeddyTrioAttackRange)
-                or tonumber(_G.Settings.FastAttackRange) or 120)
-
-            if _G.State:CanRequestTravel() then
-                TravelManager:Request(root.CFrame * CFrame.new(0, acquireHover, 0), "Farm", {
-                    arrivalThreshold = math.min(acquireRadius, 28),
-                    fallback = fallbackCF or self.SharedPileCFrame,
-                    combatHover = true,
-                    persistent = true,
-                    speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-                })
-            end
-
-            -- Held roots move with the latest player position WHILE this travel is active.
-            verified, total = self:SharedTeddyRestack(false)
-            me = HRP() or me
-            local dist = (me.Position - root.Position).Magnitude
-
-            if dist <= acquireRadius * 1.15 then
-                if (self.SharedTeddyAcquireTaggedAt or 0) == 0 then
-                    self.SharedTeddyAcquireTaggedAt = now
-                end
-                pcall(function() ExpandSimulationRadius() end)
-                verified, total = self:SharedTeddyRestack(false)
-            else
-                self.SharedTeddyAcquireTaggedAt = 0
-            end
-
-            -- Keep farming continuously. Damage is NOT a gate for bring anymore;
-            -- proximity + real ownership/persistence is the bring proof.
-            local attempted = false
-            if dist <= attackRange then
-                PrepareCombatTarget(acquire)
-                EquipCombatTool()
-                attempted = Attack(acquire, mobName)
-                if attempted then _G.State.FState = "SHARED_ATTACK" end
-            end
-
-            if self.SharedTeddyVerified[root] then
-                self.SharedTeddyAcquireModel = nil
-                self.SharedTeddyAcquireRoot = nil
-                self.SharedTeddyAcquireStartedAt = 0
-                self.SharedTeddyAcquireTaggedAt = 0
-                _G.BobonStatus = ("%s: Trio • STACKED %d/%d • %s")
-                    :format(prefix, verified, total, mobName)
-                return true
-            end
-
-            -- If this exact root stays close but ownership never becomes usable, rotate
-            -- to another slot briefly instead of freezing the whole farm.
-            local nearSince = tonumber(self.SharedTeddyAcquireTaggedAt) or 0
-            if nearSince > 0 and now - nearSince >= 1.8
-                and not self.SharedTeddyPendingAt[root] then
-                self.SharedTeddyRetryAfter[root] = now
-                    + math.max(0.15, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.25)
-                self.SharedTeddyAcquireModel = nil
-                self.SharedTeddyAcquireRoot = nil
-                self.SharedTeddyAcquireStartedAt = 0
-                self.SharedTeddyAcquireTaggedAt = 0
-            end
-
-            local owner = ClientOwnsMob(root)
-            local phase = self.SharedTeddyPendingAt[root] and "VERIFY"
-                or (owner == true and "PULL" or "ACQUIRE")
-            _G.BobonStatus = ("%s: Trio • %s %s • pile %d/%d • hit %s")
-                :format(prefix, phase, mobName, verified, total,
-                    attempted and "ACTIVE" or "PROBING")
-            return true
-        end
-    end
-
-    -- No unresolved acquire target right now: attack a verified moving pile member.
+    local wanted = math.min(math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3, 1, 3), total)
     local primary = nil
     for _, entry in ipairs(batch) do
         local root = entry.Root
-        if root and root.Parent and self.SharedTeddyVerified[root] then
+        local hum = entry.Humanoid
+        if root and root.Parent and hum and hum.Health > 0 and self.SharedTeddyVerified[root] then
             primary = entry.Model
             break
         end
     end
 
+    -- Damage never waits for all three. As soon as one remote member is proven, keep
+    -- attacking it while the remaining slots continue to remote-acquire in parallel.
+    local attempted = false
     if primary then
         _G.State.FarmTarget = primary
         _G.State.CurrentTarget = primary
         _G.State.ClusterMode = "OFF"
         _G.State.FState = "SHARED_ATTACK"
-        _G.State.ActionText = "Attack Moving Trio • " .. mobName
-        verified, total = self:SharedTeddyRestack(false)
+        _G.State.ActionText = verified < wanted
+            and ("Stand-off Magnet + Attack • " .. mobName)
+            or ("Attack Remote Trio • " .. mobName)
         PrepareCombatTarget(primary)
         EquipCombatTool()
-        local attempted = Attack(primary, mobName)
-        _G.BobonStatus = ("%s: Trio • KILL %d/%d • %s")
-            :format(prefix, verified, total, attempted and "ACTIVE" or "PROBING")
-        return true
+        attempted = Attack(primary, mobName)
+        verified, total = self:SharedTeddyRestack(false)
+    else
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "SHARED_BRING_FARM"
+        _G.State.ActionText = "Stand-off Remote Magnet • " .. mobName
     end
 
-    _G.State.FState = "SHARED_BRING_FARM"
     local remotePending = tonumber(self.SharedTrioRemotePendingCount) or 0
-    if remotePending > 0 then
-        _G.State.ActionText = "Remote Trio Probe • " .. mobName
-        _G.BobonStatus = ("%s: Trio • REMOTE %d/%d • probe %d")
-            :format(prefix, verified, total, remotePending)
+    if verified < wanted then
+        _G.BobonStatus = ("%s: Trio • REMOTE MAGNET %d/%d • probe %d • hit %s")
+            :format(prefix, verified, wanted, remotePending,
+                attempted and "ACTIVE" or "WAIT")
     else
-        _G.BobonStatus = ("%s: Trio • BUILD %d/%d • %s")
-            :format(prefix, verified, total, mobName)
+        _G.BobonStatus = ("%s: Trio • KILL %d/%d • %s")
+            :format(prefix, verified, wanted, attempted and "ACTIVE" or "PROBING")
     end
     return true
 end
