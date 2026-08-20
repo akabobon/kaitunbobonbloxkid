@@ -1,3 +1,11 @@
+-- BOBON HUB v22.29.1 | KAIV2 FULL PROGRESSION + REAL BODY-MOVER + SAFE HOPLOW
+-- Rebuilt from v22.28.8. kaiv2 is used as the progression reference, not as a second runtime loop.
+-- FARM: one fixed quest-mob pile using BodyPosition/BodyGyro/BodyVelocity + ownership request.
+-- HOP: kaiv2 HopLowServer backend (Asc/excludeFull/visited/__ServerBrowser), no F9/error auto-hop.
+-- PROGRESSION COVERAGE: Saber -> Sea2 -> Bartilo Lv850 -> Race V2 -> Sea3; full melee V1/V2/Godhuman;
+-- Pole V1/Kabucha/Rengoku/Midnight Blade/TTK; Yama/Tushita/CDK/Skull Guitar; raid/fragment/material gates.
+-- Existing Bobon ActionToken/PriorityScheduler remains the single movement/progression owner.
+-- BOBON HUB v22.28.8 REAL BODY-MOVER STACK | NO ERROR AUTO-HOP
 -- BOBON HUB v22.28.7 REAL | FARM FIELD-FALLBACK FIX | VISIBLE ERROR HOP ONLY | NO REJOIN
 -- BOBON HUB v22.28.6 REAL-COMPAT | VISIBLE ERROR -> HOP ONLY | NO REJOIN
 -- BOBON HUB v22.28.4 REAL-COMPAT | local-register + game-error recovery + English UI
@@ -1371,22 +1379,9 @@ function _G.BobonHandleVisibleGameLog(message, messageType)
         return false
     end
 
-    -- A yellow FATAL line is treated as a visible fatal error; ordinary warnings are not.
-    local visibleFatal = string.find(low, "fatal", 1, true) ~= nil
-    local visibleError = messageType == Enum.MessageType.MessageError
-    if not visibleFatal and not visibleError then return false end
-
-    local signature = string.sub(low, 1, 240)
-    local now = tick()
-    local watch = _G.BobonGameErrorWatch
-    if watch.LastSignature == signature and now - (watch.LastAt or 0) < 20 then return false end
-    watch.LastSignature = signature
-    watch.LastAt = now
-
-    return _G.BobonErrorRecovery:HopVisibleError(
-        visibleFatal and "VisibleFATAL" or "VisibleError",
-        string.sub(raw, 1, 350)
-    )
+    -- v22.28.8: game/F9 errors are diagnostics only. Never auto-hop while farming
+    -- or while another progression action owns the kaitun.
+    return false
 end
 
 -- Live output only. No ScriptContext listener and NO GetLogHistory polling.
@@ -1761,10 +1756,10 @@ _G.Settings = {
     ReferenceVideoFarmLoop = true,
     ReferenceVideoHoverHeight = 20,
     ReferenceVideoSideOffset = 7,
-    ReferenceVideoBringTrigger = 50,
-    ReferenceVideoBringRadius = 200,
-    ReferenceVideoTargetRange = 70,
-    ReferenceVideoAttackRange = 80,
+    ReferenceVideoBringTrigger = 75,
+    ReferenceVideoBringRadius = 350,
+    ReferenceVideoTargetRange = 85,
+    ReferenceVideoAttackRange = 100,
     ReferenceVideoAttackInterval = 0.03,
     ReferenceVideoMaxTargets = 32,
     -- v22.27: never manufacture visual-only/immortal mobs.
@@ -2170,6 +2165,7 @@ do
         _G.Settings.AutoCDK = bool(cfg["Cursed Dual Katana"], _G.Settings.AutoCDK)
         _G.Settings.AutoSoulGuitar = bool(cfg["Skull Guitar"], _G.Settings.AutoSoulGuitar)
         _G.Settings.AutoRaceV2 = bool(cfg["Auto Race V2"], _G.Settings.AutoRaceV2)
+        _G.Settings.AutoRaceV2 = bool(cfg["Auto Evo Race"], _G.Settings.AutoRaceV2)
         _G.Settings.GetFruits = bool(cfg["Get Fruits"], _G.Settings.GetFruits)
         _G.Settings.FruitEnabled = _G.Settings.GetFruits
         _G.Settings.RainbowHaki = bool(cfg["Rainbow Haki"], _G.Settings.RainbowHaki)
@@ -8257,6 +8253,21 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedEmptySince = 0
     self.SharedLastBringAt = 0
     self.SharedBringCount = 0
+    if self.ReferenceVideoMoveState then
+        for root in pairs(self.ReferenceVideoMoveState) do
+            pcall(function()
+                local bp = root and root:FindFirstChild("BobonBringBP")
+                if bp then bp:Destroy() end
+                local bg = root and root:FindFirstChild("BobonBringBG")
+                if bg then bg:Destroy() end
+            end)
+        end
+    end
+    self.ReferenceVideoMoveState = setmetatable({}, {__mode="k"})
+    self.ReferenceVideoPulled = setmetatable({}, {__mode="k"})
+    self.ReferenceVideoGhostBlocked = setmetatable({}, {__mode="k"})
+    self.ReferenceVideoOriginalCF = setmetatable({}, {__mode="k"})
+    self.ReferenceVideoIgnoreUntil = setmetatable({}, {__mode="k"})
     self.TeddyAirTagged = setmetatable({}, {__mode="k"})
     self.TeddyAirStacked = setmetatable({}, {__mode="k"})
     self.TeddyAirStackStableAt = setmetatable({}, {__mode="k"})
@@ -8671,94 +8682,219 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
     self.ReferenceVideoOriginalCF = self.ReferenceVideoOriginalCF or setmetatable({}, {__mode="k"})
     self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoMoveState = self.ReferenceVideoMoveState or setmetatable({}, {__mode="k"})
 
-    local radius = math.max(trigger,
-        tonumber(_G.Settings.ReferenceVideoBringRadius) or 200)
+    local radius = math.max(trigger, tonumber(_G.Settings.ReferenceVideoBringRadius) or 200)
     local entries = self:ReferenceVideoCollect(mobName, primaryRoot.Position, radius)
-    local primaryCF = primaryRoot.CFrame
-    local moved, ownedCount, blocked = 0, 0, 0
+    local pilePos = primaryRoot.Position
+    local moved, confirmed, blocked = 1, 1, 0
     local now = tick()
-    local restoreQuarantine = math.max(0.20,
-        tonumber(_G.Settings.ReferenceVideoRestoreQuarantine) or 0.45)
+    local restoreQuarantine = math.max(0.20, tonumber(_G.Settings.ReferenceVideoRestoreQuarantine) or 0.45)
+    local settleDistance = 7
+    local hardReleaseDistance = radius + 150
+
+    local function destroyMover(root)
+        if not root then return end
+        pcall(function()
+            local bp = root:FindFirstChild("BobonBringBP") or root:FindFirstChild("BringBP")
+            if bp then bp:Destroy() end
+            local bg = root:FindFirstChild("BobonBringBG") or root:FindFirstChild("BringBG")
+            if bg then bg:Destroy() end
+            local bv = root:FindFirstChild("BobonBringBV") or root:FindFirstChild("FarmingVelocity")
+            if bv then bv:Destroy() end
+        end)
+    end
 
     local function noCollide(model)
         pcall(function()
             for _, part in ipairs(model:GetDescendants()) do
-                if part:IsA("BasePart") and part.CanCollide then
-                    part.CanCollide = false
-                end
+                if part:IsA("BasePart") then part.CanCollide = false end
             end
         end)
     end
 
-    -- Primary remains untouched by the magnet and is always the real server anchor.
-    noCollide(primary)
-    moved = moved + 1
+    local function requestOwnership(root)
+        pcall(function()
+            local env = (type(getgenv) == "function" and getgenv()) or _G
+            local synTable = type(rawget(env, "syn")) == "table" and rawget(env, "syn") or nil
+            local requestFn = (synTable and synTable.request_network_ownership)
+                or rawget(env, "requestnetworkownership")
+                or rawget(env, "request_network_ownership")
+            local setFn = (synTable and synTable.set_network_ownership)
+                or rawget(env, "setnetworkownership")
+                or rawget(env, "set_network_ownership")
+            if type(requestFn) == "function" then requestFn(root) end
+            if type(setFn) == "function" then setFn(root, LP) end
+        end)
+    end
 
-    for i, entry in ipairs(entries) do
+    -- Cleanup movers left by dead/despawned/out-of-field mobs.
+    for root, state in pairs(self.ReferenceVideoMoveState) do
+        local model = root and root.Parent
+        local hum = model and model:FindFirstChildOfClass("Humanoid")
+        local invalid = not root or not root.Parent or not model or not IsEnemyNamed(model, mobName)
+            or not hum or hum.Health <= 0
+        if not invalid then
+            local okPos, pos = pcall(function() return root.Position end)
+            invalid = (not okPos) or (pos - pilePos).Magnitude > hardReleaseDistance
+        end
+        if invalid then
+            destroyMover(root)
+            self.ReferenceVideoMoveState[root] = nil
+            self.ReferenceVideoPulled[root] = nil
+            self.ReferenceVideoGhostBlocked[root] = nil
+            self.ReferenceVideoIgnoreUntil[root] = nil
+        end
+    end
+
+    -- Primary is the real server anchor. Every secondary is pulled to THIS SAME point.
+    noCollide(primary)
+
+    for _, entry in ipairs(entries) do
         local mob, root = entry.Model, entry.Root
         if mob and mob.Parent and root and root.Parent and mob ~= primary then
-            local owner = ClientOwnsMob(root)
             local ignored = (self.ReferenceVideoIgnoreUntil[root] or 0) > now
-
-            if owner == true and not ignored then
-                self.ReferenceVideoGhostBlocked[root] = nil
+            if ignored then
+                blocked = blocked + 1
+            else
                 if not self.ReferenceVideoOriginalCF[root] then
                     local okCF, cf = pcall(function() return root.CFrame end)
                     if okCF then self.ReferenceVideoOriginalCF[root] = cf end
                 end
+
+                requestOwnership(root)
                 noCollide(mob)
 
-                local ring = (i - 1) % 8
-                local angle = ring * (math.pi / 4)
-                local r = 1.25
-                local offset = Vector3.new(math.cos(angle) * r, 0, math.sin(angle) * r)
-                local okMove = pcall(function()
-                    local rot = root.CFrame.Rotation
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                    root.CFrame = CFrame.new(primaryCF.Position + offset) * rot
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                if okMove then
-                    self.ReferenceVideoPulled[root] = now
-                    moved = moved + 1
-                    ownedCount = ownedCount + 1
+                local owner = ClientOwnsMob(root)
+                local state = self.ReferenceVideoMoveState[root]
+                if type(state) ~= "table" then
+                    state = {
+                        StartedAt = now,
+                        LastMoveAt = now,
+                        LastPos = root.Position,
+                        Confirmed = false,
+                        FailSince = 0,
+                    }
+                    self.ReferenceVideoMoveState[root] = state
                 end
-            else
-                blocked = blocked + 1
 
-                -- Confirmed reference behavior: if a mob we moved is no longer safe,
-                -- restore it instead of leaving a client-side statue at the pile.
-                if self.ReferenceVideoPulled[root] then
-                    local restoreCF = self.ReferenceVideoOriginalCF[root]
-                    pcall(function()
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                        if restoreCF then root.CFrame = restoreCF end
-                    end)
+                -- Explicit owner=false is unsafe. Unknown ownership on Real is allowed to
+                -- PROBE via BodyPosition, but it must physically persist at the pile first.
+                if owner == false then
+                    destroyMover(root)
                     self.ReferenceVideoPulled[root] = nil
                     self.ReferenceVideoGhostBlocked[root] = true
                     self.ReferenceVideoIgnoreUntil[root] = now + restoreQuarantine
-                elseif not ignored then
-                    -- Never-pulled mobs are still at their real position and can be hit
-                    -- normally. Clear stale quarantine once its bounded delay expires.
-                    self.ReferenceVideoGhostBlocked[root] = nil
+                    state.Confirmed = false
+                    state.FailSince = now
+                    blocked = blocked + 1
+                else
+                    local okMover = pcall(function()
+                        if root.Anchored then root.Anchored = false end
+
+                        local bv = root:FindFirstChild("BobonBringBV")
+                        if not bv then
+                            bv = Instance.new("BodyVelocity")
+                            bv.Name = "BobonBringBV"
+                            bv.Parent = root
+                        end
+                        bv.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+                        bv.P = 10000
+                        bv.Velocity = Vector3.zero
+
+                        local bp = root:FindFirstChild("BobonBringBP")
+                        if not bp then
+                            bp = Instance.new("BodyPosition")
+                            bp.Name = "BobonBringBP"
+                            bp.Parent = root
+                        end
+                        bp.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+                        bp.P = 500000
+                        bp.D = 5000
+                        bp.Position = pilePos
+
+                        local bg = root:FindFirstChild("BobonBringBG")
+                        if not bg then
+                            bg = Instance.new("BodyGyro")
+                            bg.Name = "BobonBringBG"
+                            bg.Parent = root
+                        end
+                        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+                        bg.P = 10000
+                        bg.D = 1000
+                        bg.CFrame = CFrame.new(pilePos)
+
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end)
+
+                    if okMover then
+                        local pos = root.Position
+                        local dist = (pos - pilePos).Magnitude
+                        local delta = state.LastPos and (pos - state.LastPos).Magnitude or math.huge
+
+                        if delta >= 0.75 then
+                            state.LastMoveAt = now
+                            state.LastPos = pos
+                            state.FailSince = 0
+                        elseif dist > settleDistance then
+                            state.FailSince = state.FailSince ~= 0 and state.FailSince or now
+                        else
+                            state.FailSince = 0
+                        end
+
+                        -- Real may not expose isnetworkowner. Persistence at the pile for a short
+                        -- window is the fallback proof that this is not a client-only ghost pull.
+                        if dist <= settleDistance then
+                            state.NearSince = state.NearSince or now
+                            if owner == true or now - state.NearSince >= 0.18 then
+                                state.Confirmed = true
+                                self.ReferenceVideoPulled[root] = now
+                                self.ReferenceVideoGhostBlocked[root] = nil
+                                confirmed = confirmed + 1
+                            end
+                        else
+                            state.NearSince = nil
+                        end
+
+                        -- If the BodyPosition cannot move the mob for >1.35s while still far
+                        -- from the pile, server ownership won. Remove the mover and quarantine.
+                        if state.FailSince ~= 0 and now - state.FailSince > 1.35 then
+                            destroyMover(root)
+                            local restoreCF = self.ReferenceVideoOriginalCF[root]
+                            pcall(function()
+                                if restoreCF and owner ~= true then root.CFrame = restoreCF end
+                                root.AssemblyLinearVelocity = Vector3.zero
+                                root.AssemblyAngularVelocity = Vector3.zero
+                            end)
+                            state.Confirmed = false
+                            state.FailSince = 0
+                            state.NearSince = nil
+                            self.ReferenceVideoPulled[root] = nil
+                            self.ReferenceVideoGhostBlocked[root] = true
+                            self.ReferenceVideoIgnoreUntil[root] = now + restoreQuarantine
+                            blocked = blocked + 1
+                        else
+                            moved = moved + 1
+                        end
+                    else
+                        destroyMover(root)
+                        blocked = blocked + 1
+                    end
                 end
             end
         end
     end
 
-    self.SharedBringCount = moved
+    self.SharedBringCount = confirmed
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "VIDEO7951-RESTORE-SAFE"
+        _G.BobonDiagnostics.Bring = "REAL-BODYPOSITION-PILE"
         _G.BobonDiagnostics.BringCandidates = #entries
-        _G.BobonDiagnostics.BringOwned = ownedCount
+        _G.BobonDiagnostics.BringOwned = confirmed
         _G.BobonDiagnostics.BringMoved = moved
         _G.BobonDiagnostics.BringUnknown = blocked
     end
-    return moved, #entries, ownedCount, blocked
+    return confirmed, #entries, confirmed, blocked
 end
 
 function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
@@ -8851,7 +8987,14 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
         local ignored = root and (self.ReferenceVideoIgnoreUntil[root] or 0) > now
 
         if not blocked and not ignored and root and self.ReferenceVideoPulled[root] then
-            if ClientOwnsMob(root) ~= true then
+            local owner = ClientOwnsMob(root)
+            local state = self.ReferenceVideoMoveState and self.ReferenceVideoMoveState[root]
+            local mover = root:FindFirstChild("BobonBringBP")
+            local persistenceConfirmed = type(state) == "table" and state.Confirmed == true
+                and mover ~= nil
+            -- Explicit false always loses authority. Unknown ownership (common on Real)
+            -- remains attackable only after the BodyPosition pull physically persisted.
+            if owner == false or (owner == nil and not persistenceConfirmed) then
                 self.ReferenceVideoGhostBlocked[root] = true
                 blocked = true
             end
@@ -17857,6 +18000,26 @@ local function ApplyFPSBoost()
 end
 task.defer(ApplyFPSBoost)
 
+-- v22.29 KAIV2 PROGRESSION BRIDGE
+-- Bobon already has the same progression families as kaiv2; keep one scheduler instead of
+-- starting kaiv2's second AutoFarm loop. These aliases make the imported semantics explicit
+-- and keep all purchase/quest work routed through ActionToken + existing controllers.
+_G.BobonKaiv2Progression = {
+    SaberLevel = 200,
+    SecondSeaLevel = 700,
+    BartiloLevel = 850,
+    ThirdSeaLevel = 1500,
+    TTKSwordMastery = 300,
+    MeleeMastery = 400,
+    Coverage = {
+        "Saber", "Second Sea", "Bartilo", "Race V2", "Third Sea",
+        "Dark Step", "Electric", "Water Kung Fu", "Dragon Breath", "Superhuman",
+        "Death Step", "Sharkman Karate", "Electric Claw", "Dragon Talon", "Godhuman",
+        "Pole (1st Form)", "Kabucha", "Rengoku", "Midnight Blade", "True Triple Katana",
+        "Yama", "Tushita", "Cursed Dual Katana", "Skull Guitar", "Raid/Fragments",
+    },
+}
+
 -- v21 completion shuttle: mature kaituns revisit older seas after leveling so
 -- useful permanent items are not lost merely because their boss/event did not spawn
 -- before the mandatory world transition. This runs only at MAX level.
@@ -17985,105 +18148,157 @@ local function MiragePresent()
     return false
 end
 function HopManager:FindServer()
-    -- Roblox server API is sorted ascending by population, so the first usable row
-    -- is already the lowest-population server visible to this request.
-    local cursor=""
-    for _=1,4 do
-        local url=("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s"):format(game.PlaceId,
-            cursor~="" and ("&cursor="..HttpService:UrlEncode(cursor)) or "")
-        local ok, body=pcall(function() return game:HttpGet(url) end)
-        if not ok then return nil end
-        local okj, data=pcall(function() return HttpService:JSONDecode(body) end)
-        if not okj or type(data)~="table" then return nil end
-        for _, row in ipairs(data.data or {}) do
-            local id=tostring(row.id or "")
-            if id~="" and id~=game.JobId and not self.Visited[id]
-                and tonumber(row.playing or 0) < tonumber(row.maxPlayers or 12) then
-                self.Visited[id]=true
-                return id
-            end
+    -- kaiv2 HopLowServer: query the lowest-population public page, exclude full/current/visited.
+    _G.VisitedServers = _G.VisitedServers or {}
+    local url = ("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&excludeFullGames=true&limit=100")
+        :format(game.PlaceId)
+    local ok, body = pcall(function() return game:HttpGet(url) end)
+    if not ok then return nil end
+    local okDecode, data = pcall(function() return HttpService:JSONDecode(body) end)
+    if not okDecode or type(data) ~= "table" or type(data.data) ~= "table" then return nil end
+
+    local available = {}
+    for _, row in ipairs(data.data) do
+        local id = tostring(row.id or "")
+        local playing = tonumber(row.playing)
+        local maxPlayers = tonumber(row.maxPlayers)
+        if id ~= "" and id ~= game.JobId and not _G.VisitedServers[id]
+            and not self.Visited[id] and playing
+            and (not maxPlayers or playing < maxPlayers) then
+            available[#available + 1] = {Id=id, Playing=playing}
         end
-        cursor=tostring(data.nextPageCursor or "")
-        if cursor=="" then break end
     end
+    if #available == 0 then return nil end
+
+    table.sort(available, function(a,b)
+        return (a.Playing or math.huge) < (b.Playing or math.huge)
+    end)
+
+    -- The API page is already Asc. Randomize only inside the first few low-pop servers
+    -- so a single stale/full first row does not trap every account on the same JobId.
+    local lowSlice = math.min(#available, 6)
+    local picked = available[math.random(1, lowSlice)]
+    _G.VisitedServers[picked.Id] = true
+    self.Visited[picked.Id] = true
+    return picked.Id
 end
+
 function HopManager:ScheduleFailureRetry(detail)
-    -- IMPORTANT: retry only after an actual teleport failure. Never loop merely because
-    -- Hop Player Near is enabled or because the destination server has other players.
-    if self.RetryScheduled or not SessionAlive() then return false end
+    -- Retry ONLY after a concrete teleport failure/full server. Cap each chain.
+    if not SessionAlive() or self.RetryScheduled then return false end
+    self.RetryCount = tonumber(self.RetryCount) or 0
+    if self.RetryCount >= 3 then
+        self.AwaitingTeleport = false
+        self.RetryScheduled = false
+        self.RetryCount = 0
+        _G.BobonStatus = "HopLowServer stopped • retry limit"
+        DLog("HOP", "Retry limit: " .. tostring(detail))
+        return false
+    end
+    self.RetryCount = self.RetryCount + 1
     self.RetryScheduled = true
     self.AwaitingTeleport = false
-    _G.BobonStatus = "Server Hop failed • retrying another low-player server"
+    _G.BobonStatus = "HopLowServer failed • retry " .. tostring(self.RetryCount) .. "/3"
     DLog("HOP", "Teleport failed: " .. tostring(detail))
-    task.delay(1.25, function()
+    task.delay(1.5, function()
         if not SessionAlive() then return end
         self.RetryScheduled = false
-        self.LastHop = 0 -- failure retry intentionally bypasses normal hop cooldown
+        self.LastHop = 0
         self:Request(self.RetryReason or "teleport-failed", true)
     end)
     return true
 end
+
 function HopManager:Request(reason, failureRetry)
+    if not SessionAlive() then return false end
     if self.AwaitingTeleport and not failureRetry then return false end
-    if not failureRetry and tick()-self.LastHop < (_G.Settings.HopRequestCooldown or 25) then return false end
-    self.LastHop=tick()
-    self.RetryReason=tostring(reason or "server-hop")
-    local id=self:FindServer()
-    if not id then
-        self.AwaitingTeleport=false
-        if failureRetry then
-            return self:ScheduleFailureRetry("no-low-player-server-found")
-        end
+    if not failureRetry and tick() - (self.LastHop or 0) < (_G.Settings.HopRequestCooldown or 25) then
         return false
     end
-    _G.BobonStatus="Server Hop: "..tostring(reason)
+
+    if not failureRetry then self.RetryCount = 0 end
+    self.LastHop = tick()
+    self.RetryReason = tostring(reason or "HopLowServer")
+    local id = self:FindServer()
+    if not id then
+        self.AwaitingTeleport = false
+        if failureRetry then return self:ScheduleFailureRetry("no-server") end
+        return false
+    end
+
+    _G.BobonStatus = "HopLowServer • " .. self.RetryReason
     _G.State:SetMode("ServerHop")
-    pcall(function() TravelManager:Stop("ServerHop") end)
-    self.AwaitingTeleport=true
-    local ok, err=pcall(function() TeleportSvc:TeleportToPlaceInstance(game.PlaceId,id,LP) end)
+    pcall(function() TravelManager:Stop("HopLowServer") end)
+    self.AwaitingTeleport = true
+
+    -- kaiv2 path: prefer the game's __ServerBrowser when it exists.
+    local browser = ReplicatedStorage:FindFirstChild("__ServerBrowser")
+    if browser and browser:IsA("RemoteFunction") then
+        local dispatched = false
+        for _ = 1, 3 do
+            task.spawn(function()
+                pcall(function() browser:InvokeServer("teleport", id) end)
+            end)
+            dispatched = true
+        end
+        if dispatched then return true end
+    end
+
+    local ok, err = pcall(function()
+        TeleportSvc:TeleportToPlaceInstance(game.PlaceId, id, LP)
+    end)
     if not ok then
-        self.AwaitingTeleport=false
+        self.AwaitingTeleport = false
         self:ScheduleFailureRetry(err)
         return false
     end
     return true
 end
 
--- TeleportToPlaceInstance may return successfully and fail asynchronously afterwards
--- (e.g. destination became full). Only that concrete error schedules another hop.
+_G.BobonHopLowServer = function(reason)
+    return HopManager:Request(reason or "progression", false)
+end
+
 pcall(function()
     TeleportSvc.TeleportInitFailed:Connect(function(player, result, message)
         if player ~= LP or not SessionAlive() or not HopManager.AwaitingTeleport then return end
         HopManager:ScheduleFailureRetry(tostring(result) .. " • " .. tostring(message))
     end)
 end)
+
 function HopManager:ShouldHop()
-    if _G.BobonFarmStuckHopRequested and _G.State.ActiveActionToken == 0
-        and _G.State.Mode ~= "Dead" and _G.State.Mode ~= "Respawning"
-        and _G.State.Mode ~= "ServerHop" then
-        _G.BobonFarmStuckHopRequested = nil
-        return "farm-no-progress"
+    -- Never hop because level farming stalled or because Roblox/F9 printed an error.
+    _G.BobonFarmStuckHopRequested = nil
+
+    if _G.State.ActiveActionToken ~= 0
+        or _G.State.Mode == "Dead" or _G.State.Mode == "Respawning"
+        or _G.State.Mode == "Recovering" or _G.State.Mode == "ServerHop" then
+        return nil
     end
 
-    local activeQuestFight = _G.Settings.ContestSuppressPlayerHop
-        and _G.State.Mode == "Farming"
-        and _G.State.ActiveActionToken == 0
-        and _G.State.FarmTarget ~= nil
-        and _G.State:IsTargetValid(_G.State.FarmTarget)
-        and _G.State.ActiveQuestMob ~= nil
-        and IsEnemyNamed(_G.State.FarmTarget, _G.State.ActiveQuestMob)
+    local progressionLock = _G.State.ProgressionLock
+    local ordinaryFarm = (_G.State.Mode == "Farming" or _G.State.Mode == "GettingQuest")
+        and not progressionLock
 
-    if _G.Settings.HopPlayerNear and not activeQuestFight and _G.State.ActiveActionToken == 0 then
-        local me=HRP()
+    -- Hop Player Near is allowed only while idle between work units. It never throws
+    -- away a live level quest/farm or a progression action.
+    if _G.Settings.HopPlayerNear and not ordinaryFarm and not progressionLock
+        and _G.State.Mode ~= "GettingItem" and _G.State.Mode ~= "Bossing"
+        and _G.State.Mode ~= "UnlockingSea" and _G.State.Mode ~= "Raiding" then
+        local me = HRP()
         if me then
             for _, p in ipairs(Players:GetPlayers()) do
-                local pr=p~=LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-                if pr and (pr.Position-me.Position).Magnitude <= (_G.Settings.HopPlayerNearRadius or 250) then
+                local pr = p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+                if pr and (pr.Position - me.Position).Magnitude <= (_G.Settings.HopPlayerNearRadius or 250) then
                     return "player-near"
                 end
             end
         end
     end
+
+    -- During ordinary level farm, absolutely no generic/optional hop is allowed.
+    -- A sticky hard gate (Saber/Sea2/Bartilo/Sea3) may still request its required server.
+    if ordinaryFarm then return nil end
     -- Required permanent progression is allowed to search another server even
     -- when generic Hop is disabled.  Never interrupt an already claimed action,
     -- and never hop if the required boss is already alive in this server.
@@ -19205,7 +19420,7 @@ end
 
 print("[BobonHub v22.7] Full Script Loaded Successfully!")
 print("[BobonHub v22.7] Architecture: Goal Planner | Atomic Scheduler | Combat-First Farm | Single Movement Owner")
-print("[BobonHub v22.7] Core: GoalPlanner | PriorityScheduler | TravelManager | CombatController | EconomyMutex")
+print("[BobonHub v22.29.1] Core: KAIV2 progression | REAL BodyMover pile | Safe HopLowServer")
 print("[BobonHub v22.7] Modules: HP-Proof QuestFarm | Ability V3/V4 | Mastery Skills | Material Prep | Atomic Fruit/Berry/Elite/Castle | Raid/Fragments | Full Progression | Bobon Fire HUD")
 print("[BobonHub v22.7] Progression: Level+Mastery | Saber/Sea2/3 | Full Melee | Factory/Items | TTK/CDK | Skull Guitar | Early Dough King | Endgame")
 print("[BobonHub v22.7] Data: Sea1/2/3 QDB | Submerged | Boss/item catalog")
