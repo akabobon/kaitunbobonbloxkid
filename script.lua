@@ -39,6 +39,13 @@
 -- This build makes normal quest farm single-owner and uses live HRP Instance travel.
 -- Net.RemoteEvent wrapper is preferred before raw RE/* children.
 -- Secondary mobs enter attack only after their bring position persists for >=0.12s.
+-- v22.29.8 REAL SINGLE COMBAT ENGINE FIX
+-- Static root-cause audit of the user-supplied 19,441-line source:
+-- * ReferenceVideoAttack and CombatController were both dispatching/owning combat state.
+-- * A zero-HP direct-4 cycle could fall back into direct-4 again instead of rotating.
+-- * Old TeddyAir eligibility could reject v22.29.7 secondaries even after visual bring.
+-- Fix: one HP-proof CombatController, explicit single-owner secondary eligibility,
+-- safe bring trials only, and ghost secondaries restored before primary promotion.
 -- =================================================================
 --         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
 --         BOBON HUB v22.28.4 REAL COMPAT + GAME ERROR FILTER + ENGLISH UI
@@ -8662,6 +8669,11 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
         return nil
     end
 
+    self.ReferenceVideoMovedOrigin = self.ReferenceVideoMovedOrigin
+        or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoDamageProven = self.ReferenceVideoDamageProven
+        or setmetatable({}, {__mode="k"})
+
     local function valid(mob)
         if not mob or not mob.Parent or not IsEnemyNamed(mob, mobName) then return false end
         local hum = mob:FindFirstChildOfClass("Humanoid")
@@ -8676,7 +8688,11 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
     local sticky = self.ReferenceVideoPrimaryModel
     if self.ReferenceVideoPrimaryName == mobName and valid(sticky) then
         local sr = sticky:FindFirstChild("HumanoidRootPart")
-        if sr then self.ReferenceVideoLastPrimaryPos = sr.Position end
+        if sr then
+            self.ReferenceVideoLastPrimaryPos = sr.Position
+            -- A primary must always be a real live target, never held by bring state.
+            self.ReferenceVideoMovedOrigin[sr] = nil
+        end
         return sticky
     end
 
@@ -8684,9 +8700,7 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
     if oldPrimary then
         local oldRoot = oldPrimary:FindFirstChild("HumanoidRootPart")
         local oldHum = oldPrimary:FindFirstChildOfClass("Humanoid")
-        if oldRoot then
-            self.ReferenceVideoLastPrimaryPos = oldRoot.Position
-        end
+        if oldRoot then self.ReferenceVideoLastPrimaryPos = oldRoot.Position end
         if not oldPrimary.Parent or not oldHum or oldHum.Health <= 0 then
             self.ReferenceVideoLastKillAt = tick()
         end
@@ -8694,20 +8708,47 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
 
     local origin = self.ReferenceVideoLastPrimaryPos or me.Position
     local best, bestDist = nil, math.huge
+    local restoredGhost = false
+    local now = tick()
 
     for _, mob in ipairs(folder:GetChildren()) do
         if valid(mob) then
             local root = mob:FindFirstChild("HumanoidRootPart")
-            local dist = (root.Position - origin).Magnitude
-            if dist < bestDist then
-                best, bestDist = mob, dist
+            local movedOrigin = self.ReferenceVideoMovedOrigin[root]
+            local proofAt = self.ReferenceVideoDamageProven[root]
+            local damageProven = proofAt and now - proofAt <= 4.0
+
+            -- Never promote a secondary that only appears near the pile because
+            -- this client moved it. Restore it first; next scan will use its real
+            -- replicated position. This breaks the "one kill then ghost target" loop.
+            if movedOrigin and not damageProven then
+                pcall(function()
+                    root.CFrame = movedOrigin
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+                self.ReferenceVideoMovedOrigin[root] = nil
+                if self.ReferenceVideoBringNearSince then
+                    self.ReferenceVideoBringNearSince[root] = nil
+                end
+                restoredGhost = true
+            else
+                local dist = (root.Position - origin).Magnitude
+                if dist < bestDist then
+                    best, bestDist = mob, dist
+                end
             end
         end
     end
 
+    -- Give restored secondaries one replication frame before selecting them.
+    if not best and restoredGhost then
+        self.ReferenceVideoPrimaryModel = nil
+        self.ReferenceVideoPrimaryName = nil
+        return nil
+    end
+
     if oldPrimary ~= best then
-        -- Kill/target transition must clear only transient attack proof.
-        -- Never clear the last real world position: it is the respawn hold anchor.
         self.ReferenceVideoBatchWatch = nil
         self.ReferenceVideoNoDamageStreak = 0
         self.ReferenceVideoDirectMisses = 0
@@ -8717,6 +8758,7 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
         local root = best and best:FindFirstChild("HumanoidRootPart")
         if root then
             self.ReferenceVideoLastPrimaryPos = root.Position
+            self.ReferenceVideoMovedOrigin[root] = nil
         end
     end
 
@@ -8729,9 +8771,10 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     if _G.Settings.GatherMobs == false then return 0, 0, 0, 0 end
 
     local folder = workspace:FindFirstChild("Enemies")
+    local me = HRP()
     local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
     local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
-    if not folder or not primaryRoot or not primaryRoot.Parent
+    if not folder or not me or not primaryRoot or not primaryRoot.Parent
         or not primaryHum or primaryHum.Health <= 0 then
         return 0, 0, 0, 0
     end
@@ -8741,6 +8784,12 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     self.ReferenceVideoBringNearSince = self.ReferenceVideoBringNearSince
         or setmetatable({}, {__mode="k"})
     self.ReferenceVideoBringLastSnap = self.ReferenceVideoBringLastSnap
+        or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoMovedOrigin = self.ReferenceVideoMovedOrigin
+        or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoDamageProven = self.ReferenceVideoDamageProven
+        or setmetatable({}, {__mode="k"})
+    self.ReferenceVideoLastHealth = self.ReferenceVideoLastHealth
         or setmetatable({}, {__mode="k"})
 
     local env = (type(getgenv) == "function" and getgenv()) or _G
@@ -8754,11 +8803,22 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
         or rawget(env, "setnetworkownership")
         or rawget(env, "set_network_ownership")
 
+    local ownerCheck = nil
+    for _, name in ipairs({
+        "isnetworkowner", "is_network_owner", "isnetowner", "is_net_owner",
+    }) do
+        local fn = rawget(env, name) or rawget(_G, name)
+        if type(fn) == "function" then
+            ownerCheck = fn
+            break
+        end
+    end
+
     local center = primaryRoot.Position
     self.ReferenceVideoLastPrimaryPos = center
 
-    local radius = math.max(180,
-        tonumber(_G.Settings.ReferenceVideoBringRadius) or 350)
+    local radius = math.max(220,
+        tonumber(_G.Settings.ReferenceVideoBringRadius) or 420)
     local maxMobs = math.max(2,
         math.floor(tonumber(_G.MobM)
             or tonumber(_G.Settings.ReferenceVideoMaxTargets)
@@ -8773,7 +8833,16 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
             if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
                 local okPos, pos = pcall(function() return root.Position end)
                 if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
-                    and (pos - center).Magnitude <= radius then
+                    and ((pos - center).Magnitude <= radius
+                        or (pos - me.Position).Magnitude <= radius) then
+
+                    local hp = tonumber(hum.Health) or 0
+                    local previous = self.ReferenceVideoLastHealth[root]
+                    if previous ~= nil and hp < previous - 0.01 then
+                        self.ReferenceVideoDamageProven[root] = now
+                    end
+                    self.ReferenceVideoLastHealth[root] = hp
+
                     rows[#rows + 1] = {
                         Model = mob,
                         Humanoid = hum,
@@ -8792,7 +8861,9 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     end)
 
     local count = math.min(#rows, maxMobs)
-    local moved, stable = 0, 0
+    local moved, stable, blocked = 0, 0, 0
+    local closeTrialRange = math.max(70,
+        tonumber(_G.Settings.ReferenceVideoUnknownOwnerTrialRange) or 120)
 
     for i = 1, count do
         local row = rows[i]
@@ -8801,6 +8872,7 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
         if mob == primary then
             self.ReferenceVideoBringNearSince[root] =
                 self.ReferenceVideoBringNearSince[root] or now
+            self.ReferenceVideoMovedOrigin[root] = nil
             stable = stable + 1
         else
             pcall(function()
@@ -8808,247 +8880,117 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
                 if type(setOwnership) == "function" then setOwnership(root, LP) end
             end)
 
-            pcall(function()
-                root.CanCollide = false
-                local head = mob:FindFirstChild("Head")
-                if head and head:IsA("BasePart") then head.CanCollide = false end
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
+            local owns = nil
+            if type(ownerCheck) == "function" then
+                pcall(function() owns = ownerCheck(root) end)
+            end
 
-            if now - (self.ReferenceVideoBringLastSnap[root] or 0) >= 0.08 then
-                self.ReferenceVideoBringLastSnap[root] = now
+            -- owner=false is authoritative: don't make a client-only statue.
+            -- owner=nil is common on REAL, so allow a bounded trial only when the
+            -- player is already physically close enough for ownership transfer.
+            local canTrial = owns == true
+                or (owns == nil and (root.Position - me.Position).Magnitude <= closeTrialRange)
+                or (self.ReferenceVideoDamageProven[root]
+                    and now - self.ReferenceVideoDamageProven[root] <= 4.0)
+
+            if canTrial then
+                if not self.ReferenceVideoMovedOrigin[root] then
+                    self.ReferenceVideoMovedOrigin[root] = root.CFrame
+                end
+
                 pcall(function()
-                    root.CFrame = primaryRoot.CFrame
+                    root.CanCollide = false
+                    local head = mob:FindFirstChild("Head")
+                    if head and head:IsA("BasePart") then head.CanCollide = false end
                     root.AssemblyLinearVelocity = Vector3.zero
                     root.AssemblyAngularVelocity = Vector3.zero
                 end)
-                moved = moved + 1
-            end
 
-            local near = (root.Position - primaryRoot.Position).Magnitude <= 12
-            if near then
-                self.ReferenceVideoBringNearSince[root] =
-                    self.ReferenceVideoBringNearSince[root] or now
-                stable = stable + 1
+                if now - (self.ReferenceVideoBringLastSnap[root] or 0) >= 0.10 then
+                    self.ReferenceVideoBringLastSnap[root] = now
+                    pcall(function()
+                        root.CFrame = primaryRoot.CFrame
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                    moved = moved + 1
+                end
+
+                local near = (root.Position - primaryRoot.Position).Magnitude <= 12
+                if near then
+                    self.ReferenceVideoBringNearSince[root] =
+                        self.ReferenceVideoBringNearSince[root] or now
+                    stable = stable + 1
+                else
+                    self.ReferenceVideoBringNearSince[root] = nil
+                end
             else
                 self.ReferenceVideoBringNearSince[root] = nil
+                blocked = blocked + 1
             end
         end
     end
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "SINGLE-OWNER-LIVE-PRIMARY"
+        _G.BobonDiagnostics.Bring = "SAFE-LIVE-PRIMARY"
         _G.BobonDiagnostics.BringCandidates = count
         _G.BobonDiagnostics.BringMoved = moved
         _G.BobonDiagnostics.BringOwned = stable
-        _G.BobonDiagnostics.BringUnknown = math.max(0, count - stable)
+        _G.BobonDiagnostics.BringUnknown = blocked
     end
 
     self.SharedBringCount = stable
-    return moved, count, stable, math.max(0, count - stable)
+    return moved, count, stable, blocked
 end
 
 function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
-    local now = tick()
     local me = HRP()
-    local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
-    local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
-    if not me or not primaryRoot or not primaryRoot.Parent
-        or not primaryHum or primaryHum.Health <= 0 then
-        self.ReferenceVideoBatchWatch = nil
+    local root = primary and primary:FindFirstChild("HumanoidRootPart")
+    local hum = primary and primary:FindFirstChildOfClass("Humanoid")
+    if not me or not root or not root.Parent or not hum or hum.Health <= 0 then
         return false, 0
     end
 
-    -- Never let a proof window from the dead previous primary block the new one.
-    local watch = self.ReferenceVideoBatchWatch
-    if watch and watch.Primary ~= primary then
-        self.ReferenceVideoBatchWatch = nil
-        watch = nil
-    end
+    -- CRITICAL v22.29.8:
+    -- There is now exactly ONE combat engine.  The previous ReferenceVideoAttack
+    -- fired its own kaiv2 packet while CombatController maintained a separate
+    -- PendingBackend/HP-proof machine.  After zero HP delta, the "fallback" could
+    -- select SKID-DIRECT-4 again forever.  We now let CombatController own packet
+    -- selection, HP proof, failure cooldown and backend rotation end-to-end.
+    self.ReferenceVideoSingleOwnerActive = mobName
+    _G.State.FState = "SHARED_ATTACK"
 
-    local proofDelay = math.max(0.12, tonumber(_G.Settings.ReferenceVideoBatchProofDelay) or 0.18)
-    if watch and now - (watch.SentAt or now) >= proofDelay then
-        local damaged = 0
-        for _, row in ipairs(watch.Targets or {}) do
-            local mob = row.Model
-            local hum = mob and mob.Parent and mob:FindFirstChildOfClass("Humanoid")
-            if hum then
-                local hp = tonumber(hum.Health) or 0
-                if hp < (tonumber(row.Health) or hp) - 0.01 then
-                    damaged = damaged + 1
+    local attempted = Attack(primary, mobName) == true
+
+    local count = 1
+    local folder = workspace:FindFirstChild("Enemies")
+    if folder then
+        count = 0
+        for _, mob in ipairs(folder:GetChildren()) do
+            if IsEnemyNamed(mob, mobName) then
+                local mh = mob:FindFirstChildOfClass("Humanoid")
+                local mr = mob:FindFirstChild("HumanoidRootPart")
+                if mh and mh.Health > 0 and mr and mr.Parent then
+                    if mob == primary
+                        or self:IsSharedAttackEligible(mob, primary) then
+                        if (mr.Position - me.Position).Magnitude
+                            <= (_G.Settings.FastAttackRange or 100) then
+                            count = count + 1
+                        end
+                    end
                 end
-            elseif mob and not mob.Parent then
-                damaged = damaged + 1
             end
         end
-
-        self.ReferenceVideoLastDamageCount = damaged
-        if damaged > 0 then
-            self.ReferenceVideoDirectMisses = 0
-            self.ReferenceVideoDirectFallbackUntil = 0
-        else
-            self.ReferenceVideoDirectMisses = (tonumber(self.ReferenceVideoDirectMisses) or 0) + 1
-            if self.ReferenceVideoDirectMisses >= 4 then
-                self.ReferenceVideoDirectMisses = 0
-                -- Additional same-tick fallback only; never disable the direct path.
-                pcall(function() Attack(primary, mobName) end)
-            end
-        end
-        self.ReferenceVideoBatchWatch = nil
-        watch = nil
-    elseif watch then
-        return false, tonumber(watch.Count) or 0
-    end
-
-    self.ReferenceVideoDirectFallbackUntil = 0
-
-    if now - (tonumber(self.ReferenceVideoLastAttack) or 0)
-        < math.max(0.03, tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.08) then
-        return false, 0
-    end
-
-    if not CombatController:ResolveRemotes() then
-        return Attack(primary, mobName) == true, 1
-    end
-
-    -- Attack geometry follows the live primary, never a cached/fallback field point.
-    local pilePos = primaryRoot.Position
-    local entries = self:ReferenceVideoCollect(mobName, pilePos,
-        math.max(120, tonumber(_G.Settings.ReferenceVideoAttackRange) or 120))
-    if #entries == 0 then return false, 0 end
-
-    local safe = {}
-    local nearSince = self.ReferenceVideoBringNearSince
-        or setmetatable({}, {__mode="k"})
-
-    -- Primary first, always. It is the real server-side target and must never be
-    -- excluded because a secondary bring did not persist.
-    local primaryHead = primary:FindFirstChild("Head")
-    if primaryHead and primaryHead:IsA("BasePart")
-        and (primaryRoot.Position - me.Position).Magnitude <= 90 then
-        safe[#safe + 1] = {
-            Model = primary,
-            Root = primaryRoot,
-            Part = primaryHead,
-            Humanoid = primaryHum,
-        }
-    end
-
-    for _, entry in ipairs(entries) do
-        local mob, root, hum = entry.Model, entry.Root, entry.Humanoid
-        if mob ~= primary and mob and mob.Parent and root and root.Parent
-            and hum and hum.Health > 0 then
-
-            local head = mob:FindFirstChild("Head")
-            local nearPlayer = (root.Position - me.Position).Magnitude <= 90
-            local nearPrimary = (root.Position - primaryRoot.Position).Magnitude <= 15
-            local persisted = nearSince[root]
-                and now - nearSince[root] >= 0.12
-
-            if head and head:IsA("BasePart")
-                and nearPlayer and nearPrimary and persisted then
-                safe[#safe + 1] = {
-                    Model = mob,
-                    Root = root,
-                    Part = head,
-                    Humanoid = hum,
-                }
-            end
-        end
-    end
-    if #safe == 0 then
-        return false, 0
-    end
-
-    -- Exact ACTIVE branch from kaiv2_fixed:
-    -- token = UserId[2..4] .. tostring(coroutine.running())[11..15]
-    local token = CombatController:BuildSharedDirectToken()
-    if not IsCombatToken(token) then
-        return Attack(primary, mobName) == true, 1
-    end
-
-    pcall(function()
-        local hitRemote = CombatController.RegisterHit
-        if hitRemote then
-            hitRemote:SetAttribute("Virtual", not hitRemote:GetAttribute("Virtual"))
-        end
-        local character = Char()
-        if character then
-            character:SetAttribute("Clashable", not character:GetAttribute("Clashable"))
-            local stun = character:FindFirstChild("Stun")
-            local busy = character:FindFirstChild("Busy")
-            if stun and stun:IsA("NumberValue") then stun.Value = 0 end
-            if busy and busy:IsA("BoolValue") then busy.Value = false end
-        end
-    end)
-
-    local snapshot = {}
-    for _, entry in ipairs(safe) do
-        snapshot[#snapshot + 1] = {
-            Model = entry.Model,
-            Health = tonumber(entry.Humanoid.Health) or 0,
-        }
-    end
-
-    self.ReferenceVideoLastAttack = now
-    _G.State.LastAttackTime = now
-
-    local anyOk = false
-    local count = #safe
-    local gap = count > 5 and 0.10 or (count > 2 and 0.03 or 0.015)
-    local maxTargets = math.min(count,
-        math.max(1, math.floor(tonumber(_G.Settings.ReferenceVideoMaxTargets) or 32)))
-
-    for i = 1, maxTargets do
-        local entry = safe[i]
-        pcall(function()
-            local mobStun = entry.Model:FindFirstChild("Stun")
-            local mobBusy = entry.Model:FindFirstChild("Busy")
-            if mobStun and mobStun:IsA("NumberValue") then mobStun.Value = 0 end
-            if mobBusy and mobBusy:IsA("BoolValue") then mobBusy.Value = false end
-        end)
-
-        local okAttack = pcall(function()
-            CombatController.RegisterAttack:FireServer(0.125)
-        end)
-        local okHit = false
-        if okAttack then
-            okHit = pcall(function()
-                -- Exact kaiv2 active packet:
-                -- RegisterHit(head, {{mob, head}, head}, nil, token)
-                CombatController.RegisterHit:FireServer(
-                    entry.Part,
-                    {
-                        {entry.Model, entry.Part},
-                        entry.Part,
-                    },
-                    nil,
-                    token
-                )
-            end)
-        end
-        anyOk = anyOk or (okAttack and okHit)
-        if gap > 0 and i < maxTargets then task.wait(gap) end
-    end
-
-    if anyOk then
-        self.ReferenceVideoBatchWatch = {
-            SentAt = tick(),
-            Primary = primary,
-            Targets = snapshot,
-            Shape = "KAIV2-DIRECT-4",
-            Count = maxTargets,
-        }
     end
 
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Net = "KAIV2-DIRECT-4"
-        _G.BobonDiagnostics.Targets = maxTargets
-        _G.BobonDiagnostics.Packet = ("KAIV2-DIRECT-4 x%d dmg%d"):format(
-            maxTargets, tonumber(self.ReferenceVideoLastDamageCount) or 0)
+        _G.BobonDiagnostics.Targets = count
+        _G.BobonDiagnostics.Net = CombatController.PendingBackend
+            or CombatController.VerifiedBackend
+            or "PROBING"
     end
-    return anyOk, maxTargets
+
+    return attempted, count
 end
 
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
@@ -9074,6 +9016,26 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
         self.ReferenceVideoBringLastSnap = setmetatable({}, {__mode="k"})
     end
     self.SharedMobName = mobName
+    self.ReferenceVideoSingleOwnerActive = mobName
+
+    if not self.ReferenceVideoV2298Cleaned then
+        self.ReferenceVideoV2298Cleaned = true
+        local ef = workspace:FindFirstChild("Enemies")
+        if ef then
+            for _, m in ipairs(ef:GetChildren()) do
+                local r = m:FindFirstChild("HumanoidRootPart")
+                if r then
+                    for _, n in ipairs({
+                        "BringBP","BringBG","BobonBringBP","BobonBringBG","BobonBringBV",
+                        "BobonSharedEnemyFlyPosition","TeddyHold","BobonTeddyHold",
+                    }) do
+                        local o = r:FindFirstChild(n)
+                        if o then pcall(function() o:Destroy() end) end
+                    end
+                end
+            end
+        end
+    end
 
     -- Disable every old pile/cluster bring heartbeat.
     self.SharedTeddyActive = false
@@ -9166,7 +9128,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     local dist = me and (me.Position - root.Position).Magnitude or -1
 
     _G.BobonStatus =
-        ("%s: CORE7 • %s • d%.0f • bring %d/%d stable%d • hit%d %s")
+        ("%s: CORE8 • %s • d%.0f • bring %d/%d stable%d • hit%d %s")
         :format(prefix, tostring(mobName), dist,
             tonumber(brought) or 0,
             tonumber(candidates) or 0,
@@ -9266,6 +9228,30 @@ function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     local hum = model:FindFirstChildOfClass("Humanoid")
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
+
+    -- v22.29.8 single-owner farm path.
+    -- This must run before the old TeddyAir/SharedTeddy gates, otherwise the
+    -- adaptive CombatController rejects every newly brought secondary.
+    if self.ReferenceVideoSingleOwnerActive then
+        local wanted = self.ReferenceVideoSingleOwnerActive
+        if IsEnemyNamed(model, wanted) then
+            local primaryRoot = primaryTarget
+                and primaryTarget:FindFirstChild("HumanoidRootPart")
+            local since = self.ReferenceVideoBringNearSince
+                and self.ReferenceVideoBringNearSince[root]
+            local damageAt = self.ReferenceVideoDamageProven
+                and self.ReferenceVideoDamageProven[root]
+            local okPos, pos = pcall(function() return root.Position end)
+            if okPos and IsValidPos(pos) and primaryRoot and primaryRoot.Parent then
+                local near = (pos - primaryRoot.Position).Magnitude <= 15
+                local persisted = since and tick() - since >= 0.10
+                local damageProven = damageAt and tick() - damageAt <= 4.0
+                if near and (persisted or damageProven) then
+                    return true
+                end
+            end
+        end
+    end
 
     if _G.Settings.TeddyAirSweepMode ~= false then
         local at = self.TeddyAirVerified and self.TeddyAirVerified[root]
