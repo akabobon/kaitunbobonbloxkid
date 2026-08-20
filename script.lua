@@ -1,6 +1,15 @@
 -- =================================================================
---         BOBON HUB v22.22.7 SAFE REFERENCE MERGE
---         Base: v22.22.6 VIDEO26 QUEST + REMOTE PROOF FIX
+--         BOBON HUB v22.22.8 IMMORTAL-MOB GUARD
+--         Base: v22.22.7 SAFE REFERENCE MERGE
+--
+--  v22.22.8 IMMORTAL-MOB GUARD:
+--  [I228-1] Explicit owner=false roots are never promoted by visual CFrame persistence alone.
+--           This removes the client-only ghost path that can look grouped but take zero real HP damage.
+--  [I228-2] TeddySequence now runs a REAL Humanoid-HP watchdog even though SharedFarmTick returns early.
+--           A target that receives attack attempts without HP loss is revoked, restored, backend-rotated, and retried.
+--  [I228-3] Unknown-owner remote pulls remain allowed, but real HP delta upgrades the lease to damage-proven.
+--           If no HP delta arrives, the visual lease is rejected instead of being attacked forever.
+--  [I228-4] No BodyPosition/PlatformStand/ChangeState/WalkSpeed freeze added; stand-off cluster selection remains v22.22.7.
 --
 --  v22.22.7 SAFE REFERENCE MERGE:
 --  [R227-B1] Trio selection is cluster-first: exact quest mobs are grouped by original spawn proximity
@@ -1520,6 +1529,11 @@ _G.Settings = {
     TeddyTrioRemoteRejectRadius = 34,
     TeddyTrioRemoteRetry = 0.85,
     TeddyTrioRemoteMaxFails = 1,
+    -- v22.22.8: never trust explicit server ownership from a visual-only CFrame result.
+    TeddyTrioAllowFalseOwnerSnap = false,
+    TeddyTrioNoDamageTimeout = 1.60,
+    TeddyTrioGhostRetry = 2.50,
+    TeddyTrioDamageProofTTL = 3.00,
     -- v22.22.5: stay at one safe field hover and remote-magnet; never chase each mob.
     TeddyTrioStandOffRemoteOnly = true,
     TeddyTrioStandOffHeight = 30,
@@ -7819,6 +7833,7 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedTrioRemoteFails = setmetatable({}, {__mode="k"})
     self.SharedTrioOwnerProbeUntil = setmetatable({}, {__mode="k"})
     self.SharedTrioProofLease = setmetatable({}, {__mode="k"})
+    self.SharedTrioDamageProven = setmetatable({}, {__mode="k"})
     self.SharedTrioRemotePendingCount = 0
     self.SharedTrioFieldCenter = nil
     self.SharedTrioClusterCenter = nil
@@ -8062,6 +8077,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     self.SharedTrioRemoteFails = self.SharedTrioRemoteFails or setmetatable({}, {__mode="k"})
     self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
     self.SharedTrioProofLease = self.SharedTrioProofLease or setmetatable({}, {__mode="k"})
+    self.SharedTrioDamageProven = self.SharedTrioDamageProven or setmetatable({}, {__mode="k"})
 
     local center = self.SharedTrioFieldCenter or me.Position
     local selected, selectedRoots = {}, setmetatable({}, {__mode="k"})
@@ -8387,16 +8403,22 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
                 if verifiedAt then
                     local proofLease = self.SharedTrioProofLease[root]
-                    if owner == false and not proofLease then
-                        -- Explicit server ownership without a successful no-write proof
-                        -- is not enough authority for a moving pile. Revoke safely.
+                    local damageAt = self.SharedTrioDamageProven[root]
+                    local damageFresh = damageAt ~= nil
+                        and now - damageAt <= math.max(1.0,
+                            tonumber(_G.Settings.TeddyTrioDamageProofTTL) or 3.0)
+                    if owner == false and not damageFresh then
+                        -- v22.22.8 NO-GHOST invariant: explicit server ownership cannot be
+                        -- upgraded by local position persistence alone.
                         self.SharedTeddyVerified[root] = nil
                         self.SharedTeddyQualified[root] = nil
                         self.SharedTeddyPendingAt[root] = nil
                         self.SharedTrioPendingPos[root] = nil
                         self.SharedTrioRemoteProof[root] = nil
                         self.SharedTrioProofLease[root] = nil
-                        self.SharedTeddyRetryAfter[root] = now + retryDelay
+                        self.SharedTrioDamageProven[root] = nil
+                        self.SharedTeddyRetryAfter[root] = now
+                            + math.max(retryDelay, tonumber(_G.Settings.TeddyTrioGhostRetry) or 2.5)
                         self:SharedRestoreOne(mob)
                     else
                         local driftBefore = (pos - pilePos).Magnitude
@@ -8448,9 +8470,10 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
                     elseif remoteFirst and retryReady and owner == false
                         and distPlayer <= remoteMaxDistance and remoteFails < remoteMaxFails then
-                        -- Do not write a server-owned root. Give the simulation-radius
-                        -- request a short transfer window first. If ownership does not
-                        -- transfer, this root becomes a normal physical acquire target.
+                        -- v22.22.8: owner=false is authoritative. Keep SimulationRadius hot,
+                        -- but never CFrame a root that the executor explicitly reports as
+                        -- server-owned. The old one-shot false-owner snap was the immortal
+                        -- visual-ghost path seen in the supplied screenshot.
                         local untilAt = tonumber(self.SharedTrioOwnerProbeUntil[root]) or 0
                         if untilAt <= 0 then
                             self.SharedTrioOwnerProbeUntil[root] = now + remoteOwnerSettle
@@ -8459,27 +8482,13 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                             remotePendingCount = remotePendingCount + 1
                         else
                             self.SharedTrioOwnerProbeUntil[root] = nil
-                            if _G.Settings.TeddyTrioStandOffRemoteOnly ~= false then
-                                -- VIDEO26: some executors report owner=false even after a
-                                -- successful SimulationRadius request. Do ONE no-freeze
-                                -- far snap, then require the same two-phase persistence
-                                -- proof used by owner=nil. If the server rejects it, the
-                                -- root snaps back and failRemote schedules a quiet retry.
-                                if not remoteProof and not pendingAt and snap(root, pilePos) then
-                                    self.SharedTrioRemoteProof[root] = {
-                                        Anchor = pilePos,
-                                        StartedAt = now,
-                                        LastCheckAt = 0,
-                                        Checks = 0,
-                                        Phase2At = nil,
-                                    }
-                                    remotePendingCount = remotePendingCount + 1
-                                else
-                                    failRemote(mob, root)
-                                end
-                            else
-                                self.SharedTrioRemoteFails[root] = remoteMaxFails
-                            end
+                            self.SharedTeddyRetryAfter[root] = now
+                                + math.max(remoteRetry,
+                                    tonumber(_G.Settings.TeddyTrioStandOffOwnerRetry) or 0.20)
+                            remotePendingCount = remotePendingCount + 1
+                            self.SharedTrioRemoteProof[root] = nil
+                            self.SharedTrioProofLease[root] = nil
+                            self.SharedTrioDamageProven[root] = nil
                         end
 
                     elseif remoteFirst and retryReady and owner == nil
@@ -8650,8 +8659,47 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
         PrepareCombatTarget(primary)
         EquipCombatTool()
         attempted = Attack(primary, mobName)
+
+        -- v22.22.8: SharedFarmTick returns before the legacy/global damage watchdog.
+        -- Validate REAL Humanoid HP here so a visual remote pull can never be attacked
+        -- forever when the server still owns that NPC.
+        if self:SharedPrimaryNoDamage(primary, attempted == true) then
+            local root = primary:FindFirstChild("HumanoidRootPart")
+            if root then
+                self.SharedTeddyVerified[root] = nil
+                self.SharedTeddyQualified[root] = nil
+                self.SharedTeddyPendingAt[root] = nil
+                self.SharedTrioPendingPos[root] = nil
+                self.SharedTrioRemoteProof[root] = nil
+                self.SharedTrioProofLease[root] = nil
+                self.SharedTrioDamageProven[root] = nil
+                self.SharedTrioOwnerProbeUntil[root] = nil
+                self.SharedTeddyRetryAfter[root] = tick()
+                    + math.max(0.8, tonumber(_G.Settings.TeddyTrioGhostRetry) or 2.5)
+            end
+            self:SharedRestoreOne(primary)
+            local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
+            if failingBackend then
+                CombatController:FailBackend(failingBackend, "TEDDY-REAL-HP-NO-DAMAGE")
+            else
+                CombatController:AbortPending("TEDDY-REAL-HP-NO-DAMAGE")
+            end
+            self.SharedPrimaryRecoveryUntil = tick()
+                + math.max(0.35, tonumber(_G.Settings.SharedPrimaryRecoveryCooldown) or 1.0)
+            _G.State.FarmTarget = nil
+            _G.State.CurrentTarget = nil
+            _G.State.FState = "SHARED_REJECT_GHOST"
+            _G.State.ActionText = "Reject Ghost • " .. mobName
+            _G.BobonStatus = prefix .. ": Rejecting no-damage mob • " .. mobName
+            if _G.BobonDiagnostics then
+                _G.BobonDiagnostics.Bring = "TRIO-GHOST-REJECT"
+            end
+            return true
+        end
+
         verified, total = self:SharedTeddyRestack(false)
     else
+        self:SharedPrimaryNoDamage(nil, false)
         _G.State.FarmTarget = nil
         _G.State.CurrentTarget = nil
         _G.State.ClusterMode = "OFF"
@@ -8818,9 +8866,20 @@ function ClusterFarmController:SharedPrimaryNoDamage(target, attackWindow)
         self.SharedPrimaryLastDamageAt = now
     elseif hp < previous - 0.01 then
         self.SharedPrimaryLastDamageAt = now
+        local root = target:FindFirstChild("HumanoidRootPart")
+        if root then
+            self.SharedTrioDamageProven = self.SharedTrioDamageProven
+                or setmetatable({}, {__mode="k"})
+            self.SharedTrioDamageProven[root] = now
+        end
     end
     self.SharedPrimaryWatchHealth = hp
-    local timeout = math.max(1.5, tonumber(_G.Settings.SharedPrimaryNoDamageTimeout) or 3.0)
+    local timeout
+    if _G.Settings.SharedTeddyMode ~= false then
+        timeout = math.max(0.9, tonumber(_G.Settings.TeddyTrioNoDamageTimeout) or 1.60)
+    else
+        timeout = math.max(1.5, tonumber(_G.Settings.SharedPrimaryNoDamageTimeout) or 3.0)
+    end
     local since = math.max(tonumber(self.SharedPrimaryWatchStartedAt) or now,
         tonumber(self.SharedPrimaryLastDamageAt) or now)
     if now < (tonumber(self.SharedPrimaryRecoveryUntil) or 0) then return false end
