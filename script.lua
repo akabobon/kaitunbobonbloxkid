@@ -1,6 +1,36 @@
 -- =================================================================
---         BOBON HUB v22.23.1 LONG-RANGE REAL-HIT FARM
---         Base: v22.23.0 REAL-HIT SEED ANCHOR BRING
+--         BOBON HUB v22.25.0 VIDEO7951 CONCURRENT STABLE PILE
+--         Base: v22.24.0 VIDEO7951 DEEP REBASE
+--
+--  v22.25.0 FARM/GATHER CORE REWRITE (full 16m42s video re-check):
+--  [V225-1] BRING IS NO LONGER SEED-GATED. As soon as the correct field/mob name is known,
+--           every live exact-name mob in the active field is admitted and pulled toward one pile.
+--  [V225-2] PileAnchor is stable and independent from CombatVictim. A victim dying/despawning
+--           never relocates or clears the pile; new spawns are appended on the next scan.
+--  [V225-3] Movement always targets PileAnchor hover. CombatVictim rotates independently for
+--           real Humanoid.Health proof / damage dispatch; FindNearestMob cannot move the player.
+--  [V225-4] Unproven mobs are pulled concurrently, then HP-probed round-robin. One no-damage
+--           member is isolated/retried without resetting already healthy members or the pile.
+--  [V225-5] Dead members disappear naturally from the next field scan; newly spawned members
+--           are pulled into the existing pile without a new seed/acquire phase.
+--  [V225-6] Lv1-49 Sky Bandit -> Lv50-55 Shanda -> Lv56-70 God's Guard route from v22.24 remains.
+-- =================================================================
+--         BOBON HUB v22.24.0 VIDEO7951 DEEP REBASE
+--         Base: v22.23.1 LONG-RANGE REAL-HIT FARM
+--
+--  v22.24.0 VIDEO7951 DEEP REBASE (full 16m42s reference review):
+--  [V7951-1] Early skip now matches the observed route: Lv1-49 Sky Bandit [150],
+--             Lv50-55 Shanda [475], Lv56-70 God's Guard [450].
+--  [V7951-2] Proven seed-anchor bring no longer hard-caps at three: all exact-name live mobs
+--             in the active field are pulled (bounded only by a defensive 32-mob sanity cap).
+--  [V7951-3] Pulled secondaries are HP-probed round-robin instead of one-at-a-time blocking.
+--             Every secondary still needs its OWN real Humanoid.Health decrease before fan-out.
+--  [V7951-4] A no-damage secondary is restored/retried independently; one ghost cannot reset
+--             or stall the already damage-proven pile.
+--  [V7951-5] After seed HP proof, Farm begins bring immediately while concurrently approaching
+--             the proven anchor hover for network coverage; there is no mandatory park-before-bring gate.
+--  [V7951-6] Auto-stat fallback is Melee-first, matching the observed early account distribution.
+--             Existing code redemption, gacha/store, quest, Saber, dodge and melee progression remain authoritative.
 --
 --  v22.23.1 LONG-RANGE REAL-HIT FARM:
 --  [LR231-1] Shared quest farm may attack from a configurable long range before approaching the mob.
@@ -1523,8 +1553,16 @@ _G.Settings = {
     TeddySequenceRetryDelay = 0.28,
     TeddySequencePileHover = 24,
     TeddySequenceAttackRange = 120,
-    -- v22.23.0: REAL-HIT SEED -> ANCHOR -> PROVE EACH SECONDARY.
-    TeddyTrioMax = 3,
+    -- v22.24.0: REAL-HIT SEED -> ANCHOR -> ALL exact-name field mobs -> per-mob HP proof.
+    -- 0 means all matching live mobs in the active field; hard cap is only a runaway guard.
+    TeddyTrioMax = 0,
+    TeddyAllMobHardCap = 32,
+    TeddyConcurrentFieldBring = true, -- v22.25: bring starts before HP proof
+    TeddyStablePileAnchor = true, -- v22.25: MovementTarget is the fixed pile, never CombatVictim
+    TeddyAllMobProbeInterval = 0.10,
+    TeddyAllMobProbeTimeout = 2.40,
+    TeddyAllMobProbeMinAttempts = 2,
+    TeddyAllMobAnchorApproachRange = 95,
     TeddyTrioFieldRange = 1800,
     TeddyTrioClusterRadius = 260, -- compatibility only; no mandatory centroid parking
     TeddyTrioClusterSearchRadius = 1800,
@@ -7909,6 +7947,9 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedTrioPulled = setmetatable({}, {__mode="k"})
     self.SharedTrioLastHealth = setmetatable({}, {__mode="k"})
     self.SharedTrioLastDamageAt = setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeStartedAt = setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeLastAt = setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeAttempts = setmetatable({}, {__mode="k"})
     self.SharedTrioPullArmed = false
     self.SharedTrioSeedModel = nil
     self.SharedTrioSeedLastHealth = nil
@@ -8089,8 +8130,10 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
-    -- v22.23.0: pull only AFTER one untouched real mob has produced a real HP delta.
-    -- Position/ownership/CFrame persistence alone never promotes a secondary.
+    -- v22.25.0 VIDEO7951: Stable PileAnchor + concurrent field bring.
+    -- IMPORTANT: no live mob owns the pile and no seed HP proof gates Bring.
+    -- Damage proof only controls multi-hit eligibility / health authority; it never
+    -- controls whether the rest of the field is allowed to join the pile visually.
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
     if not IsAlive() then return 0, 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
@@ -8100,17 +8143,17 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
-    local anchor = self.SharedAnchorModel
-    local anchorHum = anchor and anchor:FindFirstChildOfClass("Humanoid")
-    local anchorRoot = anchor and anchor:FindFirstChild("HumanoidRootPart")
-    if not folder or not me or not anchor or not anchor.Parent or not anchorHum
-        or anchorHum.Health <= 0 or not anchorRoot or not anchorRoot.Parent
-        or not IsEnemyNamed(anchor, self.SharedMobName) then
+    local pileCF = self.SharedPileCFrame
+    if not folder or not me or not pileCF or not IsValidPos(pileCF.Position) then
         return 0, 0
     end
 
     local now = tick()
-    local maxSlots = math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3, 1, 3)
+    local pilePos = pileCF.Position
+    local fieldCenter = self.SharedTrioFieldCenter or pilePos
+    local configuredMax = math.floor(tonumber(_G.Settings.TeddyTrioMax) or 0)
+    local hardCap = math.max(1, math.floor(tonumber(_G.Settings.TeddyAllMobHardCap) or 32))
+    local maxSlots = configuredMax <= 0 and hardCap or math.clamp(configuredMax, 1, hardCap)
     local fieldRange = math.max(220, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
     local followEvery = math.max(0.02, tonumber(_G.Settings.TeddyTrioFollowInterval) or 0.03)
     local memberTimeout = math.max(1.2,
@@ -8129,59 +8172,44 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     self.SharedTrioPulled = self.SharedTrioPulled or setmetatable({}, {__mode="k"})
     self.SharedTrioLastHealth = self.SharedTrioLastHealth or setmetatable({}, {__mode="k"})
     self.SharedTrioLastDamageAt = self.SharedTrioLastDamageAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeStartedAt = self.SharedTrioProbeStartedAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeLastAt = self.SharedTrioProbeLastAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeAttempts = self.SharedTrioProbeAttempts or setmetatable({}, {__mode="k"})
 
     pcall(function() ExpandSimulationRadius() end)
 
-    -- Exact requested anchor: the live position of the mob that already lost HP.
-    local anchorPos = anchorRoot.Position
-    self.SharedPileCFrame = CFrame.new(anchorPos)
-    self.SharedClassicCurrentPile = anchorPos
+    -- PileAnchor is authoritative and never follows CombatVictim.
+    self.SharedClassicCurrentPile = pilePos
     self.SharedTrioPullArmed = true
 
-    -- Anchor proof was earned before any bring write. Keep its real-HP lease fresh.
-    local anchorHP = tonumber(anchorHum.Health) or 0
-    local anchorPrevHP = tonumber(self.SharedTrioLastHealth[anchorRoot])
-    if anchorPrevHP == nil or anchorHP > anchorPrevHP + 0.01 then
-        self.SharedTrioLastDamageAt[anchorRoot] = now
-    elseif anchorHP < anchorPrevHP - 0.01 then
-        self.SharedTrioDamageProven[anchorRoot] = now
-        self.SharedTrioLastDamageAt[anchorRoot] = now
-    end
-    self.SharedTrioLastHealth[anchorRoot] = anchorHP
-    self.SharedTeddyVerified[anchorRoot] = now
-    self.SharedTeddyQualified[anchorRoot] = now
-    self.SharedTrioDamageProven[anchorRoot] = self.SharedTrioDamageProven[anchorRoot] or now
-    self.SharedTrioLastDamageAt[anchorRoot] = self.SharedTrioLastDamageAt[anchorRoot] or now
-
-    local selected = {{
-        Model=anchor, Humanoid=anchorHum, Root=anchorRoot,
-        Position=anchorPos, Origin=anchorPos, IsAnchor=true,
-    }}
-
     local candidates = {}
-    local center = self.SharedTrioFieldCenter or anchorPos
     for _, mob in ipairs(folder:GetChildren()) do
-        if mob ~= anchor and IsEnemyNamed(mob, self.SharedMobName) then
+        if IsEnemyNamed(mob, self.SharedMobName) then
             local hum = mob:FindFirstChildOfClass("Humanoid")
             local root = mob:FindFirstChild("HumanoidRootPart")
             if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
                 local ok, pos = pcall(function() return root.Position end)
                 if ok and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
+                    -- Keep the ORIGINAL field position so a mob already pulled to the pile
+                    -- does not accidentally expand the scan field around the pile.
                     local origin = self.SharedTrioOriginalPos[root] or pos
-                    if (origin - center).Magnitude <= fieldRange
-                        or (origin - anchorPos).Magnitude <= fieldRange then
+                    if (origin - fieldCenter).Magnitude <= fieldRange
+                        or (origin - pilePos).Magnitude <= fieldRange
+                        or (pos - pilePos).Magnitude <= math.max(80, tonumber(_G.Settings.SharedBringRange) or 350) then
                         self.SharedTrioOriginalPos[root] = origin
                         candidates[#candidates + 1] = {
                             Model=mob, Humanoid=hum, Root=root,
                             Position=pos, Origin=origin,
-                            Dist=(origin-anchorPos).Magnitude,
+                            Dist=(origin-pilePos).Magnitude,
                         }
                     end
                 end
             end
         end
     end
+
     table.sort(candidates, function(a,b) return a.Dist < b.Dist end)
+    local selected = {}
     for _, entry in ipairs(candidates) do
         if #selected >= maxSlots then break end
         selected[#selected + 1] = entry
@@ -8199,102 +8227,78 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end)
     end
 
-    local function revoke(entry, reason)
-        local mob, root = entry.Model, entry.Root
-        self.SharedTeddyVerified[root] = nil
-        self.SharedTeddyQualified[root] = nil
-        self.SharedTrioDamageProven[root] = nil
-        self.SharedTrioPulled[root] = nil
-        self.SharedTrioLastHealth[root] = nil
-        self.SharedTrioLastDamageAt[root] = nil
-        self.SharedTeddyRetryAfter[root] = now + retryDelay
-        if self.SharedTrioProofTarget == mob then
-            self.SharedTrioProofTarget = nil
-            self.SharedTrioProofLastHealth = nil
-            self.SharedTrioProofStartedAt = 0
-        end
-        local origin = self.SharedTrioOriginalPos[root]
-        if origin and IsValidPos(origin) then
-            pcall(function()
-                local rot = root.CFrame.Rotation
-                root.CFrame = CFrame.new(origin) * rot
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end)
-        end
-        self:SharedRestoreOne(mob)
-        if reason then DLog("TRIO-PROOF", tostring(reason) .. ": " .. tostring(mob and mob.Name)) end
-    end
-
-    local verifiedCount, pendingCount = 1, 0
-    for i=2,#selected do
-        local entry = selected[i]
+    local verifiedCount, pendingCount, movedCount = 0, 0, 0
+    for _, entry in ipairs(selected) do
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent then
             local hp = tonumber(hum.Health) or 0
             local prev = tonumber(self.SharedTrioLastHealth[root])
             if prev == nil or hp > prev + 0.01 then
-                self.SharedTrioLastDamageAt[root] = now
+                -- Fresh spawn/heal/replacement: open a fresh proof window.
+                self.SharedTrioProbeStartedAt[root] = nil
+                self.SharedTrioProbeAttempts[root] = 0
             elseif hp < prev - 0.01 then
-                -- Only REAL server-observed HP movement promotes the secondary.
+                -- Only a real server-observed HP decrease authorizes fan-out eligibility.
                 self.SharedTrioDamageProven[root] = now
                 self.SharedTrioLastDamageAt[root] = now
                 self.SharedTeddyVerified[root] = now
                 self.SharedTeddyQualified[root] = now
+                self.SharedTrioProbeStartedAt[root] = nil
+                self.SharedTrioProbeAttempts[root] = 0
             end
             self.SharedTrioLastHealth[root] = hp
 
-            local damageAt = self.SharedTrioDamageProven[root]
+            local damageAt = tonumber(self.SharedTrioDamageProven[root])
             local lastDamage = tonumber(self.SharedTrioLastDamageAt[root]) or 0
-            if damageAt then
-                if now - lastDamage > memberTimeout then
-                    revoke(entry, "LIVENESS-EXPIRED")
-                    pendingCount = pendingCount + 1
-                else
-                    self.SharedTeddyVerified[root] = now
-                    self.SharedTeddyQualified[root] = now
-                    if now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
-                        self.SharedTrioLastFollow[root] = now
-                        snap(root, anchorPos)
-                    end
-                    verifiedCount = verifiedCount + 1
-                end
-            else
-                local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
-                if retryReady then
-                    -- Pull is only an UNTRUSTED trial until this exact mob loses HP.
-                    if not self.SharedTrioPulled[root] then
-                        self.SharedTrioOriginalPos[root] = self.SharedTrioOriginalPos[root] or entry.Origin
-                        if snap(root, anchorPos) then
-                            self.SharedTrioPulled[root] = now
-                            self.SharedTrioLastHealth[root] = hp
-                            self.SharedTrioLastFollow[root] = now
-                        end
-                    elseif now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
-                        self.SharedTrioLastFollow[root] = now
-                        snap(root, anchorPos)
-                    end
-                end
+            if damageAt and now - lastDamage <= memberTimeout then
+                self.SharedTeddyVerified[root] = now
+                self.SharedTeddyQualified[root] = now
+                verifiedCount = verifiedCount + 1
+            elseif damageAt and now - lastDamage > memberTimeout then
+                -- Do NOT eject the member or destroy the pile. It simply becomes
+                -- proof-pending again and will be selected by round-robin combat.
+                self.SharedTrioDamageProven[root] = nil
+                self.SharedTeddyVerified[root] = nil
+                self.SharedTeddyQualified[root] = nil
+                self.SharedTrioProbeStartedAt[root] = self.SharedTrioProbeStartedAt[root] or now
+                self.SharedTrioProbeAttempts[root] = 0
                 pendingCount = pendingCount + 1
+            else
+                pendingCount = pendingCount + 1
+            end
+
+            -- Concurrent Bring: every selected live mob is restacked immediately,
+            -- regardless of whether it has already earned HP proof.
+            local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
+            if retryReady and now - (tonumber(self.SharedTrioLastFollow[root]) or 0) >= followEvery then
+                self.SharedTrioLastFollow[root] = now
+                if not self.SharedTrioPulled[root] then
+                    self.SharedTrioOriginalPos[root] = self.SharedTrioOriginalPos[root] or entry.Origin
+                end
+                if snap(root, pilePos) then
+                    self.SharedTrioPulled[root] = self.SharedTrioPulled[root] or now
+                    movedCount = movedCount + 1
+                end
             end
         end
     end
 
-    self.SharedBringCount = verifiedCount
+    self.SharedBringCount = #selected
     self.SharedTrioRemotePendingCount = pendingCount
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("SEED-ANCHOR %d/%d • proof %d")
-            :format(verifiedCount, #selected, pendingCount)
+        _G.BobonDiagnostics.Bring = "CONCURRENT-PILE"
         _G.BobonDiagnostics.BringCandidates = #selected
-        _G.BobonDiagnostics.BringMoved = verifiedCount
-        _G.BobonDiagnostics.BringFailed = math.max(0, #selected-verifiedCount)
+        _G.BobonDiagnostics.BringMoved = movedCount
+        _G.BobonDiagnostics.BringDamageProven = verifiedCount
+        _G.BobonDiagnostics.BringUnknown = pendingCount
     end
     return verifiedCount, #selected
 end
 
+
 function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    -- v22.23.1: v22.23 real-hit anchor flow + bounded long-range attack window:
-    -- REAL MOB -> HP DELTA -> THAT MOB IS ANCHOR -> PULL OTHERS -> HP-PROVE EACH SECONDARY.
+    -- v22.25.0 VIDEO7951: FIELD SCAN -> CONCURRENT BRING -> STABLE PILE -> ROUND-ROBIN DAMAGE.
+    -- MovementTarget and CombatVictim are intentionally independent.
     if _G.Settings.SharedSourceFarmMode == false then return false end
     if type(mobName) ~= "string" or mobName == "" then return false end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
@@ -8326,6 +8330,9 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     self.SharedTrioPulled = self.SharedTrioPulled or setmetatable({}, {__mode="k"})
     self.SharedTrioLastHealth = self.SharedTrioLastHealth or setmetatable({}, {__mode="k"})
     self.SharedTrioLastDamageAt = self.SharedTrioLastDamageAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeStartedAt = self.SharedTrioProbeStartedAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeLastAt = self.SharedTrioProbeLastAt or setmetatable({}, {__mode="k"})
+    self.SharedTrioProbeAttempts = self.SharedTrioProbeAttempts or setmetatable({}, {__mode="k"})
 
     local folder = workspace:FindFirstChild("Enemies")
     local me = HRP()
@@ -8340,342 +8347,194 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
             and not r.Anchored and IsAllowedWorldPosition(r.Position)
     end
 
-    local function restoreVisualPulls()
-        if type(self.SharedTrioOriginalPos) == "table" then
-            for root, origin in pairs(self.SharedTrioOriginalPos) do
-                if root and root.Parent and typeof(origin) == "Vector3" then
-                    pcall(function()
-                        local rot = root.CFrame.Rotation
-                        root.CFrame = CFrame.new(origin) * rot
-                        root.AssemblyLinearVelocity = Vector3.zero
-                        root.AssemblyAngularVelocity = Vector3.zero
-                    end)
-                end
-            end
-        end
-        self.SharedTeddyBatch = {}
-        self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
-        self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
-        self.SharedTrioDamageProven = setmetatable({}, {__mode="k"})
-        self.SharedTrioOriginalPos = setmetatable({}, {__mode="k"})
-        self.SharedTrioPulled = setmetatable({}, {__mode="k"})
-        self.SharedTrioLastHealth = setmetatable({}, {__mode="k"})
-        self.SharedTrioLastDamageAt = setmetatable({}, {__mode="k"})
-        self.SharedTrioPullArmed = false
-        self.SharedPileCFrame = nil
-        self.SharedBringCount = 0
-    end
-
-    -- The anchor must always be a mob that earned HP proof BEFORE it was pulled.
-    local anchor = self.SharedAnchorModel
-    if anchor and not validMob(anchor) then
-        restoreVisualPulls()
-        self.SharedAnchorModel = nil
-        self.SharedTrioSeedModel = nil
-        self.SharedTrioSeedLastHealth = nil
-        self.SharedTrioSeedStartedAt = 0
-        self.SharedTrioSeedAttempted = false
-        self.SharedTrioLongRangeFallbackUntil = 0
-        self.SharedTrioProofTarget = nil
-        self.SharedTrioProofLastHealth = nil
-        self.SharedTrioProofStartedAt = 0
-        anchor = nil
-    end
-
-    -- PHASE 1: attack ONE untouched real mob at its live position. Bring is OFF.
-    if not anchor then
-        self.SharedTrioPullArmed = false
-        local seed = self.SharedTrioSeedModel
-        if not validMob(seed) then
-            seed = nil
-            local bestDist = math.huge
-            local fieldCenter = self.SharedTrioFieldCenter
-            local fieldRange = math.max(220, tonumber(_G.Settings.TeddyTrioFieldRange) or 1800)
-            for _, mob in ipairs(folder:GetChildren()) do
-                if validMob(mob) then
-                    local root = mob:FindFirstChild("HumanoidRootPart")
-                    local pos = root.Position
-                    if not fieldCenter or (pos-fieldCenter).Magnitude <= fieldRange then
-                        local d = (pos-me.Position).Magnitude
-                        if d < bestDist then seed, bestDist = mob, d end
-                    end
-                end
-            end
-            self.SharedTrioSeedModel = seed
-            self.SharedTrioSeedLastHealth = nil
-            self.SharedTrioSeedStartedAt = now
-            self.SharedTrioSeedAttempted = false
-            -- Never inherit visual verification into the next real seed.
-            self.SharedTeddyVerified = setmetatable({}, {__mode="k"})
-            self.SharedTeddyQualified = setmetatable({}, {__mode="k"})
-        end
-
-        if not seed then
-            _G.State.FarmTarget = nil
-            _G.State.CurrentTarget = nil
-            _G.State.FState = "SEED_WAIT"
-            _G.State.ActionText = "Waiting Real Mob • " .. mobName
-            _G.BobonStatus = prefix .. ": waiting real " .. mobName
-            if fallbackCF and _G.State:CanRequestTravel() then
-                local cf = typeof(fallbackCF)=="CFrame" and fallbackCF or CFrame.new(fallbackCF)
-                TravelManager:Request(cf * CFrame.new(0, tonumber(_G.Settings.TeddyTrioSeedHover) or 24, 0), "Farm", {
-                    arrivalThreshold=18, fallback=fallbackCF, combatHover=true, persistent=false,
-                })
-            end
-            return true
-        end
-
-        local hum = seed:FindFirstChildOfClass("Humanoid")
-        local root = seed:FindFirstChild("HumanoidRootPart")
-        local hp = tonumber(hum.Health) or 0
-        local prev = tonumber(self.SharedTrioSeedLastHealth)
-        if prev ~= nil and hp < prev - 0.01 then
-            -- CAUSAL REAL HP DELTA. Only now may any bring begin.
-            self.SharedAnchorModel = seed
-            self.SharedTrioSeedModel = nil
-            self.SharedTrioSeedLastHealth = nil
-            self.SharedTrioSeedStartedAt = 0
-            self.SharedTrioSeedAttempted = false
-            self.SharedTrioLongRangeFallbackUntil = 0
-            self.SharedTrioPullArmed = true
-            self.SharedPileCFrame = CFrame.new(root.Position)
-            self.SharedTrioDamageProven[root] = now
-            self.SharedTrioLastHealth[root] = hp
-            self.SharedTrioLastDamageAt[root] = now
-            self.SharedTeddyVerified[root] = now
-            self.SharedTeddyQualified[root] = now
-            _G.State.FarmTarget = seed
-            _G.State.CurrentTarget = seed
-            _G.State.FState = "SEED_CONFIRMED"
-            _G.State.ActionText = "Real Hit Confirmed • Anchor " .. mobName
-            _G.BobonStatus = prefix .. ": REAL HIT ✓ • anchor locked • pulling next"
-            if _G.BobonDiagnostics then _G.BobonDiagnostics.Bring = "SEED-HP-PROVEN" end
-            return true
-        end
-        self.SharedTrioSeedLastHealth = hp
-
-        local seedHover = math.max(8, tonumber(_G.Settings.TeddyTrioSeedHover) or 24)
-        me = HRP() or me
-        local flatDist = (Vector3.new(me.Position.X,0,me.Position.Z)
-            - Vector3.new(root.Position.X,0,root.Position.Z)).Magnitude
-        local normalRange = math.max(35, tonumber(_G.Settings.TeddyLongRangeFallbackRange)
-            or tonumber(_G.Settings.TeddyTrioSeedAttackRange) or 100)
-        local longRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
-            and math.max(normalRange, tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
-            or normalRange
-        local forceClose = now < (tonumber(self.SharedTrioLongRangeFallbackUntil) or 0)
-        local attackRange = forceClose and normalRange or longRange
-
-        -- Long-range first: once inside the allowed remote-hit window, STOP moving closer.
-        -- Only a real HP delta can validate this; a rejected remote hit falls back to 100 studs.
-        if flatDist > attackRange then
-            local seedCF = root.CFrame * CFrame.new(0, seedHover, 0)
-            if _G.State:CanRequestTravel() then
-                TravelManager:Request(seedCF, "Farm", {
-                    arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
-                    fallback=fallbackCF, combatHover=true, persistent=true,
-                    speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-                })
-            end
-        elseif _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-            TravelManager:Stop("LongRangeSeedWindow")
-        end
-
-        local attempted = false
-        _G.State.FarmTarget = seed
-        _G.State.CurrentTarget = seed
-        if flatDist <= attackRange then
-            _G.State.LongRangeFarmAttackRange = attackRange
-            _G.State.LongRangeFarmAttackUntil = now + 0.30
-            PrepareCombatTarget(seed)
-            EquipCombatTool()
-            attempted = Attack(seed, mobName)
-            self.SharedTrioSeedAttempted = self.SharedTrioSeedAttempted or attempted
-        end
-
-        local longProbeTimeout = math.max(0.6, tonumber(_G.Settings.TeddyLongRangeProbeTimeout) or 1.20)
-        local proofTimeout = math.max(longProbeTimeout, tonumber(_G.Settings.TeddyTrioSeedProofTimeout) or 2.20)
-        local elapsed = now - (tonumber(self.SharedTrioSeedStartedAt) or now)
-        if self.SharedTrioSeedAttempted and elapsed >= longProbeTimeout
-            and flatDist > normalRange and not forceClose then
-            -- Long-range packet reached the dispatch layer but the server gave no HP proof.
-            -- Treat that as RANGE rejection first, not a broken backend. Approach only to the
-            -- normal verified window for a bounded time and retry the same untouched seed.
-            self.SharedTrioLongRangeFallbackUntil = now
-                + math.max(1.0, tonumber(_G.Settings.TeddyLongRangeFallbackHold) or 3.00)
-            self.SharedTrioSeedStartedAt = now
-            self.SharedTrioSeedLastHealth = hp
-            self.SharedTrioSeedAttempted = false
-            if CombatController.PendingBackend then
-                CombatController:AbortPending("LONG-RANGE-NO-HP-FALLBACK")
-            end
-        elseif self.SharedTrioSeedAttempted and elapsed >= proofTimeout then
-            -- At normal range, continued no-HP is now a real combat backend problem.
-            local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
-            if failingBackend then CombatController:FailBackend(failingBackend, "SEED-REAL-HP-NO-DELTA")
-            else CombatController:AbortPending("SEED-REAL-HP-NO-DELTA") end
-            self.SharedTrioSeedStartedAt = now
-            self.SharedTrioSeedLastHealth = hp
-            self.SharedTrioSeedAttempted = false
-        end
-
-        _G.State.FState = "SEED_REAL_ATTACK"
-        _G.State.ActionText = "Real HP Proof • " .. mobName
-        _G.BobonStatus = ("%s: REAL HIT PROOF • %s • hit %s")
-            :format(prefix, mobName, attempted and "ACTIVE" or "APPROACH")
+    -- Create the PileAnchor BEFORE selecting any combat victim. fallbackCF wins and is
+    -- stable for the lifetime of this mob/quest route. A live mob is only a one-time
+    -- fallback if the route has no usable field CFrame.
+    local representative = self:SharedSelectTarget(mobName)
+    local pileCF = self:SharedEnsurePile(mobName, representative, fallbackCF)
+    if not pileCF or not IsValidPos(pileCF.Position) then
+        _G.State.FarmTarget = representative
+        _G.State.CurrentTarget = representative
+        _G.State.FState = "PILE_WAIT"
+        _G.State.ActionText = "Waiting Pile Field • " .. mobName
+        _G.BobonStatus = prefix .. ": waiting field anchor • " .. mobName
         return true
     end
 
-    -- PHASE 2: seed is proven. Stay above THAT live mob and pull others to it.
-    local anchorHum = anchor:FindFirstChildOfClass("Humanoid")
-    local anchorRoot = anchor:FindFirstChild("HumanoidRootPart")
-    if not anchorHum or anchorHum.Health <= 0 or not anchorRoot then return true end
-    local anchorHover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover) or 24)
-    me = HRP() or me
-    local anchorFlatDist = (Vector3.new(me.Position.X,0,me.Position.Z)
-        - Vector3.new(anchorRoot.Position.X,0,anchorRoot.Position.Z)).Magnitude
-    local anchorLongRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
-        and math.max(_G.Settings.FastAttackRange or 100,
-            tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
-        or (_G.Settings.FastAttackRange or 100)
-    if anchorFlatDist > anchorLongRange then
+    -- Bring happens NOW, before any HP-proof requirement.
+    local verified, total = self:SharedTeddyRestack(true)
+    local batch = self.SharedTeddyBatch or {}
+
+    -- No mobs alive in the current wave: keep the same PileAnchor and return to its hover.
+    -- Next spawn is automatically appended by the next Restack scan.
+    if total <= 0 then
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "PILE_WAIT_SPAWN"
+        _G.State.ActionText = "Waiting Spawn • " .. mobName
+        local hover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover)
+            or tonumber(_G.Settings.FarmHeight) or 24)
+        local waitCF = pileCF * CFrame.new(0, hover, 0)
         if _G.State:CanRequestTravel() then
-            TravelManager:Request(anchorRoot.CFrame * CFrame.new(0, anchorHover, 0), "Farm", {
+            TravelManager:Request(waitCF, "Farm", {
                 arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
-                fallback=fallbackCF, combatHover=true, persistent=true,
+                fallback=fallbackCF or pileCF, combatHover=true, persistent=true,
+                speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+        _G.BobonStatus = prefix .. ": pile stable • waiting spawn • " .. mobName
+        return true
+    end
+
+    -- Movement owner always follows the pile, never the victim selected below.
+    local hover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover)
+        or tonumber(_G.Settings.FarmHeight) or 24)
+    local hoverCF = pileCF * CFrame.new(0, hover, 0)
+    local flatPileDist = (Vector3.new(me.Position.X,0,me.Position.Z)
+        - Vector3.new(pileCF.Position.X,0,pileCF.Position.Z)).Magnitude
+    local coverageRange = math.max(45,
+        tonumber(_G.Settings.TeddyAllMobAnchorApproachRange) or 95)
+    if flatPileDist > coverageRange then
+        if _G.State:CanRequestTravel() then
+            TravelManager:Request(hoverCF, "Farm", {
+                arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
+                fallback=fallbackCF or pileCF, combatHover=true, persistent=true,
                 speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
             })
         end
     elseif _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-        TravelManager:Stop("LongRangeAnchorWindow")
+        TravelManager:Stop("StablePileCoverageReady")
     end
 
-    local verified, total = self:SharedTeddyRestack(true)
-    local batch = self.SharedTeddyBatch or {}
+    -- Round-robin proof scheduling across ALL live pile members, including the first one.
+    -- No member blocks Bring and no member owns the PileAnchor.
+    local probeEvery = math.max(0.05,
+        tonumber(_G.Settings.TeddyAllMobProbeInterval) or 0.10)
+    local probeTimeout = math.max(1.2,
+        tonumber(_G.Settings.TeddyAllMobProbeTimeout)
+            or tonumber(_G.Settings.TeddyTrioSecondaryProofTimeout) or 2.40)
+    local minProbeAttempts = math.max(1,
+        math.floor(tonumber(_G.Settings.TeddyAllMobProbeMinAttempts) or 2))
 
-    -- Choose ONE unproven pulled secondary. It gets its own causal HP proof.
-    local proof = self.SharedTrioProofTarget
     local proofEntry = nil
-    if proof then
-        for _, entry in ipairs(batch) do
-            if entry.Model == proof then proofEntry=entry; break end
-        end
-        if not proofEntry or not validMob(proof)
-            or self.SharedTrioDamageProven[proofEntry.Root] then
-            proof = nil
-            proofEntry = nil
-            self.SharedTrioProofTarget = nil
-            self.SharedTrioProofLastHealth = nil
-            self.SharedTrioProofStartedAt = 0
-        end
-    end
-    if not proof then
-        for i=2,#batch do
-            local entry=batch[i]
-            local root=entry.Root
-            if root and root.Parent and self.SharedTrioPulled[root]
-                and not self.SharedTrioDamageProven[root]
-                and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
-                proof, proofEntry = entry.Model, entry
-                self.SharedTrioProofTarget = proof
-                self.SharedTrioProofLastHealth = entry.Humanoid.Health
-                self.SharedTrioProofStartedAt = now
-                break
-            end
-        end
-    end
+    local oldestProbeAt = math.huge
+    local pendingProofCount = 0
+    for _, entry in ipairs(batch) do
+        local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
+        if mob and validMob(mob) and hum and root and root.Parent
+            and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
+            if not self.SharedTrioDamageProven[root] then
+                pendingProofCount = pendingProofCount + 1
+                local started = tonumber(self.SharedTrioProbeStartedAt[root])
+                local attempts = tonumber(self.SharedTrioProbeAttempts[root]) or 0
+                local lastProbe = tonumber(self.SharedTrioProbeLastAt[root]) or 0
 
-    local attackTarget = anchor
-    local phase = "ANCHOR_ATTACK"
-    if proof and proofEntry then
-        local hum, root = proofEntry.Humanoid, proofEntry.Root
-        local hp = tonumber(hum.Health) or 0
-        local prev = tonumber(self.SharedTrioProofLastHealth)
-        if prev ~= nil and hp < prev - 0.01 then
-            -- Secondary itself took REAL damage after the pull. It is now safe fan-out.
-            self.SharedTrioDamageProven[root] = now
-            self.SharedTrioLastDamageAt[root] = now
-            self.SharedTrioLastHealth[root] = hp
-            self.SharedTeddyVerified[root] = now
-            self.SharedTeddyQualified[root] = now
-            self.SharedTrioProofTarget = nil
-            self.SharedTrioProofLastHealth = nil
-            self.SharedTrioProofStartedAt = 0
-            verified, total = self:SharedTeddyRestack(false)
-            attackTarget = anchor
-            phase = "SECONDARY_CONFIRMED"
-        else
-            self.SharedTrioProofLastHealth = hp
-            local timeout = math.max(0.8,
-                tonumber(_G.Settings.TeddyTrioSecondaryProofTimeout) or 1.35)
-            if now - (tonumber(self.SharedTrioProofStartedAt) or now) >= timeout then
-                -- Pull failed server reality. Restore it. Do NOT rotate combat backend:
-                -- the untouched anchor already proved the backend can deal damage.
-                local origin = self.SharedTrioOriginalPos[root]
-                if origin and IsValidPos(origin) then
-                    pcall(function()
-                        local rot=root.CFrame.Rotation
-                        root.CFrame=CFrame.new(origin)*rot
-                        root.AssemblyLinearVelocity=Vector3.zero
-                        root.AssemblyAngularVelocity=Vector3.zero
-                    end)
+                if started and attempts >= minProbeAttempts and now - started >= probeTimeout then
+                    -- Isolate only this no-damage member. Restore it briefly to its real field
+                    -- position so ownership/hit registration can recover, but NEVER clear the pile.
+                    local origin = self.SharedTrioOriginalPos[root]
+                    if origin and IsValidPos(origin) then
+                        pcall(function()
+                            local rot = root.CFrame.Rotation
+                            root.CFrame = CFrame.new(origin) * rot
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                    end
+                    self.SharedTrioPulled[root] = nil
+                    self.SharedTeddyVerified[root] = nil
+                    self.SharedTeddyQualified[root] = nil
+                    self.SharedTrioDamageProven[root] = nil
+                    self.SharedTrioLastHealth[root] = hum.Health
+                    self.SharedTrioProbeStartedAt[root] = nil
+                    self.SharedTrioProbeLastAt[root] = nil
+                    self.SharedTrioProbeAttempts[root] = 0
+                    self.SharedTeddyRetryAfter[root] = now
+                        + math.max(0.35, tonumber(_G.Settings.TeddyTrioSecondaryRetry) or 1.10)
+                    self:SharedRestoreOne(mob)
+                    DLog("CONCURRENT-PILE", "Isolated no-HP member: " .. tostring(mob.Name))
+                elseif now - lastProbe >= probeEvery and lastProbe < oldestProbeAt then
+                    proofEntry = entry
+                    oldestProbeAt = lastProbe
                 end
-                self.SharedTrioPulled[root] = nil
-                self.SharedTrioDamageProven[root] = nil
-                self.SharedTeddyVerified[root] = nil
-                self.SharedTeddyQualified[root] = nil
-                self.SharedTrioLastHealth[root] = nil
-                self.SharedTrioLastDamageAt[root] = nil
-                self.SharedTeddyRetryAfter[root] = now
-                    + math.max(0.5, tonumber(_G.Settings.TeddyTrioSecondaryRetry) or 1.10)
-                self:SharedRestoreOne(proof)
-                self.SharedTrioProofTarget = nil
-                self.SharedTrioProofLastHealth = nil
-                self.SharedTrioProofStartedAt = 0
-                _G.State.FState = "SECONDARY_REJECT"
-                _G.State.ActionText = "Reject Ghost Secondary • " .. mobName
-                _G.BobonStatus = prefix .. ": pulled mob had NO HP delta • restored"
-                if _G.BobonDiagnostics then _G.BobonDiagnostics.Bring = "SECONDARY-NO-HP-REJECT" end
-                return true
             end
-            attackTarget = proof
-            phase = "SECONDARY_HP_PROOF"
         end
     end
 
+    -- If all members are already proven, rotate through them so damage is distributed
+    -- across the entire stacked group rather than tunnelling one primary until death.
+    local attackEntry = proofEntry
+    if not attackEntry then
+        local live = {}
+        for _, entry in ipairs(batch) do
+            if entry.Model and validMob(entry.Model) then live[#live+1] = entry end
+        end
+        if #live > 0 then
+            self.SharedTrioRoundRobinIndex = ((tonumber(self.SharedTrioRoundRobinIndex) or 0) % #live) + 1
+            attackEntry = live[self.SharedTrioRoundRobinIndex]
+        end
+    end
+
+    if not attackEntry or not validMob(attackEntry.Model) then
+        _G.State.FState = "PILE_MAINTAIN"
+        _G.State.ActionText = "Maintaining Pile • " .. mobName
+        _G.BobonStatus = ("%s: pile %d mobs • verified %d • waiting target")
+            :format(prefix, total, verified)
+        return true
+    end
+
+    local attackTarget = attackEntry.Model
+    local attackRoot = attackEntry.Root
+    if proofEntry and attackRoot then
+        if not self.SharedTrioProbeStartedAt[attackRoot] then
+            self.SharedTrioProbeStartedAt[attackRoot] = now
+        end
+        self.SharedTrioProbeLastAt[attackRoot] = now
+        self.SharedTrioProbeAttempts[attackRoot] = (tonumber(self.SharedTrioProbeAttempts[attackRoot]) or 0) + 1
+    end
+
+    -- Compatibility field only: SharedAnchorModel is now the current damage victim,
+    -- never the MovementTarget/PileAnchor.
+    self.SharedAnchorModel = attackTarget
     _G.State.FarmTarget = attackTarget
     _G.State.CurrentTarget = attackTarget
     _G.State.ClusterMode = "OFF"
-    _G.State.FState = phase
-    _G.State.LongRangeFarmAttackRange = anchorLongRange
+    _G.State.FState = proofEntry and "SECONDARY_HP_PROOF" or "PILE_ROUND_ROBIN_ATTACK"
+
+    local attackRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
+        and math.max(_G.Settings.FastAttackRange or 100,
+            tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
+        or (_G.Settings.FastAttackRange or 100)
+    _G.State.LongRangeFarmAttackRange = attackRange
     _G.State.LongRangeFarmAttackUntil = now + 0.30
+
     PrepareCombatTarget(attackTarget)
     EquipCombatTool()
-    local attempted = Attack(attackTarget, mobName)
-
-    -- Anchor was real before bring. If its HP stalls, rotate combat backend but do not
-    -- destroy the anchor/pile immediately; secondary liveness remains HP-based.
-    if attackTarget == anchor and self:SharedPrimaryNoDamage(anchor, attempted == true) then
-        local failingBackend = CombatController.PendingBackend or CombatController.VerifiedBackend
-        if failingBackend then CombatController:FailBackend(failingBackend, "ANCHOR-HP-STALLED")
-        else CombatController:AbortPending("ANCHOR-HP-STALLED") end
-        self:SharedPrimaryNoDamage(nil, false)
+    local attempted = false
+    local refreshedMe = HRP()
+    local okPos, victimPos = pcall(function() return attackRoot.Position end)
+    if refreshedMe and okPos and IsValidPos(victimPos)
+        and (refreshedMe.Position - victimPos).Magnitude <= attackRange then
+        attempted = Attack(attackTarget, mobName)
     end
 
+    -- Observe resulting HP deltas and immediately restack any member displaced by combat.
     verified, total = self:SharedTeddyRestack(false)
-    local pending = tonumber(self.SharedTrioRemotePendingCount) or 0
-    local wanted = math.min(math.clamp(tonumber(_G.Settings.TeddyTrioMax) or 3,1,3), total)
-    if phase == "SECONDARY_HP_PROOF" and proof then
-        _G.State.ActionText = "Proving Pulled Mob • " .. mobName
-        _G.BobonStatus = ("%s: ANCHOR ✓ • proving pulled mob • safe %d/%d")
-            :format(prefix, verified, wanted)
+    pendingProofCount = tonumber(self.SharedTrioRemotePendingCount) or pendingProofCount
+
+    if proofEntry then
+        _G.State.ActionText = "Concurrent Bring + HP Proof • " .. mobName
+        _G.BobonStatus = ("%s: PILE STABLE • ALL %d • proven %d • proof pending %d • hit %s")
+            :format(prefix, total, verified, pendingProofCount, attempted and "ACTIVE" or "WAIT")
     else
-        _G.State.ActionText = "Anchor Bring • " .. mobName
-        _G.BobonStatus = ("%s: ANCHOR ✓ • bring %d/%d • unproven %d • hit %s")
-            :format(prefix, verified, wanted, pending, attempted and "ACTIVE" or "WAIT")
+        _G.State.ActionText = "Pile Round-Robin Attack • " .. mobName
+        _G.BobonStatus = ("%s: PILE STABLE • ALL %d • proven %d • round-robin hit %s")
+            :format(prefix, total, verified, attempted and "ACTIVE" or "WAIT")
     end
     return true
 end
+
 
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
@@ -11453,11 +11312,11 @@ local SkipRouteController = {
 }
 
 local SkipRouteDB = {
-    -- Reconstructed from the supplied Teddy showcase video:
-    -- Floor 1: Sky Bandit [Lv. 150] from player Lv10-50.
-    -- Floor 2: God's Guard [Lv. 450] from player Lv51-70.
-    {Key="TeddyFloor1", Min=10, Max=50, Kind="Mob", Display="Sky Bandit [Lv. 150]", Names={"Sky Bandit"}, Fallback=CFrame.new(-4953.21,295.74,-2899.23)},
-    {Key="TeddyFloor2", Min=51, Max=70, Kind="Mob", Display="God's Guard [Lv. 450]", Names={"God's Guard"}, Fallback=CFrame.new(-4710.04,845.28,-1927.31)},
+    -- VIDEO7951 full review: the reference starts Sky Bandit at player Lv1,
+    -- switches to Shanda around Lv50-55, then God's Guard until the Lv70/71 exit.
+    {Key="Video7951Floor1", Min=1,  Max=49, Kind="Mob", Display="Sky Bandit [Lv. 150]", Names={"Sky Bandit"}, Fallback=CFrame.new(-4953.21,295.74,-2899.23)},
+    {Key="Video7951Floor2A",Min=50, Max=55, Kind="Mob", Display="Shanda [Lv. 475]", Names={"Shanda"}, Fallback=CFrame.new(-7678.49,5566.40,-497.22)},
+    {Key="Video7951Floor2B",Min=56, Max=70, Kind="Mob", Display="God's Guard [Lv. 450]", Names={"God's Guard"}, Fallback=CFrame.new(-4710.04,845.28,-1927.31)},
 }
 
 function SkipRouteController:GetRoute()
@@ -18202,7 +18061,7 @@ task.spawn(function()
             -- Never let the fast skip route interrupt an accepted quest. It
             -- previously activated right after the first verified hits, which
             -- looked exactly like "attacks briefly, then stops/leaves".
-            local earlySkipLevel = GetSea() == 1 and Level() >= 10 and Level() <= 70
+            local earlySkipLevel = GetSea() == 1 and Level() >= 1 and Level() <= 70
             if earlySkipLevel and SkipRouteController:Run() then
                 return
             elseif not earlySkipLevel then
@@ -18693,8 +18552,11 @@ task.spawn(function()
                 local remaining = batch - meleeAdd
                 defAdd = math.min(remaining, math.max(0, statCap - defenseLevel))
             else
-                meleeAdd = math.floor(batch * 0.7)
-                defAdd = batch - meleeAdd
+                -- VIDEO7951: the early reference account spends effectively all points
+                -- into Melee. If the live stat tree is temporarily unreadable, keep that
+                -- deterministic priority rather than guessing a 70/30 split.
+                meleeAdd = batch
+                defAdd = 0
             end
 
             if meleeAdd > 0 then CommF_:InvokeServer("AddPoint","Melee",meleeAdd) end
