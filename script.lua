@@ -1,7 +1,7 @@
--- BOBON HUB v22.28.1 REAL-COMPAT | local-register fix only
+-- BOBON HUB v22.28.4 REAL-COMPAT | local-register + game-error recovery + English UI
 -- =================================================================
 --         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
---         BOBON HUB v22.28.3 REAL COMPAT + ERROR RECOVERY
+--         BOBON HUB v22.28.4 REAL COMPAT + GAME ERROR FILTER + ENGLISH UI
 --         Base: v22.27.0 SERVER-SAFE VIDEO FARM
 --
 --  v22.28.0 ROBLOX(29) CONFIRMED ROOT FIX:
@@ -1341,6 +1341,127 @@ pcall(function()
     end)
 end)
 
+
+-- v22.28.5 REAL GAME-CLIENT ERROR WATCH
+-- Real may not forward every game LocalScript warning/error through MessageOut.
+-- Use three compatible paths: MessageOut, ScriptContext.Error and a bounded LogHistory poll.
+-- Known Blox Fruits cosmetic/death/feature-client errors are ignored so they cannot cause rejoin loops.
+_G.BobonGameErrorWatch = _G.BobonGameErrorWatch or {
+    LastSignature = "",
+    LastAt = 0,
+    Seen = {},
+    HistoryPrimed = false,
+}
+
+function _G.BobonHandleGameLog(message, messageType, stackTrace)
+    if not SessionAlive() or not _G.BobonErrorRecovery then return false end
+    local raw = tostring(message or "")
+    if stackTrace and tostring(stackTrace) ~= "" then
+        raw = raw .. "\n" .. tostring(stackTrace)
+    end
+    local low = string.lower(raw)
+
+    -- Confirmed game-side noise from the supplied REAL screenshots. These do not
+    -- prove Bobon failed and may recur on every server, so never rejoin for them.
+    if string.find(low, "cloud instance must exist under terrain", 1, true)
+        or string.find(low, "font family sourcesans failed to load", 1, true)
+        or string.find(low, "the npc model is in over 50k y axis", 1, true)
+        or string.find(low, "report this error plz", 1, true)
+        or string.find(low, "humanoid is not a valid member of model", 1, true)
+        or string.find(low, "re/collecteddragonegg", 1, true)
+        or string.find(low, "prehistoricislandclient", 1, true) then
+        return false
+    end
+
+    -- Bobon module errors already call BobonReportError directly.
+    if string.find(raw, "[BobonHub] Module Error:", 1, true) then return false end
+
+    local fatalAsset = string.find(low, "fatal", 1, true)
+        and (string.find(low, "getfeaturedfruits", 1, true)
+            or string.find(low, "replicatedstorage.modules.asset", 1, true)
+            or string.find(low, "uicontroller", 1, true))
+
+    local hardClientError = messageType == Enum.MessageType.MessageError
+        and not string.find(low, "humanoid is not a valid member", 1, true)
+        and not string.find(low, "collecteddragonegg", 1, true)
+
+    if not fatalAsset and not hardClientError then return false end
+
+    local signature = string.sub(low, 1, 240)
+    local now = tick()
+    local watch = _G.BobonGameErrorWatch
+    if watch.LastSignature == signature and now - (watch.LastAt or 0) < 15 then return false end
+    watch.LastSignature = signature
+    watch.LastAt = now
+
+    return _G.BobonErrorRecovery:Rejoin(
+        fatalAsset and "GameFatalAsset" or "GameClientError",
+        string.sub(raw, 1, 350)
+    )
+end
+
+pcall(function()
+    game:GetService("LogService").MessageOut:Connect(function(message, messageType)
+        _G.BobonHandleGameLog(message, messageType, nil)
+    end)
+end)
+
+-- ScriptContext catches actual LocalScript runtime errors even when Real does not
+-- surface them through LogService.MessageOut.
+pcall(function()
+    game:GetService("ScriptContext").Error:Connect(function(message, stackTrace, scriptInstance)
+        local detail = tostring(message or "")
+        if typeof(scriptInstance) == "Instance" then
+            pcall(function() detail = detail .. "\nScript: " .. tostring(scriptInstance:GetFullName()) end)
+        end
+        _G.BobonHandleGameLog(detail, Enum.MessageType.MessageError, stackTrace)
+    end)
+end)
+
+-- Last-resort REAL compatibility path. Prime existing history first, then inspect
+-- only newly observed signatures so stale F9 entries never trigger a teleport.
+task.spawn(function()
+    while SessionAlive() and task.wait(1.5) do
+        pcall(function()
+            local history = game:GetService("LogService"):GetLogHistory()
+            if type(history) ~= "table" then return end
+            local watch = _G.BobonGameErrorWatch
+            local from = math.max(1, #history - 80)
+            if not watch.HistoryPrimed then
+                for i = from, #history do
+                    local entry = history[i]
+                    local msg = tostring((entry and (entry.message or entry.Message)) or "")
+                    if msg ~= "" then watch.Seen[string.sub(string.lower(msg),1,280)] = tick() end
+                end
+                watch.HistoryPrimed = true
+                return
+            end
+            for i = from, #history do
+                local entry = history[i]
+                local msg = tostring((entry and (entry.message or entry.Message)) or "")
+                if msg ~= "" then
+                    local sig = string.sub(string.lower(msg),1,280)
+                    if not watch.Seen[sig] then
+                        watch.Seen[sig] = tick()
+                        local mt = entry and (entry.messageType or entry.MessageType) or Enum.MessageType.MessageOutput
+                        _G.BobonHandleGameLog(msg, mt, nil)
+                    end
+                end
+            end
+        end)
+    end
+end)
+
+-- v22.28.5 REAL confirmed screenshot fix:
+-- [R285-1] Bobon UI prefers gethui/CoreGui and hard-locks Checker labels against game localization.
+-- [R285-2] REAL error capture uses MessageOut + ScriptContext.Error + GetLogHistory polling.
+-- [R285-3] Snowman/Death, 50k-Y and CollectedDragonEgg are confirmed game-side noise and never rejoin-loop.
+-- [R285-4] FATAL GetFeaturedFruits/Asset/UIController triggers rejoin; failed rejoin falls back to low-player hop.
+-- [R284-1] Legacy AutoLocalize guard retained.
+-- [R284-2] Known Blox Fruits NPC-death/streaming warnings are ignored by recovery.
+-- [R284-3] FATAL Asset/GetFeaturedFruits/UIController and other genuine client errors rejoin once; teleport failure falls back to hop.
+-- [R284-4] No farm/combat/progression algorithm changes.
+
 -- v19.0 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
 -- had not replicated within 10 seconds. Show a full-screen bootstrap HUD immediately
 -- and keep resolving the authoritative RemoteFunction instead of silently dying.
@@ -2563,14 +2684,16 @@ do
         end
 
         local function ResolveUIParent()
-            local pg = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
-            if pg then return pg end
+            -- Prefer executor/CoreGui containers so Blox Fruits' PlayerGui localization
+            -- pass cannot rewrite Bobon item labels. PlayerGui remains a safe fallback.
             if type(gethui) == "function" then
                 local ok, hui = pcall(gethui)
                 if ok and hui then return hui end
             end
             local okCore = pcall(function() return CoreGui.Name end)
             if okCore then return CoreGui end
+            local pg = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui", 5)
+            if pg then return pg end
             return nil
         end
 
@@ -2662,6 +2785,10 @@ do
             local x = Instance.new("TextLabel")
             x.BackgroundTransparency = 1
             x.BorderSizePixel = 0
+            -- Lock localization BEFORE assigning/parenting Text. Some game localization
+            -- passes translate PlayerGui descendants immediately when they appear.
+            x.AutoLocalize = false
+            pcall(function() x.RootLocalizationTable = nil end)
             x.Text = value or ""
             x.TextColor3 = color or WHITE
             x.TextSize = size or 14
@@ -2856,6 +2983,9 @@ do
             dot.Parent = Checker
             Corner(dot, 12)
             local label = Text(Checker, row.Label, 12, WHITE, false)
+            label.AutoLocalize = false
+            pcall(function() label.RootLocalizationTable = nil end)
+            label.Text = row.Label
             label.Position = UDim2.new(x,20,y,-2)
             label.Size = UDim2.new(0.43,-22,0,20)
             CheckerRows[index] = {Dot=dot, Label=label, State="missing"}
@@ -3359,8 +3489,11 @@ do
                     local owner=tostring(state.ActionOwner or "")
                     for i,row in ipairs(TrackedItems) do
                         local ui=CheckerRows[i]
-                        if ui and ui.Label and ui.Label.Text ~= row.Label then
-                            ui.Label.Text = row.Label -- force canonical English labels
+                        if ui and ui.Label then
+                            -- Keep canonical game-English names even if another localizer touches the label.
+                            ui.Label.AutoLocalize = false
+                            pcall(function() ui.Label.RootLocalizationTable = nil end)
+                            ui.Label.Text = row.Label
                         end
                         local owned=OwnsTracked(row)
                         ownedMap[i]=owned
