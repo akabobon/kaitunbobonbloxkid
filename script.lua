@@ -1,4 +1,24 @@
 -- =================================================================
+--         BOBON HUB v22.26.0 VIDEO7951 REFERENCE FARM LOOP
+--         Base: v22.25.0 CONCURRENT STABLE PILE
+--
+--  v22.26.0 ROBLOX(28) + VIDEO7951 ROOT-CAUSE REWRITE:
+--  [V226-1] Removed stable-field PileAnchor as the movement owner for ordinary/skip farm.
+--           The reference video/source follows ONE live primary at +7 X / +20 Y every tick.
+--  [V226-2] Bring is proximity-driven like the reference source: only while the player is
+--           within 50 studs of the primary, refresh SimulationRadius and pull every live
+--           exact-name mob in the local 200-stud spawn field onto that primary.
+--  [V226-3] Removed HP-proof/backend-selection as a prerequisite for farm damage.
+--           Farm uses the reference source's no-animation two-argument attack shape directly:
+--           RegisterAttack(0) -> RegisterHit(firstPart, remaining {Model,Part} hit list).
+--  [V226-4] Attack is player-centered AOE like the reference source: primary must be within
+--           70 studs and every stacked mob inside 80 studs is included in the same swing.
+--  [V226-5] Primary death immediately selects the next live exact-name mob; there is no
+--           seed/proof/pile-reset state. Bring + attack + follow run concurrently each tick.
+--  [V226-6] Roblox(28) failure fixed: no more ALL 7 / proven 0 / proof pending 7 / hit WAIT
+--           deadlock. HP deltas remain diagnostics only and never gate the reference farm loop.
+-- =================================================================
+-- =================================================================
 --         BOBON HUB v22.25.0 VIDEO7951 CONCURRENT STABLE PILE
 --         Base: v22.24.0 VIDEO7951 DEEP REBASE
 --
@@ -1559,6 +1579,16 @@ _G.Settings = {
     TeddyAllMobHardCap = 32,
     TeddyConcurrentFieldBring = true, -- v22.25: bring starts before HP proof
     TeddyStablePileAnchor = true, -- v22.25: MovementTarget is the fixed pile, never CombatVictim
+    -- v22.26 VIDEO7951 exact reference-loop geometry/rhythm.
+    ReferenceVideoFarmLoop = true,
+    ReferenceVideoHoverHeight = 20,
+    ReferenceVideoSideOffset = 7,
+    ReferenceVideoBringTrigger = 50,
+    ReferenceVideoBringRadius = 200,
+    ReferenceVideoTargetRange = 70,
+    ReferenceVideoAttackRange = 80,
+    ReferenceVideoAttackInterval = 0.03,
+    ReferenceVideoMaxTargets = 32,
     TeddyAllMobProbeInterval = 0.10,
     TeddyAllMobProbeTimeout = 2.40,
     TeddyAllMobProbeMinAttempts = 2,
@@ -8296,242 +8326,292 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
 end
 
 
-function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
-    -- v22.25.0 VIDEO7951: FIELD SCAN -> CONCURRENT BRING -> STABLE PILE -> ROUND-ROBIN DAMAGE.
-    -- MovementTarget and CombatVictim are intentionally independent.
-    if _G.Settings.SharedSourceFarmMode == false then return false end
-    if type(mobName) ~= "string" or mobName == "" then return false end
-    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return false end
-    if not IsAlive() then
-        self.SharedTrioPullArmed = false
-        self.SharedAnchorModel = nil
-        self.SharedTrioSeedModel = nil
-        self.SharedTrioProofTarget = nil
-        return true
-    end
-
-    local prefix = tostring(statusPrefix or "Farm")
-    if self.SharedMobName and string.lower(tostring(self.SharedMobName)) ~= string.lower(mobName) then
-        self:SharedRelease("QuestMobChanged")
-    end
-    self.SharedMobName = mobName
-    self.SharedTeddyActive = true
-    if typeof(fallbackCF) == "CFrame" then
-        self.SharedTrioFieldCenter = fallbackCF.Position
-    elseif typeof(fallbackCF) == "Vector3" then
-        self.SharedTrioFieldCenter = fallbackCF
-    end
-
-    self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyQualified = self.SharedTeddyQualified or setmetatable({}, {__mode="k"})
-    self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
-    self.SharedTrioDamageProven = self.SharedTrioDamageProven or setmetatable({}, {__mode="k"})
-    self.SharedTrioOriginalPos = self.SharedTrioOriginalPos or setmetatable({}, {__mode="k"})
-    self.SharedTrioPulled = self.SharedTrioPulled or setmetatable({}, {__mode="k"})
-    self.SharedTrioLastHealth = self.SharedTrioLastHealth or setmetatable({}, {__mode="k"})
-    self.SharedTrioLastDamageAt = self.SharedTrioLastDamageAt or setmetatable({}, {__mode="k"})
-    self.SharedTrioProbeStartedAt = self.SharedTrioProbeStartedAt or setmetatable({}, {__mode="k"})
-    self.SharedTrioProbeLastAt = self.SharedTrioProbeLastAt or setmetatable({}, {__mode="k"})
-    self.SharedTrioProbeAttempts = self.SharedTrioProbeAttempts or setmetatable({}, {__mode="k"})
-
+function ClusterFarmController:ReferenceVideoCollect(mobName, center, radius)
+    local out = {}
     local folder = workspace:FindFirstChild("Enemies")
-    local me = HRP()
-    if not folder or not me then return true end
-    local now = tick()
+    if not folder or type(mobName) ~= "string" or mobName == "" then return out end
+    radius = math.max(1, tonumber(radius) or 80)
+    local hardCap = math.max(1, math.floor(tonumber(_G.Settings.ReferenceVideoMaxTargets) or 32))
 
-    local function validMob(m)
-        if not m or not m.Parent or not IsEnemyNamed(m, mobName) then return false end
-        local h = m:FindFirstChildOfClass("Humanoid")
-        local r = m:FindFirstChild("HumanoidRootPart")
-        return h ~= nil and h.Health > 0 and r ~= nil and r.Parent ~= nil
-            and not r.Anchored and IsAllowedWorldPosition(r.Position)
-    end
-
-    -- Create the PileAnchor BEFORE selecting any combat victim. fallbackCF wins and is
-    -- stable for the lifetime of this mob/quest route. A live mob is only a one-time
-    -- fallback if the route has no usable field CFrame.
-    local representative = self:SharedSelectTarget(mobName)
-    local pileCF = self:SharedEnsurePile(mobName, representative, fallbackCF)
-    if not pileCF or not IsValidPos(pileCF.Position) then
-        _G.State.FarmTarget = representative
-        _G.State.CurrentTarget = representative
-        _G.State.FState = "PILE_WAIT"
-        _G.State.ActionText = "Waiting Pile Field • " .. mobName
-        _G.BobonStatus = prefix .. ": waiting field anchor • " .. mobName
-        return true
-    end
-
-    -- Bring happens NOW, before any HP-proof requirement.
-    local verified, total = self:SharedTeddyRestack(true)
-    local batch = self.SharedTeddyBatch or {}
-
-    -- No mobs alive in the current wave: keep the same PileAnchor and return to its hover.
-    -- Next spawn is automatically appended by the next Restack scan.
-    if total <= 0 then
-        _G.State.FarmTarget = nil
-        _G.State.CurrentTarget = nil
-        _G.State.ClusterMode = "OFF"
-        _G.State.FState = "PILE_WAIT_SPAWN"
-        _G.State.ActionText = "Waiting Spawn • " .. mobName
-        local hover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover)
-            or tonumber(_G.Settings.FarmHeight) or 24)
-        local waitCF = pileCF * CFrame.new(0, hover, 0)
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(waitCF, "Farm", {
-                arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
-                fallback=fallbackCF or pileCF, combatHover=true, persistent=true,
-                speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-        _G.BobonStatus = prefix .. ": pile stable • waiting spawn • " .. mobName
-        return true
-    end
-
-    -- Movement owner always follows the pile, never the victim selected below.
-    local hover = math.max(8, tonumber(_G.Settings.TeddyTrioAnchorHover)
-        or tonumber(_G.Settings.FarmHeight) or 24)
-    local hoverCF = pileCF * CFrame.new(0, hover, 0)
-    local flatPileDist = (Vector3.new(me.Position.X,0,me.Position.Z)
-        - Vector3.new(pileCF.Position.X,0,pileCF.Position.Z)).Magnitude
-    local coverageRange = math.max(45,
-        tonumber(_G.Settings.TeddyAllMobAnchorApproachRange) or 95)
-    if flatPileDist > coverageRange then
-        if _G.State:CanRequestTravel() then
-            TravelManager:Request(hoverCF, "Farm", {
-                arrivalThreshold=math.max(6, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
-                fallback=fallbackCF or pileCF, combatHover=true, persistent=true,
-                speed=_G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
-            })
-        end
-    elseif _G.State.IsTraveling and _G.State.MovementOwner == "Farm" then
-        TravelManager:Stop("StablePileCoverageReady")
-    end
-
-    -- Round-robin proof scheduling across ALL live pile members, including the first one.
-    -- No member blocks Bring and no member owns the PileAnchor.
-    local probeEvery = math.max(0.05,
-        tonumber(_G.Settings.TeddyAllMobProbeInterval) or 0.10)
-    local probeTimeout = math.max(1.2,
-        tonumber(_G.Settings.TeddyAllMobProbeTimeout)
-            or tonumber(_G.Settings.TeddyTrioSecondaryProofTimeout) or 2.40)
-    local minProbeAttempts = math.max(1,
-        math.floor(tonumber(_G.Settings.TeddyAllMobProbeMinAttempts) or 2))
-
-    local proofEntry = nil
-    local oldestProbeAt = math.huge
-    local pendingProofCount = 0
-    for _, entry in ipairs(batch) do
-        local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
-        if mob and validMob(mob) and hum and root and root.Parent
-            and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
-            if not self.SharedTrioDamageProven[root] then
-                pendingProofCount = pendingProofCount + 1
-                local started = tonumber(self.SharedTrioProbeStartedAt[root])
-                local attempts = tonumber(self.SharedTrioProbeAttempts[root]) or 0
-                local lastProbe = tonumber(self.SharedTrioProbeLastAt[root]) or 0
-
-                if started and attempts >= minProbeAttempts and now - started >= probeTimeout then
-                    -- Isolate only this no-damage member. Restore it briefly to its real field
-                    -- position so ownership/hit registration can recover, but NEVER clear the pile.
-                    local origin = self.SharedTrioOriginalPos[root]
-                    if origin and IsValidPos(origin) then
-                        pcall(function()
-                            local rot = root.CFrame.Rotation
-                            root.CFrame = CFrame.new(origin) * rot
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                        end)
-                    end
-                    self.SharedTrioPulled[root] = nil
-                    self.SharedTeddyVerified[root] = nil
-                    self.SharedTeddyQualified[root] = nil
-                    self.SharedTrioDamageProven[root] = nil
-                    self.SharedTrioLastHealth[root] = hum.Health
-                    self.SharedTrioProbeStartedAt[root] = nil
-                    self.SharedTrioProbeLastAt[root] = nil
-                    self.SharedTrioProbeAttempts[root] = 0
-                    self.SharedTeddyRetryAfter[root] = now
-                        + math.max(0.35, tonumber(_G.Settings.TeddyTrioSecondaryRetry) or 1.10)
-                    self:SharedRestoreOne(mob)
-                    DLog("CONCURRENT-PILE", "Isolated no-HP member: " .. tostring(mob.Name))
-                elseif now - lastProbe >= probeEvery and lastProbe < oldestProbeAt then
-                    proofEntry = entry
-                    oldestProbeAt = lastProbe
+    for _, mob in ipairs(folder:GetChildren()) do
+        if #out >= hardCap then break end
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
+                    and (pos - center).Magnitude <= radius then
+                    out[#out + 1] = {
+                        Model = mob,
+                        Humanoid = hum,
+                        Root = root,
+                        Position = pos,
+                        Dist = (pos - center).Magnitude,
+                    }
                 end
             end
         end
     end
 
-    -- If all members are already proven, rotate through them so damage is distributed
-    -- across the entire stacked group rather than tunnelling one primary until death.
-    local attackEntry = proofEntry
-    if not attackEntry then
-        local live = {}
-        for _, entry in ipairs(batch) do
-            if entry.Model and validMob(entry.Model) then live[#live+1] = entry end
+    table.sort(out, function(a, b) return a.Dist < b.Dist end)
+    return out
+end
+
+function ClusterFarmController:ReferenceVideoPrimary(mobName)
+    local me = HRP()
+    local folder = workspace:FindFirstChild("Enemies")
+    if not me or not folder then return nil end
+
+    local best, bestDist = nil, math.huge
+    for _, mob in ipairs(folder:GetChildren()) do
+        if IsEnemyNamed(mob, mobName) then
+            local hum = mob:FindFirstChildOfClass("Humanoid")
+            local root = mob:FindFirstChild("HumanoidRootPart")
+            if hum and hum.Health > 0 and root and root.Parent and not root.Anchored then
+                local okPos, pos = pcall(function() return root.Position end)
+                if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos) then
+                    local dist = (pos - me.Position).Magnitude
+                    if dist < bestDist then
+                        best, bestDist = mob, dist
+                    end
+                end
+            end
         end
-        if #live > 0 then
-            self.SharedTrioRoundRobinIndex = ((tonumber(self.SharedTrioRoundRobinIndex) or 0) % #live) + 1
-            attackEntry = live[self.SharedTrioRoundRobinIndex]
+    end
+    return best
+end
+
+function ClusterFarmController:ReferenceVideoBring(mobName, primary)
+    if _G.Settings.GatherMobs == false then return 0, 0 end
+    local me = HRP()
+    local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
+    local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
+    if not me or not primaryRoot or not primaryRoot.Parent
+        or not primaryHum or primaryHum.Health <= 0 then
+        return 0, 0
+    end
+
+    local trigger = math.max(10, tonumber(_G.Settings.ReferenceVideoBringTrigger) or 50)
+    if (me.Position - primaryRoot.Position).Magnitude > trigger then
+        return 0, 0
+    end
+
+    pcall(function() ExpandSimulationRadius() end)
+
+    local radius = math.max(trigger,
+        tonumber(_G.Settings.ReferenceVideoBringRadius) or 200)
+    local entries = self:ReferenceVideoCollect(mobName, primaryRoot.Position, radius)
+    local primaryCF = primaryRoot.CFrame
+    local moved = 0
+
+    -- The reference source calls sizepart() while close. It only removes collision;
+    -- it does not PlatformStand/freeze the NPC. Keep the same behavior.
+    local function noCollide(model)
+        pcall(function()
+            for _, part in ipairs(model:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end)
+    end
+
+    noCollide(primary)
+
+    for i, entry in ipairs(entries) do
+        local mob, root = entry.Model, entry.Root
+        if mob and mob.Parent and root and root.Parent then
+            noCollide(mob)
+            if mob ~= primary then
+                -- Reference BringMob writes continuously while the player is near the
+                -- primary. Do not gate on isnetworkowner/HP proof: proximity +
+                -- SimulationRadius is the ownership acquisition mechanism.
+                local ring = (i - 1) % 8
+                local angle = ring * (math.pi / 4)
+                local r = 1.25
+                local offset = Vector3.new(math.cos(angle) * r, 0, math.sin(angle) * r)
+                local okMove = pcall(function()
+                    local rot = root.CFrame.Rotation
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                    root.CFrame = CFrame.new(primaryCF.Position + offset) * rot
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+                if okMove then moved = moved + 1 end
+            else
+                moved = moved + 1
+            end
         end
     end
 
-    if not attackEntry or not validMob(attackEntry.Model) then
-        _G.State.FState = "PILE_MAINTAIN"
-        _G.State.ActionText = "Maintaining Pile • " .. mobName
-        _G.BobonStatus = ("%s: pile %d mobs • verified %d • waiting target")
-            :format(prefix, total, verified)
+    self.SharedBringCount = moved
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Bring = "VIDEO7951-PRIMARY-PILE"
+        _G.BobonDiagnostics.BringCandidates = #entries
+        _G.BobonDiagnostics.BringMoved = moved
+    end
+    return moved, #entries
+end
+
+function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
+    local now = tick()
+    local me = HRP()
+    local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
+    local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
+    if not me or not primaryRoot or not primaryRoot.Parent
+        or not primaryHum or primaryHum.Health <= 0 then
+        return false, 0
+    end
+
+    local targetRange = math.max(10, tonumber(_G.Settings.ReferenceVideoTargetRange) or 70)
+    if (me.Position - primaryRoot.Position).Magnitude > targetRange then
+        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-APPROACH" end
+        return false, 0
+    end
+
+    local interval = math.max(0.015, tonumber(_G.Settings.ReferenceVideoAttackInterval) or 0.03)
+    if now - (tonumber(self.ReferenceVideoLastAttack) or 0) < interval then
+        return false, 0
+    end
+
+    if not CombatController:ResolveRemotes() then
+        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-REMOTES" end
+        return false, 0
+    end
+
+    local attackRange = math.max(targetRange,
+        tonumber(_G.Settings.ReferenceVideoAttackRange) or 80)
+    local entries = self:ReferenceVideoCollect(mobName, me.Position, attackRange)
+    if #entries == 0 then
+        if _G.BobonDiagnostics then _G.BobonDiagnostics.Packet = "VIDEO7951-NO-HITS" end
+        return false, 0
+    end
+
+    local hitList = {}
+    for _, entry in ipairs(entries) do
+        local part = entry.Model:FindFirstChild("Head") or entry.Root
+        if part and part:IsA("BasePart") then
+            hitList[#hitList + 1] = {entry.Model, part}
+        end
+    end
+    if #hitList == 0 then return false, 0 end
+
+    -- Exact AttackFunction shape recovered from the reference source:
+    -- RegisterAttack(0), remove the first rig from the list, then use that rig's
+    -- hit part as RegisterHit arg #1 and the remaining rigs as arg #2.
+    local first = table.remove(hitList, 1)
+    local basePart = first and first[2]
+    if not basePart then return false, 0 end
+
+    self.ReferenceVideoLastAttack = now
+    _G.State.LastAttackTime = now
+
+    local okAttack = pcall(function()
+        CombatController.RegisterAttack:FireServer(0)
+    end)
+    local okHit = pcall(function()
+        CombatController.RegisterHit:FireServer(basePart, hitList)
+    end)
+
+    if _G.BobonDiagnostics then
+        _G.BobonDiagnostics.Net = "VIDEO7951-LEGACY-2"
+        _G.BobonDiagnostics.Targets = #entries
+        _G.BobonDiagnostics.Packet = (okAttack and okHit)
+            and ("VIDEO7951-AOE x" .. tostring(#entries))
+            or "VIDEO7951-DISPATCH-ERROR"
+    end
+    return okAttack and okHit, #entries
+end
+
+function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, statusPrefix)
+    -- v22.26.0: mirror the supplied reference source instead of trying to prove
+    -- a speculative fixed-field pile. The loop is:
+    -- DetectMob -> sizepart -> BringMob -> ClickM1 -> toTarget(primary + 7,20,0).
+    if _G.Settings.SharedSourceFarmMode == false then return false end
+    if _G.Settings.ReferenceVideoFarmLoop == false then return false end
+    if type(mobName) ~= "string" or mobName == "" then return false end
+    if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
+        return false
+    end
+    if not IsAlive() then return true end
+
+    local prefix = tostring(statusPrefix or "Farm")
+    if self.SharedMobName and string.lower(tostring(self.SharedMobName)) ~= string.lower(mobName) then
+        self:SharedRelease("ReferenceMobChanged")
+    end
+    self.SharedMobName = mobName
+
+    -- This mode must not run the old fixed-pile heartbeat in parallel.
+    self.SharedTeddyActive = false
+    self.SharedTrioPullArmed = false
+    self.SharedPileCFrame = nil
+    self.SharedClassicCurrentPile = nil
+
+    local me = HRP()
+    if not me then return true end
+    local primary = self:ReferenceVideoPrimary(mobName)
+
+    if not primary then
+        _G.State.FarmTarget = nil
+        _G.State.CurrentTarget = nil
+        _G.State.ClusterMode = "OFF"
+        _G.State.FState = "VIDEO7951_WAIT_SPAWN"
+        _G.State.ActionText = "Waiting Spawn • " .. mobName
+
+        -- Reference source waits ~60 studs above the known spawn marker.
+        if fallbackCF and _G.State:CanRequestTravel() then
+            local waitCF = fallbackCF * CFrame.new(0, 60, 0)
+            TravelManager:Request(waitCF, "Farm", {
+                arrivalThreshold = math.max(8, tonumber(_G.Settings.FarmArrivalThreshold) or 12),
+                fallback = fallbackCF,
+                combatHover = true,
+                persistent = true,
+                speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+            })
+        end
+        _G.BobonStatus = prefix .. ": waiting live " .. mobName
         return true
     end
 
-    local attackTarget = attackEntry.Model
-    local attackRoot = attackEntry.Root
-    if proofEntry and attackRoot then
-        if not self.SharedTrioProbeStartedAt[attackRoot] then
-            self.SharedTrioProbeStartedAt[attackRoot] = now
-        end
-        self.SharedTrioProbeLastAt[attackRoot] = now
-        self.SharedTrioProbeAttempts[attackRoot] = (tonumber(self.SharedTrioProbeAttempts[attackRoot]) or 0) + 1
-    end
+    local hum = primary:FindFirstChildOfClass("Humanoid")
+    local root = primary:FindFirstChild("HumanoidRootPart")
+    if not hum or hum.Health <= 0 or not root or not root.Parent then return true end
 
-    -- Compatibility field only: SharedAnchorModel is now the current damage victim,
-    -- never the MovementTarget/PileAnchor.
-    self.SharedAnchorModel = attackTarget
-    _G.State.FarmTarget = attackTarget
-    _G.State.CurrentTarget = attackTarget
+    _G.State.FarmTarget = primary
+    _G.State.CurrentTarget = primary
     _G.State.ClusterMode = "OFF"
-    _G.State.FState = proofEntry and "SECONDARY_HP_PROOF" or "PILE_ROUND_ROBIN_ATTACK"
+    _G.State.FState = "VIDEO7951_REFERENCE_FARM"
+    _G.State.ActionText = "Reference Farm • " .. mobName
 
-    local attackRange = _G.Settings.TeddyLongRangeHitEnabled ~= false
-        and math.max(_G.Settings.FastAttackRange or 100,
-            tonumber(_G.Settings.TeddyLongRangeAttackRange) or 300)
-        or (_G.Settings.FastAttackRange or 100)
-    _G.State.LongRangeFarmAttackRange = attackRange
-    _G.State.LongRangeFarmAttackUntil = now + 0.30
+    -- Reference melee geometry is +7 horizontal, +20 vertical from the live mob.
+    local side = tonumber(_G.Settings.ReferenceVideoSideOffset) or 7
+    local hover = tonumber(_G.Settings.ReferenceVideoHoverHeight) or 20
+    local followCF = root.CFrame * CFrame.new(side, hover, 0)
+    if _G.State:CanRequestTravel() then
+        TravelManager:Request(followCF, "Farm", {
+            arrivalThreshold = math.max(5, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
+            fallback = fallbackCF or followCF,
+            combatHover = true,
+            persistent = true,
+            speed = _G.Settings.TeddyAirSweepSpeed or _G.Settings.FlySpeed or 430,
+        })
+    end
 
-    PrepareCombatTarget(attackTarget)
+    -- Match the reference order: collision prep / BringMob / M1 happen every tick
+    -- while movement keeps following the same live primary.
+    PrepareCombatTarget(primary)
     EquipCombatTool()
-    local attempted = false
-    local refreshedMe = HRP()
-    local okPos, victimPos = pcall(function() return attackRoot.Position end)
-    if refreshedMe and okPos and IsValidPos(victimPos)
-        and (refreshedMe.Position - victimPos).Magnitude <= attackRange then
-        attempted = Attack(attackTarget, mobName)
-    end
+    local brought, candidates = self:ReferenceVideoBring(mobName, primary)
+    local attacked, hitCount = self:ReferenceVideoAttack(mobName, primary)
 
-    -- Observe resulting HP deltas and immediately restack any member displaced by combat.
-    verified, total = self:SharedTeddyRestack(false)
-    pendingProofCount = tonumber(self.SharedTrioRemotePendingCount) or pendingProofCount
+    local distance = (me.Position - root.Position).Magnitude
+    _G.BobonStatus = ("%s: VIDEO LOOP • %s • dist %.0f • bring %d/%d • AOE %d • hit %s")
+        :format(prefix, tostring(mobName), distance,
+            tonumber(brought) or 0, tonumber(candidates) or 0,
+            tonumber(hitCount) or 0, attacked and "ACTIVE" or "FOLLOW")
 
-    if proofEntry then
-        _G.State.ActionText = "Concurrent Bring + HP Proof • " .. mobName
-        _G.BobonStatus = ("%s: PILE STABLE • ALL %d • proven %d • proof pending %d • hit %s")
-            :format(prefix, total, verified, pendingProofCount, attempted and "ACTIVE" or "WAIT")
-    else
-        _G.State.ActionText = "Pile Round-Robin Attack • " .. mobName
-        _G.BobonStatus = ("%s: PILE STABLE • ALL %d • proven %d • round-robin hit %s")
-            :format(prefix, total, verified, attempted and "ACTIVE" or "WAIT")
-    end
     return true
 end
 
