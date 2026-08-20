@@ -1,3 +1,4 @@
+-- BOBON HUB v22.28.1 REAL-COMPAT | local-register fix only
 -- =================================================================
 --         BOBON HUB v22.28.0 VERIFIED BATCH + GHOST RESTORE
 --         Base: v22.27.0 SERVER-SAFE VIDEO FARM
@@ -18793,7 +18794,7 @@ end)
 -- Auto Stats — cap-aware. Resolve live values when possible so points are not
 -- repeatedly sent to a capped stat. If the current client exposes an unfamiliar
 -- Data layout, preserve the old bounded 70/30 behavior as a compatibility fallback.
-local function ReadLiveStatLevel(statName)
+function _G.BobonReadLiveStatLevel(statName)
     local d = LP:FindFirstChild("Data")
     if not d then return nil end
     local stats = d:FindFirstChild("Stats")
@@ -18832,8 +18833,8 @@ task.spawn(function()
             if pts <= 0 then return end
             local batch = math.min(pts, _G.Settings.StatBatchLimit or 100)
             local statCap = MAX_LEVEL or 2800
-            local meleeLevel = ReadLiveStatLevel("Melee")
-            local defenseLevel = ReadLiveStatLevel("Defense")
+            local meleeLevel = _G.BobonReadLiveStatLevel("Melee")
+            local defenseLevel = _G.BobonReadLiveStatLevel("Defense")
 
             local meleeAdd, defAdd = 0, 0
             if meleeLevel ~= nil and defenseLevel ~= nil then
@@ -18856,7 +18857,9 @@ end)
 
 
 -- Kill Counter (Fix #18)
-local function HookMob(mob)
+-- v22.28.1 REAL-COMPAT: keep this helper out of the main chunk local-register pool.
+-- Logic is unchanged; Real Executor hit its local-register ceiling at this declaration.
+function _G.BobonHookMob(mob)
     if not mob then return end
     local h = mob:FindFirstChild("Humanoid")
     if h and not h:GetAttribute("BHooked") then
@@ -18884,11 +18887,11 @@ task.spawn(function()
     local function Watch()
         local f = workspace:FindFirstChild("Enemies")
         if not f then return end
-        for _, mob in ipairs(f:GetChildren()) do HookMob(mob) end
+        for _, mob in ipairs(f:GetChildren()) do _G.BobonHookMob(mob) end
         f.ChildAdded:Connect(function(mob)
             if not SessionAlive() then return end
             task.wait(0.1)
-            if SessionAlive() then HookMob(mob) end
+            if SessionAlive() then _G.BobonHookMob(mob) end
         end)
     end
     Watch()
