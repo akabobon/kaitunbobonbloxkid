@@ -21,6 +21,11 @@
 -- 3) Reset stale HP/packet watch immediately when the sticky primary changes/dies.
 -- 4) Player follows the persistent pile instead of chasing one mob away from the cluster.
 -- 5) HP-delta fallback remains authoritative; pcall success is never treated as damage proof.
+-- v22.29.4 REAL OLD BRING RESTORE
+-- Bring restored from user's old source:
+-- MobM=4, persistent MobCenter per mob name, request/set ownership,
+-- BodyPosition + BodyGyro, 2s stuck cleanup, SimulationRadius=math.huge.
+-- Removed v22.29.3 bring-specific ghost/quarantine/CFrame-snap behavior.
 -- =================================================================
 --         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
 --         BOBON HUB v22.28.4 REAL COMPAT + GAME ERROR FILTER + ENGLISH UI
@@ -8697,203 +8702,218 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
 end
 
 function ClusterFarmController:ReferenceVideoBring(mobName, primary)
+    -- v22.29.4: RESTORE OLD WORKING BRING MECHANISM
+    -- Adapted directly from the old BringEnemy supplied by user.
+    -- No isnetworkowner gate, no ghost-block/quarantine, no CFrame snap.
+
     if _G.Settings.GatherMobs == false then return 0, 0, 0, 0 end
 
-    local me = HRP()
+    local enemies = workspace:FindFirstChild("Enemies")
     local primaryRoot = primary and primary:FindFirstChild("HumanoidRootPart")
     local primaryHum = primary and primary:FindFirstChildOfClass("Humanoid")
-    if not me or not primaryRoot or not primaryRoot.Parent
+    if not enemies or not primaryRoot or not primaryRoot.Parent
         or not primaryHum or primaryHum.Health <= 0 then
         return 0, 0, 0, 0
     end
 
-    local trigger = math.max(25, tonumber(_G.Settings.ReferenceVideoBringTrigger) or 90)
-    if (me.Position - primaryRoot.Position).Magnitude > trigger
-        and not self.ReferenceVideoPilePos then
-        return 0, 0, 0, 0
+    _G.MobM = tonumber(_G.MobM) or 4
+    _G.BringRange = tonumber(_G.BringRange)
+        or math.max(300, tonumber(_G.Settings.ReferenceVideoBringRadius) or 500)
+    _G.MobCenter = _G.MobCenter or {}
+
+    self.LegacyBringStuckTimers = self.LegacyBringStuckTimers
+        or setmetatable({}, {__mode = "k"})
+
+    -- Reset cached center only when the quest mob changes.
+    -- While farming the same mob, keep the old source's persistent center.
+    if self.LegacyBringMobName ~= mobName then
+        if self.LegacyBringMobName then
+            _G.MobCenter[self.LegacyBringMobName] = nil
+        end
+        self.LegacyBringMobName = mobName
+        _G.MobCenter[mobName] = nil
+        self.LegacyBringStuckTimers = setmetatable({}, {__mode = "k"})
     end
 
-    pcall(function() ExpandSimulationRadius() end)
-
-    self.ReferenceVideoPulled = self.ReferenceVideoPulled or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoIgnoreUntil = self.ReferenceVideoIgnoreUntil or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoMoveState = self.ReferenceVideoMoveState or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoGhostBlocked = self.ReferenceVideoGhostBlocked or setmetatable({}, {__mode="k"})
-
-    -- Keep one stable center for this quest field. Do not let every newly selected
-    -- primary drag the entire pile to another spawn.
-    if self.ReferenceVideoPileName ~= mobName or not self.ReferenceVideoPilePos then
-        self.ReferenceVideoPileName = mobName
-        self.ReferenceVideoPilePos = primaryRoot.Position
-    end
-    local pilePos = self.ReferenceVideoPilePos
-    if (primaryRoot.Position - pilePos).Magnitude > 350 then
-        pilePos = primaryRoot.Position
-        self.ReferenceVideoPilePos = pilePos
-    end
-
-    local radius = math.max(500, tonumber(_G.Settings.ReferenceVideoBringRadius) or 500)
-    local entries = self:ReferenceVideoCollect(mobName, pilePos, radius)
+    local posMon = primaryRoot.Position
+    local stuckTimers = self.LegacyBringStuckTimers
     local now = tick()
-    local moved, confirmed, blocked = 0, 0, 0
-    local settleDistance = 12
 
-    local function destroyMover(root)
-        if not root then return end
-        pcall(function()
-            for _, name in ipairs({
-                "BobonBringBP","BobonBringBG","BobonBringBV",
-                "BringBP","BringBG","FarmingVelocity","FarmingPosition",
-            }) do
-                local obj = root:FindFirstChild(name)
-                if obj then obj:Destroy() end
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local synObj = type(rawget(env, "syn")) == "table" and rawget(env, "syn") or nil
+    local networkOwnership =
+        (synObj and synObj.set_network_ownership)
+        or rawget(env, "setnetworkownership")
+        or rawget(env, "set_network_ownership")
+        or function(...) end
+    local requestOwnership =
+        (synObj and synObj.request_network_ownership)
+        or rawget(env, "requestnetworkownership")
+        or rawget(env, "request_network_ownership")
+        or function(...) end
+
+    -- Exact old cleanup behavior.
+    for _, v in ipairs(enemies:GetChildren()) do
+        local r = v:FindFirstChild("HumanoidRootPart")
+        local bp = r and r:FindFirstChild("BringBP")
+        if bp then
+            if not r.Parent or (r.Position - posMon).Magnitude > _G.BringRange + 150 then
+                pcall(function() bp:Destroy() end)
+                local bg = r:FindFirstChild("BringBG")
+                if bg then pcall(function() bg:Destroy() end) end
+                stuckTimers[v] = nil
             end
-        end)
-    end
-
-    local function requestOwnership(root)
-        pcall(function()
-            local synObj = type(syn) == "table" and syn or nil
-            local requestFn = (synObj and synObj.request_network_ownership)
-                or requestnetworkownership or request_network_ownership
-            local setFn = (synObj and synObj.set_network_ownership)
-                or setnetworkownership or set_network_ownership
-            if type(requestFn) == "function" then requestFn(root) end
-            if type(setFn) == "function" then setFn(root, LP) end
-        end)
-    end
-
-    -- Clean roots that died/despawned or changed quest name.
-    for root in pairs(self.ReferenceVideoMoveState) do
-        local model = root and root.Parent
-        local hum = model and model:FindFirstChildOfClass("Humanoid")
-        if not root or not root.Parent or not model
-            or not IsEnemyNamed(model, mobName) or not hum or hum.Health <= 0 then
-            destroyMover(root)
-            self.ReferenceVideoMoveState[root] = nil
-            self.ReferenceVideoPulled[root] = nil
-            self.ReferenceVideoGhostBlocked[root] = nil
-            self.ReferenceVideoIgnoreUntil[root] = nil
         end
     end
 
-    for _, entry in ipairs(entries) do
-        local mob, root, hum = entry.Model, entry.Root, entry.Humanoid
-        if mob and mob.Parent and root and root.Parent and hum and hum.Health > 0 then
-            if (self.ReferenceVideoIgnoreUntil[root] or 0) > now then
-                blocked = blocked + 1
+    local groups = {}
+    local totalMobs = 0
+
+    -- Preserve old grouping rules, but only accept the active quest mob name.
+    for _, v in ipairs(enemies:GetChildren()) do
+        local h = v:FindFirstChild("Humanoid")
+        local r = v:FindFirstChild("HumanoidRootPart")
+        if IsEnemyNamed(v, mobName)
+            and h and r and h.Health > 0
+            and (r.Position - posMon).Magnitude <= _G.BringRange then
+
+            local bp = r:FindFirstChild("BringBP")
+
+            if bp then
+                local timer = stuckTimers[v]
+                local lastPos = timer and timer.lastPos
+                local stuckTime = timer and timer.stuckTime or 0
+
+                if lastPos and (r.Position - lastPos).Magnitude < 1 then
+                    if stuckTime == 0 then
+                        stuckTimers[v] = {
+                            lastPos = r.Position,
+                            stuckTime = now,
+                        }
+                    elseif now - stuckTime > 2 then
+                        pcall(function() bp:Destroy() end)
+                        local bg = r:FindFirstChild("BringBG")
+                        if bg then pcall(function() bg:Destroy() end) end
+                        stuckTimers[v] = nil
+                    end
+                else
+                    stuckTimers[v] = {
+                        lastPos = r.Position,
+                        stuckTime = 0,
+                    }
+
+                    groups[v.Name] = groups[v.Name] or {}
+                    if totalMobs < _G.MobM then
+                        groups[v.Name][#groups[v.Name] + 1] = {
+                            root = r,
+                            pos = r.Position,
+                            model = v,
+                        }
+                        totalMobs = totalMobs + 1
+                    end
+                end
             else
-                requestOwnership(root)
+                groups[v.Name] = groups[v.Name] or {}
+                if totalMobs < _G.MobM then
+                    groups[v.Name][#groups[v.Name] + 1] = {
+                        root = r,
+                        pos = r.Position,
+                        model = v,
+                    }
+                    totalMobs = totalMobs + 1
+                end
+            end
+        end
+    end
+
+    local moved = 0
+    local selected = 0
+
+    for name, mobList in pairs(groups) do
+        selected = selected + #mobList
+
+        local center = _G.MobCenter[name]
+        if not center then
+            center = Vector3.zero
+            for _, m in ipairs(mobList) do
+                center = center + m.pos
+            end
+
+            if #mobList > 0 then
+                center = center / #mobList
+                _G.MobCenter[name] = center
+            else
+                center = nil
+            end
+        end
+
+        if center then
+            for i, m in ipairs(mobList) do
+                pcall(function()
+                    requestOwnership(m.root)
+                    networkOwnership(m.root, LP)
+                end)
 
                 pcall(function()
-                    if root.Anchored then root.Anchored = false end
-                    for _, part in ipairs(mob:GetDescendants()) do
-                        if part:IsA("BasePart") then part.CanCollide = false end
-                    end
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
+                    m.root.CanCollide = false
+                    m.root.AssemblyLinearVelocity = Vector3.zero
+                    m.root.AssemblyAngularVelocity = Vector3.zero
                 end)
 
-                local state = self.ReferenceVideoMoveState[root]
-                if type(state) ~= "table" then
-                    state = {
-                        StartedAt = now,
-                        LastSnapAt = 0,
-                        LastFarAt = 0,
-                        LastObservedPos = root.Position,
-                        ConfirmedAt = 0,
-                    }
-                    self.ReferenceVideoMoveState[root] = state
-                end
+                -- Exact old 5-stud grid around the cached center.
+                local offset = Vector3.new(
+                    ((i - 1) % 5 - 2) * 5,
+                    0,
+                    math.floor((i - 1) / 5 - 2) * 5
+                )
+                local targetPos = center + offset
 
-                local okMover = pcall(function()
-                    local bv = root:FindFirstChild("BobonBringBV")
-                    if not bv then
-                        bv = Instance.new("BodyVelocity")
-                        bv.Name = "BobonBringBV"
-                        bv.Parent = root
-                    end
-                    bv.MaxForce = Vector3.new(1e7, 1e7, 1e7)
-                    bv.P = 50000
-                    bv.Velocity = Vector3.zero
-
-                    local bp = root:FindFirstChild("BobonBringBP")
+                local ok = pcall(function()
+                    local bp = m.root:FindFirstChild("BringBP")
                     if not bp then
                         bp = Instance.new("BodyPosition")
-                        bp.Name = "BobonBringBP"
-                        bp.Parent = root
+                        bp.Name = "BringBP"
+                        bp.Parent = m.root
                     end
-                    bp.MaxForce = Vector3.new(1e8, 1e8, 1e8)
+                    bp.MaxForce = Vector3.new(1e7, 1e7, 1e7)
                     bp.P = 500000
                     bp.D = 5000
-                    bp.Position = pilePos
+                    bp.Position = targetPos
 
-                    local bg = root:FindFirstChild("BobonBringBG")
+                    local bg = m.root:FindFirstChild("BringBG")
                     if not bg then
                         bg = Instance.new("BodyGyro")
-                        bg.Name = "BobonBringBG"
-                        bg.Parent = root
+                        bg.Name = "BringBG"
+                        bg.Parent = m.root
                     end
-                    bg.MaxTorque = Vector3.new(1e7, 1e7, 1e7)
+                    bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
                     bg.P = 10000
                     bg.D = 1000
-                    bg.CFrame = CFrame.new(pilePos)
+                    bg.CFrame = CFrame.new(targetPos)
                 end)
 
-                if not okMover then
-                    destroyMover(root)
-                    blocked = blocked + 1
-                else
-                    local distBefore = (root.Position - pilePos).Magnitude
-
-                    -- kaiv2's working bring does not rely on BodyPosition alone:
-                    -- after requesting ownership it also snaps the HRP to the center.
-                    -- Bound the snap rate so a server-rejected mob can visibly snap back
-                    -- and be quarantined instead of becoming a permanent client ghost.
-                    if distBefore > 4 and now - (state.LastSnapAt or 0) >= 0.22 then
-                        state.LastSnapAt = now
-                        pcall(function()
-                            root.CFrame = CFrame.new(pilePos)
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.AssemblyAngularVelocity = Vector3.zero
-                        end)
-                    end
-
-                    local dist = (root.Position - pilePos).Magnitude
-                    moved = moved + 1
-                    if dist <= settleDistance then
-                        state.ConfirmedAt = state.ConfirmedAt ~= 0 and state.ConfirmedAt or now
-                        self.ReferenceVideoPulled[root] = now
-                        self.ReferenceVideoGhostBlocked[root] = nil
-                        confirmed = confirmed + 1
-                        state.LastFarAt = 0
-                    else
-                        state.ConfirmedAt = 0
-                        state.LastFarAt = state.LastFarAt ~= 0 and state.LastFarAt or now
-                        if now - state.LastFarAt > 1.25 then
-                            destroyMover(root)
-                            self.ReferenceVideoPulled[root] = nil
-                            self.ReferenceVideoGhostBlocked[root] = true
-                            self.ReferenceVideoIgnoreUntil[root] = now + 0.45
-                            state.LastFarAt = 0
-                            blocked = blocked + 1
-                        end
-                    end
-                    state.LastObservedPos = root.Position
-                end
+                if ok then moved = moved + 1 end
             end
         end
     end
 
-    self.SharedBringCount = confirmed
+    pcall(function()
+        if type(sethiddenproperty) == "function" then
+            sethiddenproperty(LP, "SimulationRadius", math.huge)
+        end
+    end)
+
+    self.SharedBringCount = moved
+
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "KAIV2-SNAP+BODYPOS-PILE"
-        _G.BobonDiagnostics.BringCandidates = #entries
-        _G.BobonDiagnostics.BringOwned = confirmed
+        _G.BobonDiagnostics.Bring = "OLD-BRING-BP-BG"
+        _G.BobonDiagnostics.BringCandidates = selected
         _G.BobonDiagnostics.BringMoved = moved
-        _G.BobonDiagnostics.BringUnknown = blocked
+        _G.BobonDiagnostics.BringOwned = moved
+        _G.BobonDiagnostics.BringUnknown = 0
     end
-    return confirmed, #entries, confirmed, blocked
+
+    return moved, selected, moved, 0
 end
 
 function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
@@ -8966,7 +8986,7 @@ function ClusterFarmController:ReferenceVideoAttack(mobName, primary)
         return Attack(primary, mobName) == true, 1
     end
 
-    local pilePos = self.ReferenceVideoPileName == mobName and self.ReferenceVideoPilePos
+    local pilePos = (_G.MobCenter and _G.MobCenter[mobName])
         or primaryRoot.Position
     local entries = self:ReferenceVideoCollect(mobName, pilePos,
         math.max(120, tonumber(_G.Settings.ReferenceVideoAttackRange) or 120))
@@ -9133,13 +9153,12 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     _G.State.FState = "KAIV2_DIRECT4_PILE_FARM"
     _G.State.ActionText = "Kaiv2 Direct4 Pile • " .. mobName
 
-    -- Stay over the persistent pile. Chasing each newly selected mob away from the
-    -- cluster makes SimulationRadius/ownership oscillate and breaks bring after one kill.
+    -- v22.29.4: follow the old bring center when it exists.
     local side = tonumber(_G.Settings.ReferenceVideoSideOffset) or 7
     local hover = tonumber(_G.Settings.ReferenceVideoHoverHeight) or 20
-    local pilePos = (self.ReferenceVideoPileName == mobName and self.ReferenceVideoPilePos)
-        or root.Position
-    local followCF = CFrame.new(pilePos + Vector3.new(side, hover, 0))
+    local oldCenter = _G.MobCenter and _G.MobCenter[mobName]
+    local followPos = oldCenter or root.Position
+    local followCF = CFrame.new(followPos + Vector3.new(side, hover, 0))
     if _G.State:CanRequestTravel() then
         TravelManager:Request(followCF, "Farm", {
             arrivalThreshold = math.max(5, tonumber(_G.Settings.FarmArrivalThreshold) or 8),
