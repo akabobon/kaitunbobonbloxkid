@@ -1,6 +1,33 @@
 -- =================================================================
---         BOBON HUB v22.22.2 MELEE + GACHA SELF-HEAL
---         Base: v22.22.1 TRIO DEATH-SAFE + QUEST CONTINUITY
+--         BOBON HUB v22.22.4 SOURCE AUDIT + QUEST/SABER/BRING HARDENING
+--         Base: v22.22.3 REMOTE-FIRST TRIO + VIDEO25 FIX
+--
+--  v22.22.4 SOURCE AUDIT FIXES:
+--  [A224-1] Release artifact desync fixed: the GitHub-ready script.lua is generated
+--           from this exact source, not the stale v22.8 copy that was accidentally exported.
+--  [A224-2] Quest identity is strict again: a readable quest containing another known
+--           QDB mob can no longer pass merely because ActiveQuestMob was cached.
+--  [A224-3] Normal farm requires a verified quest match; only the existing short UI
+--           rebuild/accept lease may bridge an unreadable wrapper.
+--  [A224-4] Saber Jungle buttons never count a missing/unstreamed Button as a successful
+--           touch. Each checkpoint streams/retries the exact PlateN.Button before advancing.
+--  [A224-5] Saber room state checks use the authoritative Door.CanCollide path first,
+--           matching current public Saber implementations and avoiding descendant false positives.
+--  [A224-6] Moving Trio no longer freezes Humanoid WalkSpeed/AutoRotate during bring.
+--           Only owned/proven roots get collision-softened, reducing statue/animation failures.
+--  [A224-7] Unknown-owner remote proof uses a longer multi-sample settle before promotion;
+--           failed proofs still fall back to close ownership acquire and never fake 3/3.
+--
+--  v22.22.3 VIDEO25 / REMOTE BRING FIXES:
+--  [R25-1] Moving Trio now tries all 3 same-name quest mobs remotely before flying to any one mob.
+--  [R25-2] Explicit owner=true roots are pulled immediately in one batch after SimulationRadius refresh.
+--  [R25-3] owner=false roots are NEVER CFramed remotely; a short ownership-settle window runs first,
+--           then Farm falls back to close acquire only if server ownership does not transfer.
+--  [R25-4] owner=nil environments use one far snap + TWO-PHASE no-rewrite persistence proof.
+--           Failed proof is not attacked/verified and falls back to physical acquire, preventing ghost/statue mobs.
+--  [R25-5] Unverified remote trials do not freeze WalkSpeed/AutoRotate/CanCollide.
+--  [R25-6] Ground-Y hysteresis prevents moving trio from jumping floors at prison tunnels/stairs.
+--  [R25-7] Quest/checkpoints, dodge, melee and gacha logic are otherwise unchanged.
 --
 --  v22.22.2 ECONOMY FIXES:
 --  [E222-1] Economy lock and FruitManager busy flag self-heal if a prior protected call aborts.
@@ -1444,6 +1471,18 @@ _G.Settings = {
     TeddyTrioPullTimeout = 1.80,
     TeddyTrioRetryDelay = 0.25,
     TeddyTrioAttackRange = 120,
+    -- v22.22.3: remote-first bring. Safe rule: true owner = instant pull;
+    -- nil owner = two-phase persistence trial; false owner = settle then close acquire.
+    TeddyTrioRemoteFirst = true,
+    TeddyTrioRemoteMaxDistance = 1800,
+    TeddyTrioRemoteOwnerSettle = 0.18,
+    TeddyTrioRemoteProofTime = 0.30,
+    TeddyTrioRemoteProofChecks = 4,
+    TeddyTrioRemoteSecondHold = 0.22,
+    TeddyTrioRemoteProofRadius = 10,
+    TeddyTrioRemoteRejectRadius = 34,
+    TeddyTrioRemoteRetry = 0.45,
+    TeddyTrioRemoteMaxFails = 1,
     TeddyAirHoverHeight  = 28,
     TeddyAirTagHoverHeight = 16,
     TeddyAirAcquireHeight = 4,
@@ -3465,14 +3504,42 @@ local function QuestMatches(mobName)
     if not mobName then return nil end
     local state = HasQuest()
     if state == false then return false end
+
     local text = GetQuestText()
-    if text and string.find(string.lower(text), string.lower(mobName), 1, true) then
-        return true
+    local wanted = string.lower(tostring(mobName))
+    if text then
+        local lower = string.lower(text)
+        if string.find(lower, wanted, 1, true) then
+            return true
+        end
+
+        -- If the readable wrapper names another canonical QDB enemy, this is
+        -- definitely the wrong quest. Never let a stale ActiveQuestMob override it.
+        local db = _G.BobonQuestDB
+        if type(db) == "table" then
+            local best = nil
+            for _, entry in ipairs(db) do
+                local name = entry and entry.M
+                if type(name) == "string"
+                    and string.find(lower, string.lower(name), 1, true) then
+                    if not best or #name > #best then best = name end
+                end
+            end
+            if best then return string.lower(best) == wanted end
+        end
+
+        -- A readable English objective that does not contain the requested mob
+        -- is also a hard mismatch. Localized/structurally unusual text remains nil
+        -- and is handled only by the short accepted-session fallback below.
+        if lower:find("defeat", 1, true) or lower:find("kill", 1, true) then
+            return false
+        end
     end
+
     if state == true then
         local activeMob = _G.State and _G.State.ActiveQuestMob
-        if activeMob then
-            return string.lower(tostring(activeMob)) == string.lower(tostring(mobName))
+        if activeMob and (_G.State.LastQuestAccepted or 0) > 0 then
+            return string.lower(tostring(activeMob)) == wanted
         end
     end
     return nil
@@ -7706,6 +7773,10 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedTeddyAcquireTaggedAt = 0
     self.SharedTrioPendingPos = setmetatable({}, {__mode="k"})
     self.SharedTrioLastFollow = setmetatable({}, {__mode="k"})
+    self.SharedTrioRemoteProof = setmetatable({}, {__mode="k"})
+    self.SharedTrioRemoteFails = setmetatable({}, {__mode="k"})
+    self.SharedTrioOwnerProbeUntil = setmetatable({}, {__mode="k"})
+    self.SharedTrioRemotePendingCount = 0
     self.SharedTrioFieldCenter = nil
     self.SharedTrioGroundY = nil
     self.SharedNextProbeWaveAt = 0
@@ -7875,18 +7946,18 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
-    -- v22.22 MOVING TRIO MAGNET
-    -- Goal: exactly the behavior shown in the supplied reference video:
-    --   * keep at most 3 live mobs matching the active quest mob name;
-    --   * acquire network ownership by moving close to an unowned member;
-    --   * once ownership/proof exists, keep that root under the CURRENT player;
-    --   * the pile follows X/Z continuously instead of staying at a fixed q.MC anchor.
+    -- v22.22.3 REMOTE-FIRST MOVING TRIO
+    -- Safe remote order:
+    --   1) Expand simulation radius, then give explicit-owner environments a short
+    --      ownership-settle window before Farm starts chasing anything.
+    --   2) owner==true -> remote pull immediately.
+    --   3) owner==nil -> ONE remote movement trial, then observe it without rewriting.
+    --      It must survive two persistence phases before becoming a follow lease.
+    --   4) owner==false or failed remote proof -> normal close acquire fallback.
     --
-    -- We intentionally do NOT destroy Animator, PlatformStand, or ChangeState here.
-    -- Those older tricks made "statue/ghost" mobs in earlier Bobon builds.
+    -- This avoids the old false-success/statue failure: no unverified mob has
+    -- WalkSpeed/AutoRotate changed and no failed remote trial is attacked as stacked.
     if _G.Settings.SharedTeddyMode == false then return 0, 0 end
-    -- Video 24: HRP can survive briefly after Humanoid reaches 0 HP. Never keep
-    -- rewriting a trio around a dead character; CharacterRemoving will clear the lease.
     if not IsAlive() then return 0, 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then
         return 0, 0
@@ -7908,6 +7979,31 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     local leash = math.max(70, tonumber(_G.Settings.TeddyTrioFollowLeash) or 110)
     local retryDelay = math.max(0.12, tonumber(_G.Settings.TeddyTrioRetryDelay) or 0.25)
 
+    local remoteFirst = _G.Settings.TeddyTrioRemoteFirst ~= false
+    local remoteMaxDistance = math.max(220,
+        tonumber(_G.Settings.TeddyTrioRemoteMaxDistance) or fieldRange)
+    local remoteOwnerSettle = math.clamp(
+        tonumber(_G.Settings.TeddyTrioRemoteOwnerSettle) or 0.18, 0.08, 0.45)
+    local remoteProofTime = math.clamp(
+        tonumber(_G.Settings.TeddyTrioRemoteProofTime)
+            or tonumber(_G.Settings.ClusterRemotePullProofTime) or 0.20,
+        0.12, 0.55)
+    local remoteProofChecks = math.clamp(
+        math.floor(tonumber(_G.Settings.TeddyTrioRemoteProofChecks)
+            or tonumber(_G.Settings.ClusterRemotePullProofChecks) or 3),
+        2, 6)
+    local remoteSecondHold = math.clamp(
+        tonumber(_G.Settings.TeddyTrioRemoteSecondHold) or 0.16, 0.08, 0.35)
+    local remoteProofRadius = math.max(6,
+        tonumber(_G.Settings.TeddyTrioRemoteProofRadius) or 10)
+    local remoteRejectRadius = math.max(remoteProofRadius + 8,
+        tonumber(_G.Settings.TeddyTrioRemoteRejectRadius) or 30)
+    local remoteRetry = math.max(0.15,
+        tonumber(_G.Settings.TeddyTrioRemoteRetry)
+            or tonumber(_G.Settings.ClusterRemotePullRetry) or 0.35)
+    local remoteMaxFails = math.clamp(
+        math.floor(tonumber(_G.Settings.TeddyTrioRemoteMaxFails) or 1), 1, 3)
+
     pcall(function() ExpandSimulationRadius() end)
 
     self.SharedTeddyActive = true
@@ -7918,13 +8014,15 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
     self.SharedTrioPendingPos = self.SharedTrioPendingPos or setmetatable({}, {__mode="k"})
     self.SharedTrioLastFollow = self.SharedTrioLastFollow or setmetatable({}, {__mode="k"})
+    self.SharedTrioRemoteProof = self.SharedTrioRemoteProof or setmetatable({}, {__mode="k"})
+    self.SharedTrioRemoteFails = self.SharedTrioRemoteFails or setmetatable({}, {__mode="k"})
+    self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
 
     local center = self.SharedTrioFieldCenter or me.Position
     local selected, selectedRoots = {}, setmetatable({}, {__mode="k"})
 
-    -- Preserve existing trio members first. A verified member may already have
-    -- followed the player away from the original spawn center, so do not evict it
-    -- merely because its current position is no longer near q.MC.
+    -- Keep current members first so an already-acquired trio does not get replaced
+    -- just because it followed the player away from the original camp center.
     for _, entry in ipairs(self.SharedTeddyBatch) do
         if #selected >= maxSlots then break end
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
@@ -7939,9 +8037,9 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end
     end
 
-    -- Fill empty slots with nearest live mobs whose canonical name exactly matches
-    -- the active quest/skip mob. This never grabs another species from the island.
-    if #selected < maxSlots and (forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery) then
+    -- Fill to three with exact same-name quest mobs only.
+    if #selected < maxSlots
+        and (forceScan == true or now - (self.SharedTeddyLastScanAt or 0) >= scanEvery) then
         self.SharedTeddyLastScanAt = now
         local extras = {}
         for _, mob in ipairs(folder:GetChildren()) do
@@ -7975,9 +8073,8 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     end
     self.SharedTeddyBatch = selected
 
-    -- Dynamic pile: X/Z follow the player every tick. Prefer the actual map surface
-    -- directly below the player, excluding our character and Enemies so a mob cannot
-    -- become its own "ground". Fallback keeps the pile one farm-height below the player.
+    -- Moving under-foot pile. Raycast ignores the character + NPCs so the Y target
+    -- is the actual map surface rather than another enemy's body.
     me = HRP() or me
     local fallbackDepth = math.clamp(
         tonumber(_G.Settings.SharedFarmHeight)
@@ -7999,9 +8096,19 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
             params
         )
         if hit and hit.Position and IsValidPos(hit.Position) then
-            pileY = hit.Position.Y + 2
+            local newY = hit.Position.Y + 2
+            -- Vertical hysteresis prevents a tunnel roof / stair edge from instantly
+            -- throwing a verified pile to a different floor while X/Z follows normally.
+            local oldY = tonumber(self.SharedTrioGroundY)
+            if oldY == nil or math.abs(newY - oldY) <= 18 then
+                self.SharedTrioGroundY = newY
+            elseif math.abs(me.Position.Y - newY) <= fallbackDepth + 10 then
+                self.SharedTrioGroundY = newY
+            end
         end
     end)
+    if tonumber(self.SharedTrioGroundY) then pileY = self.SharedTrioGroundY end
+
     local pilePos = Vector3.new(
         me.Position.X,
         pileY + (tonumber(_G.Settings.TeddyTrioGroundOffset) or 0),
@@ -8017,11 +8124,12 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     local acquireRoot = acquireModel and acquireModel:FindFirstChild("HumanoidRootPart") or nil
 
     local function preparePhysical(mob, hum, root)
-        self:SharedRemember(hum, "Humanoid")
+        -- Do not freeze Humanoid movement/rotation. Earlier hard-freeze variants
+        -- could leave locally held NPCs looking like statues after ownership changed.
+        -- The moving pile already rewrites only owned/proven roots, so collision
+        -- softening is enough here and is fully restored on release.
         self:SharedRemember(root, "Part")
         pcall(function()
-            hum.WalkSpeed = 0
-            hum.AutoRotate = false
             root.CanCollide = false
             local head = mob:FindFirstChild("Head")
             if head and head:IsA("BasePart") then
@@ -8042,7 +8150,20 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
         end)
     end
 
+    local function failRemote(mob, root)
+        self.SharedTrioRemoteProof[root] = nil
+        self.SharedTrioOwnerProbeUntil[root] = nil
+        self.SharedTrioRemoteFails[root] =
+            (tonumber(self.SharedTrioRemoteFails[root]) or 0) + 1
+        self.SharedTeddyRetryAfter[root] = now + remoteRetry
+        -- Do not restore an old position here. The server remains authoritative
+        -- and will already have snapped a failed remote trial to its real position.
+        if mob then self:SharedRestoreOne(mob) end
+    end
+
     local verifiedCount = 0
+    local remotePendingCount = 0
+
     for _, entry in ipairs(selected) do
         local mob, hum, root = entry.Model, entry.Humanoid, entry.Root
         if mob and mob.Parent and hum and hum.Health > 0 and root and root.Parent then
@@ -8051,11 +8172,10 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                 local verifiedAt = self.SharedTeddyVerified[root]
                 local pendingAt = self.SharedTeddyPendingAt[root]
                 local pendingPos = self.SharedTrioPendingPos[root]
+                local remoteProof = self.SharedTrioRemoteProof[root]
                 local owner = ClientOwnsMob(root)
 
-                -- No owner API: a one-shot static persistence proof is enough. This is
-                -- checked against the ORIGINAL snap point so player motion cannot make a
-                -- successful proof look like a failure.
+                -- Near-acquire compatibility proof from v22.22.
                 if not verifiedAt and pendingAt and pendingPos then
                     if now - pendingAt >= stableDelay then
                         self.SharedTeddyPendingAt[root] = nil
@@ -8064,6 +8184,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                             self.SharedTeddyVerified[root] = now
                             self.SharedTeddyQualified[root] = now
                             self.SharedTrioLastFollow[root] = 0
+                            self.SharedTrioRemoteFails[root] = 0
                             verifiedAt = now
                         else
                             self.SharedTeddyRetryAfter[root] = now + retryDelay
@@ -8071,19 +8192,53 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                     end
                 end
 
+                -- UNKNOWN-owner remote proof. There are NO rewrites while this runs.
+                -- Passing phase 1 merely starts a second no-write hold; only phase 2
+                -- promotes the mob to a moving follow lease.
+                if not verifiedAt and remoteProof then
+                    remotePendingCount = remotePendingCount + 1
+                    local distProof = (pos - remoteProof.Anchor).Magnitude
+                    if distProof <= remoteProofRadius then
+                        if now - (remoteProof.LastCheckAt or 0) >= 0.045 then
+                            remoteProof.LastCheckAt = now
+                            remoteProof.Checks = (remoteProof.Checks or 0) + 1
+                        end
+
+                        if not remoteProof.Phase2At
+                            and now - (remoteProof.StartedAt or now) >= remoteProofTime
+                            and (remoteProof.Checks or 0) >= remoteProofChecks then
+                            remoteProof.Phase2At = now
+                        elseif remoteProof.Phase2At
+                            and now - remoteProof.Phase2At >= remoteSecondHold then
+                            self.SharedTrioRemoteProof[root] = nil
+                            self.SharedTeddyVerified[root] = now
+                            self.SharedTeddyQualified[root] = now
+                            self.SharedTrioLastFollow[root] = 0
+                            self.SharedTrioRemoteFails[root] = 0
+                            verifiedAt = now
+                            remotePendingCount = math.max(0, remotePendingCount - 1)
+                        end
+                    elseif distProof >= remoteRejectRadius
+                        or now - (remoteProof.StartedAt or now)
+                            > remoteProofTime + remoteSecondHold + 0.45 then
+                        failRemote(mob, root)
+                        remoteProof = nil
+                        remotePendingCount = math.max(0, remotePendingCount - 1)
+                    end
+                end
+
                 if verifiedAt then
                     if owner == false then
-                        -- Explicit server ownership loss: stop pretending the mob is held.
+                        -- A real explicit ownership loss means a moving CFrame hold is
+                        -- no longer safe. Revoke rather than create a local-only statue.
                         self.SharedTeddyVerified[root] = nil
                         self.SharedTeddyQualified[root] = nil
                         self.SharedTeddyPendingAt[root] = nil
                         self.SharedTrioPendingPos[root] = nil
+                        self.SharedTrioRemoteProof[root] = nil
                         self.SharedTeddyRetryAfter[root] = now + retryDelay
                         self:SharedRestoreOne(mob)
                     else
-                        -- Before writing again, detect a real server snap-back from the
-                        -- previous follow update. Large drift revokes an UNKNOWN-ownership
-                        -- lease instead of creating a client-only ghost.
                         local driftBefore = (pos - pilePos).Magnitude
                         local verifiedSince = tonumber(self.SharedTeddyQualified[root]) or verifiedAt
                         local staleUnknown = owner == nil
@@ -8092,6 +8247,7 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                         if staleUnknown then
                             self.SharedTeddyVerified[root] = nil
                             self.SharedTeddyQualified[root] = nil
+                            self.SharedTrioRemoteProof[root] = nil
                             self.SharedTeddyRetryAfter[root] = now + retryDelay
                             self:SharedRestoreOne(mob)
                         else
@@ -8105,25 +8261,66 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
                         end
                     end
                 else
-                    local closeToPlayer = (pos - me.Position).Magnitude <= acquireRadius
+                    local distPlayer = (pos - me.Position).Magnitude
+                    local closeToPlayer = distPlayer <= acquireRadius
                     local isAcquire = acquireRoot == root
                     local retryReady = now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0)
+                    local remoteFails = tonumber(self.SharedTrioRemoteFails[root]) or 0
 
-                    -- Strong path: executor/engine explicitly says we own it. Bring all
-                    -- three in the SAME pass when ownership is already available.
                     if retryReady and owner == true then
+                        -- Strongest path: actual ownership means all three can be pulled
+                        -- from far in the same scan without visiting them.
+                        self.SharedTrioOwnerProbeUntil[root] = nil
+                        self.SharedTrioRemoteProof[root] = nil
                         preparePhysical(mob, hum, root)
                         if snap(root, pilePos) then
                             self.SharedTeddyVerified[root] = now
                             self.SharedTeddyQualified[root] = now
                             self.SharedTrioLastFollow[root] = now
+                            self.SharedTrioRemoteFails[root] = 0
                             verifiedCount = verifiedCount + 1
                         end
 
-                    -- Compatibility path: if ownership cannot be queried, only the active
-                    -- nearby acquire target receives a single test snap.
+                    elseif remoteFirst and retryReady and owner == false
+                        and distPlayer <= remoteMaxDistance and remoteFails < remoteMaxFails then
+                        -- Do not write a server-owned root. Give the simulation-radius
+                        -- request a short transfer window first. If ownership does not
+                        -- transfer, this root becomes a normal physical acquire target.
+                        local untilAt = tonumber(self.SharedTrioOwnerProbeUntil[root]) or 0
+                        if untilAt <= 0 then
+                            self.SharedTrioOwnerProbeUntil[root] = now + remoteOwnerSettle
+                            remotePendingCount = remotePendingCount + 1
+                        elseif now < untilAt then
+                            remotePendingCount = remotePendingCount + 1
+                        else
+                            self.SharedTrioOwnerProbeUntil[root] = nil
+                            self.SharedTrioRemoteFails[root] = remoteMaxFails
+                        end
+
+                    elseif remoteFirst and retryReady and owner == nil
+                        and distPlayer <= remoteMaxDistance
+                        and remoteFails < remoteMaxFails
+                        and not remoteProof and not pendingAt then
+                        -- No owner API exists. One far CFrame write is allowed only as a
+                        -- trial. We deliberately do NOT freeze Humanoid/CanCollide here.
+                        if snap(root, pilePos) then
+                            self.SharedTrioRemoteProof[root] = {
+                                Anchor = pilePos,
+                                StartedAt = now,
+                                LastCheckAt = 0,
+                                Checks = 0,
+                                Phase2At = nil,
+                            }
+                            remotePendingCount = remotePendingCount + 1
+                        else
+                            failRemote(mob, root)
+                        end
+
                     elseif retryReady and owner == nil and isAcquire and closeToPlayer
-                        and not self.SharedTeddyPendingAt[root] then
+                        and not self.SharedTeddyPendingAt[root]
+                        and not self.SharedTrioRemoteProof[root] then
+                        -- Remote proof already failed or was disabled: close fallback.
+                        -- Only now do we apply temporary physical preparation.
                         preparePhysical(mob, hum, root)
                         if snap(root, pilePos) then
                             self.SharedTeddyPendingAt[root] = now
@@ -8136,8 +8333,10 @@ function ClusterFarmController:SharedTeddyRestack(forceScan)
     end
 
     self.SharedBringCount = verifiedCount
+    self.SharedTrioRemotePendingCount = remotePendingCount
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = ("TRIO-MOVE %d/%d"):format(verifiedCount, #selected)
+        _G.BobonDiagnostics.Bring = ("TRIO-REMOTE %d/%d • probe %d")
+            :format(verifiedCount, #selected, remotePendingCount)
         _G.BobonDiagnostics.BringCandidates = #selected
         _G.BobonDiagnostics.BringMoved = verifiedCount
         _G.BobonDiagnostics.BringFailed = math.max(0, #selected - verifiedCount)
@@ -8174,6 +8373,8 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     self.SharedTeddyVerified = self.SharedTeddyVerified or setmetatable({}, {__mode="k"})
     self.SharedTeddyPendingAt = self.SharedTeddyPendingAt or setmetatable({}, {__mode="k"})
     self.SharedTeddyRetryAfter = self.SharedTeddyRetryAfter or setmetatable({}, {__mode="k"})
+    self.SharedTrioRemoteProof = self.SharedTrioRemoteProof or setmetatable({}, {__mode="k"})
+    self.SharedTrioOwnerProbeUntil = self.SharedTrioOwnerProbeUntil or setmetatable({}, {__mode="k"})
 
     local verified, total = self:SharedTeddyRestack(true)
     local batch = self.SharedTeddyBatch or {}
@@ -8245,6 +8446,8 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
             if root and root.Parent
                 and not self.SharedTeddyVerified[root]
                 and not self.SharedTeddyPendingAt[root]
+                and not self.SharedTrioRemoteProof[root]
+                and now >= (tonumber(self.SharedTrioOwnerProbeUntil[root]) or 0)
                 and now >= (tonumber(self.SharedTeddyRetryAfter[root]) or 0) then
                 local okPos, pos = pcall(function() return root.Position end)
                 if okPos and IsValidPos(pos) then
@@ -8374,8 +8577,15 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     end
 
     _G.State.FState = "SHARED_BRING_FARM"
-    _G.BobonStatus = ("%s: Trio • BUILD %d/%d • %s")
-        :format(prefix, verified, total, mobName)
+    local remotePending = tonumber(self.SharedTrioRemotePendingCount) or 0
+    if remotePending > 0 then
+        _G.State.ActionText = "Remote Trio Probe • " .. mobName
+        _G.BobonStatus = ("%s: Trio • REMOTE %d/%d • probe %d")
+            :format(prefix, verified, total, remotePending)
+    else
+        _G.BobonStatus = ("%s: Trio • BUILD %d/%d • %s")
+            :format(prefix, verified, total, mobName)
+    end
     return true
 end
 
@@ -11002,6 +11212,7 @@ local QDB = {
     {Min=2700,Max=2724,Q="SubmergedQuest3",M="High Disciple",QL=1,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9750.416,-1966.939,9753.360)},
     {Min=2725,Max=2800,Q="SubmergedQuest3",M="Grand Devotee",QL=2,QC=CFrame.new(9640.088,-1992.445,9613.652),MC=CFrame.new(9611.705,-1993.471,9882.688)},
 }
+_G.BobonQuestDB = QDB
 
 -- Resolve an already-open quest after re-execution. Prefer an exact canonical
 -- enemy name found in the source quest text; if Roblox only exposes translated
@@ -12160,7 +12371,17 @@ function ItemProgression:CheckSaber()
 
             local function DoorIsOpen()
                 local _, _, _, door = MapState()
-                return PartLooksOpen(door)
+                if not door then return nil end
+                if door:IsA("BasePart") then
+                    local okDoor, open = pcall(function()
+                        return door.CanCollide == false
+                    end)
+                    return okDoor and open == true or nil
+                end
+                -- Compatibility fallback only if a future update wraps Door in a Model.
+                local direct = door:FindFirstChild("Part")
+                    or door:FindFirstChild("Part", true)
+                return PartLooksOpen(direct or door)
             end
 
             local function FinalIsOpen()
@@ -12309,29 +12530,57 @@ function ItemProgression:CheckSaber()
                 for pass = 1, 8 do
                     if DoorIsOpen() == true then return true end
 
+                    local incompletePass = false
                     for i = 1, 5 do
                         if not _G.State:IsActionValid(myToken) or not IsAlive() then
                             return false
                         end
                         if DoorIsOpen() == true then return true end
 
-                        _G.BobonStatus = ("Saber 1/8 • button %d/5 • pass %d/8")
-                            :format(i, pass)
+                        local touched = false
+                        for attempt = 1, 3 do
+                            _G.BobonStatus = ("Saber 1/8 • button %d/5 • pass %d/8 • try %d/3")
+                                :format(i, pass, attempt)
 
-                        local button = ResolvePlateButton(i)
-                        local cf = button and button.CFrame or plateFallback[i]
-                        local touched = StableTouch(cf, button, 0.52)
+                            local button = ResolvePlateButton(i)
+                            if not button then
+                                -- The old code treated a fallback CFrame write as a successful
+                                -- button touch even when PlateN.Button was not streamed. Move to
+                                -- its known area only to stream it, then require the real part.
+                                StableTouch(plateFallback[i], nil, 0.18)
+                                local streamUntil = tick() + 1.6
+                                while _G.State:IsActionValid(myToken) and IsAlive()
+                                    and tick() < streamUntil and not button do
+                                    TouchAction()
+                                    task.wait(0.10)
+                                    button = ResolvePlateButton(i)
+                                end
+                            end
 
-                        -- If the movement lock was briefly contested, immediately retry
-                        -- THIS button instead of leaving the plate sequence half-finished.
-                        if not touched and _G.State:IsActionValid(myToken) and IsAlive() then
+                            if button and button.Parent then
+                                touched = StableTouch(button.CFrame, button,
+                                    attempt == 1 and 0.52 or 0.70)
+                                if touched then break end
+                            end
                             task.wait(0.12)
-                            button = ResolvePlateButton(i)
-                            cf = button and button.CFrame or plateFallback[i]
-                            StableTouch(cf, button, 0.62)
                         end
 
+                        if not touched then
+                            incompletePass = true
+                            _G.BobonStatus = ("Saber 1/8 • button %d not streamed/touched • retrying")
+                                :format(i)
+                            break
+                        end
                         task.wait(0.20)
+                    end
+
+                    if incompletePass then
+                        -- Keep the same Saber ActionToken and re-stream the Jungle rather
+                        -- than releasing the quest after a partial plate sequence.
+                        Go(CFrame.new(-1612.56,36.98,148.72), {
+                            timeout=45, arrivalThreshold=24, settle=0.15, retries=1,
+                        })
+                        task.wait(0.25)
                     end
 
                     if DoorIsOpen() == true then return true end
@@ -17781,7 +18030,7 @@ task.spawn(function()
             -- nhận là SAI (nil = UI đổi cấu trúc sau update, đọc không ra
             -- title). Bản cũ đòi match == true nên nil khiến bot kẹt
             -- re-request quest vô hạn → không farm, không gom, không đánh.
-            local hasQuest = questState == true and questMatch ~= false
+            local hasQuest = questState == true and questMatch == true
             -- v21.33: retain the canonical active quest across a brief wrapper blink.
             -- Without this lease the controller cleared Farm, opened a "safe item window",
             -- and could launch BossManager before the Quest UI rebuilt.
