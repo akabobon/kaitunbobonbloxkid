@@ -1,6 +1,7 @@
 -- BOBON HUB v22.28.1 REAL-COMPAT | local-register fix only
 -- =================================================================
---         BOBON HUB v22.28.0 VERIFIED BATCH + GHOST RESTORE
+--         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
+--         BOBON HUB v22.28.3 REAL COMPAT + ERROR RECOVERY
 --         Base: v22.27.0 SERVER-SAFE VIDEO FARM
 --
 --  v22.28.0 ROBLOX(29) CONFIRMED ROOT FIX:
@@ -1263,6 +1264,82 @@ while not LP and SessionAlive() do
     LP = Players.LocalPlayer
 end
 if not LP then error("[BobonHub] LocalPlayer unavailable") end
+
+
+-- v22.28.3 GLOBAL ERROR RECOVERY
+-- Any real Bobon module error requests ONE rejoin of the current server.
+-- If that rejoin fails asynchronously, times out, or throws immediately,
+-- recovery falls back to the existing low-player HopManager. No hop spam.
+_G.BobonErrorRecovery = {
+    AwaitingRejoin = false,
+    LastTeleportAt = 0,
+    LastErrorAt = 0,
+    LastSource = "",
+    LastDetail = "",
+}
+
+function _G.BobonErrorRecovery:HopFallback(detail)
+    self.AwaitingRejoin = false
+    _G.BobonStatus = "Error recovery • hopping to another server"
+    if _G.BobonHopManager and type(_G.BobonHopManager.Request) == "function" then
+        _G.BobonHopManager.LastHop = 0
+        return _G.BobonHopManager:Request("error-recovery: " .. tostring(detail), true)
+    end
+    return pcall(function()
+        TeleportSvc:Teleport(game.PlaceId, LP)
+    end)
+end
+
+function _G.BobonErrorRecovery:Rejoin(source, detail)
+    if not SessionAlive() or self.AwaitingRejoin then return false end
+    local now = tick()
+    -- Avoid a broken module causing a teleport storm in the same process.
+    if now - (self.LastTeleportAt or 0) < 35 then return false end
+    self.LastTeleportAt = now
+    self.AwaitingRejoin = true
+    self.LastSource = tostring(source or "unknown")
+    self.LastDetail = tostring(detail or "unknown")
+    _G.BobonStatus = "Error recovery • rejoining current server"
+    pcall(function()
+        if _G.State and _G.State.SetMode then _G.State:SetMode("ServerHop") end
+    end)
+
+    local ok, err = pcall(function()
+        TeleportSvc:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP)
+    end)
+    if not ok then
+        return self:HopFallback("rejoin-call-failed: " .. tostring(err))
+    end
+
+    -- A successful TeleportToPlaceInstance call can still fail later without throwing.
+    task.delay(12, function()
+        if SessionAlive() and _G.BobonErrorRecovery == self and self.AwaitingRejoin then
+            self:HopFallback("rejoin-timeout")
+        end
+    end)
+    return true
+end
+
+function _G.BobonReportError(source, detail, fatal)
+    local label = tostring(source or "Unknown")
+    local message = tostring(detail or "unknown error")
+    warn("[BobonHub] Module Error: " .. label .. ": " .. message)
+    if not SessionAlive() then return false end
+    _G.BobonErrorRecovery.LastErrorAt = tick()
+    _G.BobonErrorRecovery.LastSource = label
+    _G.BobonErrorRecovery.LastDetail = message
+    -- Module errors are treated as kaitun faults. `fatal` is retained for diagnostics;
+    -- all genuine module errors use the same one-rejoin-then-hop policy requested by user.
+    return _G.BobonErrorRecovery:Rejoin(label, message)
+end
+
+pcall(function()
+    TeleportSvc.TeleportInitFailed:Connect(function(player, result, message)
+        local recovery = _G.BobonErrorRecovery
+        if player ~= LP or not SessionAlive() or not recovery or not recovery.AwaitingRejoin then return end
+        recovery:HopFallback(tostring(result) .. " • " .. tostring(message))
+    end)
+end)
 
 -- v19.0 BOOT-SAFE: the old build returned before UI/core when Remotes/CommF_
 -- had not replicated within 10 seconds. Show a full-screen bootstrap HUD immediately
@@ -2750,15 +2827,15 @@ do
 
         local TrackedItems = {
             {Label="Saber", Names={"Saber"}},
-            {Label="Pole V1", Names={"Pole (1st Form)","Pole V1"}},
+            {Label="Pole (1st Form)", Names={"Pole (1st Form)","Pole V1"}},
             {Label="Kabucha", Names={"Kabucha"}},
             {Label="Rengoku", Names={"Rengoku"}},
             {Label="Midnight Blade", Names={"Midnight Blade"}},
-            {Label="TTK", Names={"True Triple Katana"}},
+            {Label="True Triple Katana", Names={"True Triple Katana"}},
             {Label="Yama", Names={"Yama"}},
             {Label="Tushita", Names={"Tushita"}},
-            {Label="CDK", Names={"Cursed Dual Katana"}},
-            {Label="Soul Guitar", Names={"Skull Guitar","Soul Guitar"}},
+            {Label="Cursed Dual Katana", Names={"Cursed Dual Katana"}},
+            {Label="Skull Guitar", Names={"Skull Guitar","Soul Guitar"}},
             {Label="Godhuman", Names={"Godhuman"}},
             {Label="Mirror Fractal", Names={"Mirror Fractal"}},
             {Label="Valkyrie Helm", Names={"Valkyrie Helm"}},
@@ -3745,11 +3822,66 @@ local function QuestMatches(mobName)
     return nil
 end
 
--- [FIX-P3] Request quest tại giver với retry có giới hạn, không spam remote.
--- Trả về true = "đã xử lý (đừng farm)", false = "chưa tới giver".
+-- [FIX-P3 / v22.28.2] Try StartQuest remotely once before travelling to the giver.
+-- The server remains authoritative: if the remote request is rejected/no quest UI appears,
+-- return false immediately so normal TravelManager fallback goes to the quest NPC.
+-- Remote failure never consumes the normal giver retry budget and is throttled per quest.
 local function HandleQuestAtGiver(q, atGiver)
-    if not atGiver then return false end
     local now = tick()
+    if not atGiver then
+        local remoteKey = tostring(q.Q) .. ":" .. tostring(q.QL)
+        local retryAt = tonumber(_G.State.RemoteQuestRetryAt) or 0
+        if _G.State.RemoteQuestKey == remoteKey and now < retryAt then
+            return false
+        end
+        _G.State.RemoteQuestKey = remoteKey
+        _G.State.RemoteQuestRetryAt = now + 12
+        _G.BobonStatus = "Quest: Remote request " .. tostring(q.M)
+        DLog("QUEST", "Remote-first StartQuest " .. tostring(q.Q) .. " level " .. tostring(q.QL))
+
+        -- A visibly wrong quest can be abandoned from anywhere before the new request.
+        local remoteMatch = QuestMatches(q.M)
+        if HasQuest() == true and remoteMatch == false then
+            _G.State.ActiveQuestMob = nil
+            pcall(function() CommF_:InvokeServer("AbandonQuest") end)
+            task.wait(0.12)
+        end
+
+        pcall(function() CommF_:InvokeServer("StartQuest", q.Q, q.QL) end)
+        local remoteDeadline = tick() + 0.9
+        repeat
+            if HasQuest() == true and QuestMatches(q.M) ~= false then
+                _G.State.QuestRetries = 0
+                _G.State.LastQuestAccepted = tick()
+                _G.State.ActiveQuestMob = q.M
+                _G.State.RemoteQuestRetryAt = 0
+                _G.BobonStatus = "Quest: Accepted remotely " .. tostring(q.M)
+                DLog("QUEST", "Remote quest accepted: " .. tostring(q.M))
+                return true
+            end
+            task.wait(0.10)
+        until tick() >= remoteDeadline
+
+        -- Compatibility fallback for older/private server implementations.
+        pcall(function() CommF_:InvokeServer("RequestQuest", q.Q, q.QL) end)
+        remoteDeadline = tick() + 0.55
+        repeat
+            if HasQuest() == true and QuestMatches(q.M) ~= false then
+                _G.State.QuestRetries = 0
+                _G.State.LastQuestAccepted = tick()
+                _G.State.ActiveQuestMob = q.M
+                _G.State.RemoteQuestRetryAt = 0
+                _G.BobonStatus = "Quest: Accepted remotely " .. tostring(q.M)
+                DLog("QUEST", "Remote RequestQuest accepted: " .. tostring(q.M))
+                return true
+            end
+            task.wait(0.10)
+        until tick() >= remoteDeadline
+
+        _G.BobonStatus = "Quest: Remote rejected • going to NPC"
+        DLog("QUEST", "Remote quest rejected; fallback to giver " .. tostring(q.M))
+        return false
+    end
     if now - _G.State.LastQuestRequest < _G.Settings.QuestDelay then
         _G.BobonStatus = "Quest: Waiting for confirmation " .. q.M
         return true
@@ -10322,7 +10454,7 @@ function TravelManager:Request(targetCF, owner, options)
             end
         end, debug.traceback)
         if not threadOk then
-            warn("[BobonHub] Module Error: TravelManager: " .. tostring(threadErr))
+            _G.BobonReportError("TravelManager", threadErr, true)
             if self.CurrentToken == myToken then
                 self.LastExitOwner = owner
                 self.LastExitReason = "ThreadError"
@@ -11217,6 +11349,7 @@ function RecoveryManager:Handle(reason)
             if not IsAlive() then
                 _G.BobonStatus = "Recovery: Failed - no character"
                 _G.State.ConsecutiveFails = _G.State.ConsecutiveFails + 1
+                _G.BobonReportError("RecoveryNoCharacter", "character did not respawn after recovery timeout", true)
                 return true
             end
 
@@ -11233,7 +11366,7 @@ function RecoveryManager:Handle(reason)
             return false
         end, debug.traceback)
         if not success then
-            warn("[BobonHub] Module Error: RecoveryManager: " .. tostring(noChar))
+            _G.BobonReportError("RecoveryManager", noChar, true)
             noChar = nil
         end
 
@@ -13133,7 +13266,7 @@ function ItemProgression:CheckSaber()
         end, debug.traceback)
 
         if not ok then
-            warn("[BobonHub] Module Error: Saber: " .. tostring(err))
+            _G.BobonReportError("Saber", err, false)
             self.NextOptional.Saber = tick() + 2
         end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Saber" then
@@ -13186,7 +13319,7 @@ function ItemProgression:CheckPoleV1()
                 task.wait(0.12)
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: PoleV1: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("PoleV1", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "PoleV1" then
             TravelManager:Stop("PoleV1Complete")
         end
@@ -13274,7 +13407,7 @@ function ItemProgression:CheckSecondSea()
                 end
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Sea2: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("Sea2", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Sea2" then
             TravelManager:Stop("Sea2Complete")
         end
@@ -13502,7 +13635,7 @@ function ItemProgression:CheckBartilo()
         end, debug.traceback)
 
         if not ok then
-            warn("[BobonHub] Module Error: Bartilo: " .. tostring(err))
+            _G.BobonReportError("Bartilo", err, false)
             self.NextOptional.Bartilo = tick() + 2
         end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Bartilo" then
@@ -13726,7 +13859,7 @@ function ItemProgression:CheckThirdSea()
                 if traveled then _G.State.LastServerHop = os.time() end
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Sea3: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("Sea3", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Sea3" then
             TravelManager:Stop("Sea3Complete")
         end
@@ -13771,7 +13904,7 @@ local function StartOptionalAction(self, key, owner, status, body)
     _G.BobonStatus = status
     task.spawn(function()
         local ok, err = xpcall(function() body(token) end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: " .. owner .. ": " .. tostring(err)) end
+        if not ok then _G.BobonReportError(tostring(owner), err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == owner then
             TravelManager:Stop(owner .. "Complete")
         end
@@ -15271,7 +15404,7 @@ function BossManager:_RunBoss(boss, entry, token)
             task.wait(0.12)
         end
     end, debug.traceback)
-    if not ok then warn("[BobonHub] Module Error: Boss " .. tostring(err)) end
+    if not ok then _G.BobonReportError("Boss", err, false) end
     self:_Finish(token, ok and "complete" or "error")
 end
 
@@ -15356,7 +15489,7 @@ function FactoryController:_Run(core, token)
         InventoryCache.At = 0
         WeaponInventoryCache.At = 0
     end, debug.traceback)
-    if not ok then warn("[BobonHub] Module Error: FactoryController: " .. tostring(err)) end
+    if not ok then _G.BobonReportError("FactoryController", err, false) end
     self:_Finish(token, ok and "complete" or "error")
 end
 
@@ -15476,7 +15609,7 @@ function KatakuriController:StartAction(status, body)
     _G.BobonStatus = status
     task.spawn(function()
         local ok, err = xpcall(function() body(token) end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Katakuri: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("Katakuri", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Katakuri" then
             TravelManager:Stop("KatakuriComplete")
         end
@@ -16691,7 +16824,7 @@ function RaidController:_Run(token, demand)
             -- Never call Awakener here. Fragment farming must not spend its reward.
         end
     end, debug.traceback)
-    if not ok then warn("[BobonHub] Module Error: RaidController: " .. tostring(err)) end
+    if not ok then _G.BobonReportError("RaidController", err, false) end
     self:_Finish(token, ok and "complete" or "error")
 end
 
@@ -16956,7 +17089,7 @@ function _G.BobonFruitFinderTryRun()
             task.wait(0.2)
             pcall(function() FruitManager:StoreBackpackFruits() end)
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: FruitFinder: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("FruitFinder", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "FruitFinder" then
             TravelManager:Stop("FruitFinderComplete")
         end
@@ -17097,7 +17230,7 @@ function _G.BobonBerryTryRun()
                 task.wait(0.08)
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Berry: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("Berry", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Berry" then TravelManager:Stop("BerryComplete") end
         if not collected and bush then
             _G.BobonBerryState.Blocked[bush] = tick() + (tonumber(_G.Settings.BerryFailedRetry) or 90)
@@ -17146,7 +17279,7 @@ function _G.BobonCastleRaidTryRun()
                 task.wait(0.08)
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: CastleRaid: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("CastleRaid", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "CastleRaid" then TravelManager:Stop("CastleRaidComplete") end
         _G.State:ClearTargets(); CombatController:WatchTarget(nil,nil)
         if _G.State:IsActionValid(token) then _G.State:ReleaseAction(token) end
@@ -17248,7 +17381,7 @@ function _G.BobonPriorityPulse()
         state.PriorityDetail = tostring(blocking)
         state.WorkIntent = "PROGRESSION:" .. tostring(blocking)
         local ok, started = pcall(function() return ItemProgression:RunChecks(true, true) end)
-        if not ok then warn("[BobonHub] Module Error: PriorityHardGate: " .. tostring(started)) end
+        if not ok then _G.BobonReportError("PriorityHardGate", started, false) end
         if not started and state.ActiveActionToken == 0 then
             _G.BobonStatus = "Progression: " .. tostring(blocking) .. " • waiting/retry"
         end
@@ -17266,7 +17399,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady and (not questFarmProtected or _G.Settings.FruitFinderPreemptQuest == true) then ok, started = pcall(_G.BobonFruitFinderTryRun) end
-        if not ok then warn("[BobonHub] Module Error: PriorityFruitFinder: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityFruitFinder", started, false)
         elseif started then
             state.PriorityStage = "FRUIT_FINDER"
             state.PriorityDetail = tostring(_G.BobonStatus or "Fruit")
@@ -17278,7 +17411,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady then ok, started = pcall(_G.BobonBerryTryRun) end
-        if not ok then warn("[BobonHub] Module Error: PriorityBerry: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityBerry", started, false)
         elseif started then
             state.PriorityStage = "BERRY"
             state.PriorityDetail = "Collect"
@@ -17299,7 +17432,7 @@ function _G.BobonPriorityPulse()
             pcall(function() progress = tonumber(CommF_:InvokeServer("EliteHunter", "Progress")) or 0 end)
             if progress < 30 then
                 local ok, started = pcall(function() return ItemProgression:CheckYama() end)
-                if not ok then warn("[BobonHub] Module Error: PriorityEliteWake: " .. tostring(started))
+                if not ok then _G.BobonReportError("PriorityEliteWake", started, false)
                 elseif started then
                     state.PriorityStage = "ELITE_YAMA"
                     state.PriorityDetail = tostring(elite.Name) .. " • " .. tostring(progress) .. "/30"
@@ -17318,7 +17451,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady then ok, started = pcall(_G.BobonCastleRaidTryRun) end
-        if not ok then warn("[BobonHub] Module Error: PriorityCastleRaid: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityCastleRaid", started, false)
         elseif started then
             state.PriorityStage = "CASTLE_RAID"
             state.PriorityDetail = "Pirates"
@@ -17351,7 +17484,7 @@ function _G.BobonPriorityPulse()
     -- 2) A ready style door/quest/key is immediate progression.
     if optionalReady and FightingStyleUnlockController then
         local ok, started = pcall(function() return FightingStyleUnlockController:TryRun() end)
-        if not ok then warn("[BobonHub] Module Error: PriorityStyleUnlock: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityStyleUnlock", started, false)
         elseif started then
             state.PriorityStage = "MELEE_UNLOCK"
             state.PriorityDetail = tostring(_G.BobonStatus or "Melee")
@@ -17363,7 +17496,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady then ok, started = pcall(function() return BossManager:TryPriorityBoss() end) end
-        if not ok then warn("[BobonHub] Module Error: PriorityBoss: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityBoss", started, false)
         elseif started then
             state.PriorityStage = "REQUIRED_BOSS"
             state.PriorityDetail = tostring(_G.BobonStatus or "Boss")
@@ -17375,7 +17508,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady then ok, started = pcall(function() return FactoryController:TryRun() end) end
-        if not ok then warn("[BobonHub] Module Error: PriorityFactory: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityFactory", started, false)
         elseif started then
             state.PriorityStage = "FACTORY"
             state.PriorityDetail = "Core"
@@ -17389,7 +17522,7 @@ function _G.BobonPriorityPulse()
         and GetSea() == 3 and Level() >= (tonumber(_G.Settings.KatakuriMinLevel) or 1500)
         and not InventoryHas("Mirror Fractal") then
         local ok, started = pcall(function() return KatakuriController:TryRun() end)
-        if not ok then warn("[BobonHub] Module Error: PriorityEarlyDough: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityEarlyDough", started, false)
         elseif started then
             state.PriorityStage = "DOUGH_PREP"
             state.PriorityDetail = tostring(_G.BobonStatus or "Mirror Fractal")
@@ -17413,7 +17546,7 @@ function _G.BobonPriorityPulse()
     do
         local ok, started = true, false
         if optionalReady then ok, started = pcall(function() return ItemProgression:RunChecks(true, true) end) end
-        if not ok then warn("[BobonHub] Module Error: PriorityProgression: " .. tostring(started))
+        if not ok then _G.BobonReportError("PriorityProgression", started, false)
         elseif started then
             state.PriorityStage = "PROGRESSION"
             state.PriorityDetail = tostring(_G.BobonStatus or "Progression")
@@ -17481,7 +17614,7 @@ function RainbowHakiController:TryRun()
             end
             pcall(function() CommF_:InvokeServer("HornedMan", "Bet") end)
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: RainbowHaki: " .. tostring(err)) end
+        if not ok then _G.BobonReportError("RainbowHaki", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "RainbowHaki" then TravelManager:Stop("RainbowHakiComplete") end
         _G.State:ReleaseAction(token)
         if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
@@ -17514,7 +17647,7 @@ function IndraController:TryRun()
                     task.wait(0.12)
                 end
             end, debug.traceback)
-            if not ok then warn("[BobonHub] Module Error: IndraFight: "..tostring(err)) end
+            if not ok then _G.BobonReportError("IndraFight", err, false) end
             if _G.State.IsTraveling and _G.State.MovementOwner == "Indra" then TravelManager:Stop("IndraComplete") end
             _G.State:ReleaseAction(token)
             if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
@@ -17550,7 +17683,7 @@ function IndraController:TryRun()
                 end
             end
         end, debug.traceback)
-        if not ok then warn("[BobonHub] Module Error: Indra: "..tostring(err)) end
+        if not ok then _G.BobonReportError("Indra", err, false) end
         if _G.State.IsTraveling and _G.State.MovementOwner == "Indra" then TravelManager:Stop("IndraComplete") end
         _G.State:ReleaseAction(token)
         if _G.State.Mode == "Bossing" then _G.State:SetMode("Idle") end
@@ -17713,7 +17846,7 @@ task.spawn(function()
         task.wait(_G.Settings.PrioritySchedulerInterval or 0.20)
         local ok, started = pcall(_G.BobonPriorityPulse)
         if not ok then
-            warn("[BobonHub] Module Error: PriorityScheduler: " .. tostring(started))
+            _G.BobonReportError("PriorityScheduler", started, true)
             continue
         end
         if started or not _G.State:CanAct() then continue end
@@ -17722,7 +17855,7 @@ task.spawn(function()
         if Level() >= MAX_LEVEL then
             local okCompletion, completion = pcall(function() return CompletionSeaController:TryTravel() end)
             if not okCompletion then
-                warn("[BobonHub] Module Error: PriorityCompletionSea: " .. tostring(completion))
+                _G.BobonReportError("PriorityCompletionSea", completion, false)
             elseif completion then
                 _G.State.PriorityStage = "COMPLETION_SEA"
                 _G.State.PriorityDetail = tostring(_G.BobonStatus or "Completion")
@@ -17734,7 +17867,7 @@ task.spawn(function()
             if HasQuest() == false and _G.State.QuestClosedStable == true then
                 local okKata, kata = pcall(function() return KatakuriController:TryRun() end)
                 if not okKata then
-                    warn("[BobonHub] Module Error: PriorityKatakuri: " .. tostring(kata))
+                    _G.BobonReportError("PriorityKatakuri", kata, false)
                 elseif kata then
                     _G.State.PriorityStage = "KATAKURI"
                     _G.State.PriorityDetail = tostring(_G.BobonStatus or "Dough")
@@ -17742,7 +17875,7 @@ task.spawn(function()
                 end
                 local okBoss, boss = pcall(function() return BossManager:TryFightBoss() end)
                 if not okBoss then
-                    warn("[BobonHub] Module Error: PriorityEndgameBoss: " .. tostring(boss))
+                    _G.BobonReportError("PriorityEndgameBoss", boss, false)
                 elseif boss then
                     _G.State.PriorityStage = "ENDGAME_BOSS"
                     _G.State.PriorityDetail = tostring(_G.BobonStatus or "Boss")
@@ -17753,7 +17886,10 @@ task.spawn(function()
     end
 end)
 
-local HopManager = { LastHop = 0, Visited = {} }
+local HopManager = {
+    LastHop = 0, Visited = {}, AwaitingTeleport = false,
+    RetryScheduled = false, RetryReason = nil,
+}
 local function FindDroppedFruit()
     for _, obj in ipairs(workspace:GetChildren()) do
         if obj:IsA("Tool") and string.find(string.lower(obj.Name), "fruit", 1, true) then return obj end
@@ -17782,6 +17918,8 @@ local function MiragePresent()
     return false
 end
 function HopManager:FindServer()
+    -- Roblox server API is sorted ascending by population, so the first usable row
+    -- is already the lowest-population server visible to this request.
     local cursor=""
     for _=1,4 do
         local url=("https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100%s"):format(game.PlaceId,
@@ -17802,17 +17940,56 @@ function HopManager:FindServer()
         if cursor=="" then break end
     end
 end
-function HopManager:Request(reason)
-    if tick()-self.LastHop < (_G.Settings.HopRequestCooldown or 25) then return false end
+function HopManager:ScheduleFailureRetry(detail)
+    -- IMPORTANT: retry only after an actual teleport failure. Never loop merely because
+    -- Hop Player Near is enabled or because the destination server has other players.
+    if self.RetryScheduled or not SessionAlive() then return false end
+    self.RetryScheduled = true
+    self.AwaitingTeleport = false
+    _G.BobonStatus = "Server Hop failed • retrying another low-player server"
+    DLog("HOP", "Teleport failed: " .. tostring(detail))
+    task.delay(1.25, function()
+        if not SessionAlive() then return end
+        self.RetryScheduled = false
+        self.LastHop = 0 -- failure retry intentionally bypasses normal hop cooldown
+        self:Request(self.RetryReason or "teleport-failed", true)
+    end)
+    return true
+end
+function HopManager:Request(reason, failureRetry)
+    if self.AwaitingTeleport and not failureRetry then return false end
+    if not failureRetry and tick()-self.LastHop < (_G.Settings.HopRequestCooldown or 25) then return false end
     self.LastHop=tick()
-    local id=self:FindServer(); if not id then return false end
+    self.RetryReason=tostring(reason or "server-hop")
+    local id=self:FindServer()
+    if not id then
+        self.AwaitingTeleport=false
+        if failureRetry then
+            return self:ScheduleFailureRetry("no-low-player-server-found")
+        end
+        return false
+    end
     _G.BobonStatus="Server Hop: "..tostring(reason)
     _G.State:SetMode("ServerHop")
     pcall(function() TravelManager:Stop("ServerHop") end)
-    local ok=pcall(function() TeleportSvc:TeleportToPlaceInstance(game.PlaceId,id,LP) end)
-    if not ok then _G.State:SetMode("Idle") end
-    return ok
+    self.AwaitingTeleport=true
+    local ok, err=pcall(function() TeleportSvc:TeleportToPlaceInstance(game.PlaceId,id,LP) end)
+    if not ok then
+        self.AwaitingTeleport=false
+        self:ScheduleFailureRetry(err)
+        return false
+    end
+    return true
 end
+
+-- TeleportToPlaceInstance may return successfully and fail asynchronously afterwards
+-- (e.g. destination became full). Only that concrete error schedules another hop.
+pcall(function()
+    TeleportSvc.TeleportInitFailed:Connect(function(player, result, message)
+        if player ~= LP or not SessionAlive() or not HopManager.AwaitingTeleport then return end
+        HopManager:ScheduleFailureRetry(tostring(result) .. " • " .. tostring(message))
+    end)
+end)
 function HopManager:ShouldHop()
     if _G.BobonFarmStuckHopRequested and _G.State.ActiveActionToken == 0
         and _G.State.Mode ~= "Dead" and _G.State.Mode ~= "Respawning"
@@ -18728,7 +18905,7 @@ task.spawn(function()
                 and _G.State.MovementOwner == "Farm" then
                 TravelManager:Stop("MainControllerError")
             end
-            warn("[BobonHub] Module Error: MainController: " .. tostring(mainErr))
+            _G.BobonReportError("MainController", mainErr, true)
         end
     end
 end)
