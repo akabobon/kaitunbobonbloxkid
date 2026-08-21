@@ -34,7 +34,7 @@ local Net = Modules and require(Modules:WaitForChild("Net")) or nil
 local CombatUtil = Modules and require(Modules:WaitForChild("CombatUtil")) or nil
 
 local Runtime = {
-    Version = "readable-rebuild-1.1-clean",
+    Version = "readable-rebuild-1.2-runtime-fixes",
     StartedAt = os.clock(),
     CurrentAction = "Idle",
     CurrentTarget = nil,
@@ -46,6 +46,13 @@ local Runtime = {
     FeatureStatus = {},
     Tween = nil,
     TweenTarget = nil,
+    BoatTween = nil,
+    BoatTweenTarget = nil,
+    BoatMode = false,
+    PriorityTask = nil,
+    PriorityReason = nil,
+    InventoryCache = nil,
+    InventoryCacheAt = 0,
     Stopped = false,
 }
 
@@ -164,11 +171,41 @@ local DEFAULTS = {
     ["ESP Player"] = false,
     ["ESP Island"] = false,
     ["Debug Runtime"] = false,
+    ["Auto Fully Fighting Style"] = false,
+    ["Auto Stats Melee Percent"] = 70,
+    ["Auto Stats Defense Percent"] = 30,
+    ["Sea Search Speed"] = 350,
+    ["Sea Search Step"] = 6500,
+    ["Boat Search Altitude"] = 160,
+    ["Priority Tasks Preempt Farm"] = true,
 }
 
 for key, value in pairs(DEFAULTS) do
     if Settings[key] == nil then
         Settings[key] = value
+    end
+end
+
+-- Accept the older Banana/Kaitun nested config shape without forcing users to
+-- duplicate the same switch at top level.
+do
+    local oneclick = Settings["Oneclick"]
+    if type(oneclick) == "table" then
+        if oneclick["Auto Fully Fighting Style"] ~= nil and Settings["Auto Fully Fighting Style"] == false then
+            Settings["Auto Fully Fighting Style"] = oneclick["Auto Fully Fighting Style"]
+        end
+        if oneclick["Saber"] ~= nil and Settings["Auto Saber"] == false then
+            Settings["Auto Saber"] = oneclick["Saber"]
+        end
+        if oneclick["Skull Guitar"] ~= nil and Settings["Auto Soul Guitar"] == false then
+            Settings["Auto Soul Guitar"] = oneclick["Skull Guitar"]
+        end
+        if oneclick["Cursed Dual Katana"] ~= nil and Settings["Auto CDK"] == false then
+            Settings["Auto CDK"] = oneclick["Cursed Dual Katana"]
+        end
+        if oneclick["Get Ghoul"] ~= nil and Settings["Auto Get Ghoul"] == false then
+            Settings["Auto Get Ghoul"] = oneclick["Get Ghoul"]
+        end
     end
 end
 
@@ -406,24 +443,31 @@ local function turnOnBuso()
 end
 
 local function turnOnObservation()
-    return safeCall("Observation", function()
+    -- Source-proven behavior: Banana checks Lighting.Blur.Enabled before
+    -- pressing E. Pressing E blindly every interval toggles Observation back
+    -- off, so never send the key while the observation blur is already active.
+    local blur = game:GetService("Lighting"):FindFirstChild("Blur")
+    if blur and blur.Enabled then
+        Runtime.FeatureStatus.Observation = "Active"
+        return true
+    end
+    local ok = safeCall("Observation", function()
         VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+        task.wait()
         VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
     end)
+    if ok then Runtime.FeatureStatus.Observation = "Activation requested" end
+    return ok
 end
 
 local function turnOnRaceV3()
-    return safeCall("RaceV3", function()
-        local character = LocalPlayer.Character
-        if not character then return end
-        local raceAbility = character:FindFirstChild("RaceAbility")
-        if raceAbility then
-            raceAbility:FireServer()
-            return
-        end
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.T, false, game)
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.T, false, game)
-    end)
+    -- Source-proven route from the decompile: Remotes.CommE("ActivateAbility").
+    local commE = Remotes:FindFirstChild("CommE")
+    if commE and commE:IsA("RemoteEvent") then
+        return safeRemoteFire("RaceV3.ActivateAbility", commE, "ActivateAbility")
+    end
+    Runtime.FeatureStatus.RaceV3 = "CommE unavailable"
+    return false
 end
 
 local function turnOnRaceV4()
@@ -964,7 +1008,12 @@ end
 -- 7. INVENTORY / FRUIT
 -- ============================================================================
 
-local function readInventory()
+local function readInventory(force)
+    local now = os.clock()
+    if not force and type(Runtime.InventoryCache) == "table" and now - Runtime.InventoryCacheAt < 1 then
+        return Runtime.InventoryCache
+    end
+
     local result = {}
     local inventory = safeInvoke("getInventory")
     if type(inventory) == "table" then
@@ -973,6 +1022,10 @@ local function readInventory()
                 result[#result + 1] = item
             end
         end
+        Runtime.InventoryCache = result
+        Runtime.InventoryCacheAt = now
+    elseif type(Runtime.InventoryCache) == "table" then
+        return Runtime.InventoryCache
     end
     return result
 end
@@ -1018,6 +1071,7 @@ end
 
 function RandomFruit()
     local result = safeInvoke("Cousin", "Buy")
+    if result ~= nil then Runtime.InventoryCacheAt = 0 end
     return result
 end
 
@@ -1037,6 +1091,7 @@ function StoreFruit()
                     ignored.Name = "Ignored"
                     ignored.Parent = tool
                     stored += 1
+                    Runtime.InventoryCacheAt = 0
                     task.wait(0.5)
                 end
             end
@@ -1756,24 +1811,222 @@ end
 -- 11. BOAT / SEA EVENTS / LEVIATHAN
 -- ============================================================================
 
+local buyBoat
+
+local function boatOwnerMatches(boat)
+    local owner = boat:GetAttribute("Owner") or boat:GetAttribute("OwnerName")
+    if owner == LocalPlayer.Name or owner == LocalPlayer.UserId or tostring(owner) == tostring(LocalPlayer.UserId) then
+        return true
+    end
+
+    local ownerValue = boat:FindFirstChild("Owner")
+    if ownerValue then
+        if ownerValue:IsA("ObjectValue") and ownerValue.Value == LocalPlayer then
+            return true
+        end
+        if ownerValue:IsA("StringValue") and ownerValue.Value == LocalPlayer.Name then
+            return true
+        end
+        if ownerValue:IsA("IntValue") and ownerValue.Value == LocalPlayer.UserId then
+            return true
+        end
+    end
+    return false
+end
+
 local function findBoat()
     local boats = Workspace:FindFirstChild("Boats")
     if not boats then return nil end
+
+    local _, _, playerRoot = getCharacter()
+    local nearest, nearestDistance = nil, math.huge
     for _, boat in ipairs(boats:GetChildren()) do
-        local owner = boat:GetAttribute("Owner") or boat:GetAttribute("OwnerName")
-        if owner == LocalPlayer.Name or owner == LocalPlayer.UserId then
-            return boat
-        end
         local seat = boat:FindFirstChildWhichIsA("VehicleSeat", true)
-        if seat and seat.Occupant and seat.Occupant.Parent == LocalPlayer.Character then
-            return boat
+        if seat then
+            if seat.Occupant and seat.Occupant.Parent == LocalPlayer.Character then
+                return boat
+            end
+            if boatOwnerMatches(boat) then
+                local distance = playerRoot and (seat.Position - playerRoot.Position).Magnitude or 0
+                if distance < nearestDistance then
+                    nearest, nearestDistance = boat, distance
+                end
+            end
         end
     end
-    return nil
+    return nearest
 end
 
+local function cancelBoatTween()
+    local tween = Runtime.BoatTween
+    if tween then
+        tryCall(function() tween:Pause() end)
+        tryCall(function() tween:Cancel() end)
+        tryCall(function() tween:Destroy() end)
+    end
+    Runtime.BoatTween = nil
+    Runtime.BoatTweenTarget = nil
+    getgenv().TweenBoat = nil
+end
 
-local function buyBoat(name)
+local function noclipBoat(boat)
+    if not boat then return end
+    for _, descendant in ipairs(boat:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            descendant.CanCollide = false
+        end
+    end
+end
+
+local function ensureSeatedInBoat(boat)
+    local character, humanoid, root = getCharacter()
+    local seat = boat and boat:FindFirstChildWhichIsA("VehicleSeat", true)
+    if not character or not humanoid or not root or not seat then
+        return false, seat
+    end
+    if seat.Occupant == humanoid or humanoid.SeatPart == seat then
+        Runtime.BoatMode = true
+        return true, seat
+    end
+
+    Runtime.BoatMode = false
+    if (root.Position - seat.Position).Magnitude > 8 then
+        setAction("Board Boat", boat.Name)
+        toTarget(seat.CFrame * CFrame.new(0, 3, 0))
+        return false, seat
+    end
+
+    cancelTween()
+    safeCall("Boat.Sit", function()
+        root.CFrame = seat.CFrame * CFrame.new(0, 2, 0)
+        seat:Sit(humanoid)
+    end)
+    task.wait(0.1)
+    Runtime.BoatMode = humanoid.SeatPart == seat or seat.Occupant == humanoid
+    return Runtime.BoatMode, seat
+end
+
+local function tweenBoatTo(boat, targetCFrame, speed)
+    if not boat or typeof(targetCFrame) ~= "CFrame" then return false end
+    local seated, seat = ensureSeatedInBoat(boat)
+    if not seated or not seat then return false end
+
+    noclipBoat(boat)
+    local bodyVelocity = seat:FindFirstChildOfClass("BodyVelocity")
+    if bodyVelocity then
+        bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    end
+
+    local distance = (seat.Position - targetCFrame.Position).Magnitude
+    if distance <= 20 then
+        cancelBoatTween()
+        seat.CFrame = targetCFrame
+        return true
+    end
+
+    local maxStep = math.max(500, tonumber(Settings["Sea Search Step"]) or 6500)
+    if distance > maxStep then
+        local direction = (targetCFrame.Position - seat.Position).Unit
+        local nextPosition = seat.Position + direction * maxStep
+        targetCFrame = CFrame.lookAt(nextPosition, nextPosition + direction)
+        distance = maxStep
+    end
+
+    if Runtime.BoatTweenTarget
+        and (Runtime.BoatTweenTarget.Position - targetCFrame.Position).Magnitude < 25
+        and Runtime.BoatTween
+    then
+        return true
+    end
+
+    cancelBoatTween()
+    local boatSpeed = math.max(50, tonumber(speed) or tonumber(Settings["Sea Search Speed"]) or 350)
+    local tween = TweenService:Create(
+        seat,
+        TweenInfo.new(math.max(distance / boatSpeed, 0.05), Enum.EasingStyle.Linear, Enum.EasingDirection.Out),
+        {CFrame = targetCFrame}
+    )
+    Runtime.BoatTween = tween
+    Runtime.BoatTweenTarget = targetCFrame
+    getgenv().TweenBoat = tween
+    tween.Completed:Connect(function()
+        if Runtime.BoatTween == tween then
+            Runtime.BoatTween = nil
+            Runtime.BoatTweenTarget = nil
+            getgenv().TweenBoat = nil
+        end
+    end)
+    tween:Play()
+    return true
+end
+
+local function seaDangerLevel()
+    local main = LocalPlayer.PlayerGui:FindFirstChild("Main")
+    local compass = main and main:FindFirstChild("Compass")
+    local frame = compass and compass:FindFirstChild("Frame")
+    local danger = frame and frame:FindFirstChild("DangerLevel")
+    if not danger or not danger.Visible then return 0 end
+    local label = danger:FindFirstChildWhichIsA("TextLabel", true)
+    return tonumber(label and label.Text) or 0
+end
+
+local SEA_SEARCH_FAR = CFrame.new(-118834.515625, 160, -78.9505844116211) * CFrame.new(0, 0, 99999999)
+local SEA_SEARCH_HOME = CFrame.new(-32975.9921875, 160, 25963.7109375)
+
+local function seaSearchTarget(boat)
+    local seat = boat and boat:FindFirstChildWhichIsA("VehicleSeat", true)
+    if not seat then return nil end
+
+    local altitude = tonumber(Settings["Boat Search Altitude"]) or 160
+    if seaDangerLevel() >= 1 then
+        altitude = math.max(altitude, 500)
+    end
+
+    local far = CFrame.new(SEA_SEARCH_FAR.Position.X, altitude, SEA_SEARCH_FAR.Position.Z)
+    local home = CFrame.new(SEA_SEARCH_HOME.Position.X, altitude, SEA_SEARCH_HOME.Position.Z)
+    if Settings["Will Back When over 10km"] and (seat.Position - home.Position).Magnitude >= 10000 then
+        Runtime.SeaReturning = true
+    elseif Runtime.SeaReturning and (seat.Position - home.Position).Magnitude <= 4800 then
+        Runtime.SeaReturning = false
+    end
+    return Runtime.SeaReturning and home or far
+end
+
+local function sailForSeaEvent(label)
+    local boat = findBoat()
+    if not boat then
+        Runtime.FeatureStatus.SeaSearch = "Buying boat"
+        buyBoat(Settings["Auto Buy Boat Beast Hunter"] and "Beast Hunter" or Settings["Select Boat"] or "PirateBrigade")
+        return false
+    end
+
+    local seated = ensureSeatedInBoat(boat)
+    if not seated then
+        Runtime.FeatureStatus.SeaSearch = "Boarding " .. boat.Name
+        return false
+    end
+
+    local target = seaSearchTarget(boat)
+    if target then
+        setAction(label or "Sea Search", "Sailing")
+        Runtime.FeatureStatus.SeaSearch = "Sailing / danger " .. tostring(seaDangerLevel())
+        return tweenBoatTo(boat, target, Settings["Sea Search Speed"])
+    end
+    return false
+end
+
+local function leaveBoatForCombat()
+    cancelBoatTween()
+    Runtime.BoatMode = false
+    local _, humanoid = getCharacter()
+    if humanoid and humanoid.Sit then
+        humanoid.Sit = false
+        humanoid.Jump = true
+        task.wait()
+    end
+end
+
+buyBoat = function(name)
     return safeInvoke("BuyBoat", name or Settings["Select Boat"] or "PirateBrigade")
 end
 
@@ -1816,9 +2069,13 @@ end
 function AutoSeabeast()
     local target = DetectSeaEvents()
     if not target then
+        if Settings["Tween Until Have Sea Event"] ~= false then
+            return sailForSeaEvent("Sea Event Search")
+        end
         return false
     end
 
+    leaveBoatForCombat()
     setAction("Sea Event", target.Name)
     local aim = aimAtModel(target, 30)
     if aim then
@@ -1869,31 +2126,38 @@ end
 function AutoFindLeviathan()
     local frozen = findFrozenDimension()
     if frozen then
+        cancelBoatTween()
+        Runtime.BoatMode = false
         setAction("Leviathan", "Frozen Dimension")
+        Runtime.FeatureStatus.Leviathan = "Frozen Dimension found"
         local pivot
         if frozen:IsA("Model") then pivot = frozen:GetPivot() end
         if frozen:IsA("BasePart") then pivot = frozen.CFrame end
-        if pivot then toTarget(pivot * CFrame.new(0, 50, 0)) end
+        if pivot then
+            leaveBoatForCombat()
+            toTarget(pivot * CFrame.new(0, 50, 0))
+        end
         return true
     end
 
-    local boat = findBoat()
-    if not boat then
-        buyBoat(Settings["Auto Buy Boat Beast Hunter"] and "Beast Hunter" or "PirateBrigade")
-    end
-    return false
+    Runtime.FeatureStatus.Leviathan = "Searching"
+    return sailForSeaEvent("Find Leviathan")
 end
 
 function AutoAttackLeviathan()
     local seaBeasts = Workspace:FindFirstChild("SeaBeasts")
     local leviathan = seaBeasts and DetectLeviathan(seaBeasts, Settings["Attack Multi Segments Leviathan"])
     if not leviathan then
+        Runtime.FeatureStatus.LeviathanAttack = "Waiting for Leviathan segment"
         return false
     end
 
+    leaveBoatForCombat()
     setAction("Attack Leviathan", leviathan.Name)
+    Runtime.FeatureStatus.LeviathanAttack = "Attacking " .. leviathan.Name
     local targetPart = leviathan:FindFirstChild("HumanoidRootPart") or leviathan.PrimaryPart
     if targetPart then
+        getgenv().AimPos = targetPart.CFrame
         toTarget(targetPart.CFrame * CFrame.new(0, 40, 0))
     end
 
@@ -1901,7 +2165,7 @@ function AutoAttackLeviathan()
         useFruitM1(leviathan)
     else
         UsedualFlock()
-        AttackFunction(100, false)
+        AttackFunction(120, false)
     end
     return true
 end
@@ -1910,16 +2174,31 @@ end
 -- 12. RACE V2 / V3 / V4
 -- ============================================================================
 
-function CheckRace()
-    local wenlock = safeInvoke("Wenlocktoad", "1")
-    local alchemist = safeInvoke("Alchemist", "1")
-    local character = LocalPlayer.Character
-    if character and character:FindFirstChild("RaceTransformed") then
-        return "V4"
+function CheckRace(force)
+    local now = os.clock()
+    if not force and Runtime.RaceStageCache and (now - (Runtime.RaceStageCacheAt or 0)) < 3 then
+        return Runtime.RaceStageCache
     end
-    if wenlock == -2 then return "V3" end
-    if alchemist == -2 then return "V2" end
-    return "V1"
+
+    local character = LocalPlayer.Character
+    local stage
+    if character and character:FindFirstChild("RaceTransformed") then
+        stage = "V4"
+    else
+        local wenlock = safeInvoke("Wenlocktoad", "1")
+        local alchemist = safeInvoke("Alchemist", "1")
+        if wenlock == -2 then
+            stage = "V3"
+        elseif alchemist == -2 then
+            stage = "V2"
+        else
+            stage = "V1"
+        end
+    end
+
+    Runtime.RaceStageCache = stage
+    Runtime.RaceStageCacheAt = now
+    return stage
 end
 
 local function findRaceFlowers()
@@ -1939,6 +2218,7 @@ function UpgradeRaceV2AndV3()
         local status = safeInvoke("Alchemist", "1")
         if status == 0 then
             safeInvoke("Alchemist", "2")
+            Runtime.RaceStageCacheAt = 0
             return
         end
 
@@ -1957,6 +2237,7 @@ function UpgradeRaceV2AndV3()
             return
         end
         safeInvoke("Alchemist", "3")
+        Runtime.RaceStageCacheAt = 0
         return
     end
 
@@ -1964,6 +2245,7 @@ function UpgradeRaceV2AndV3()
         local response = safeInvoke("Wenlocktoad", "1")
         if response == 0 then
             safeInvoke("Wenlocktoad", "2")
+            Runtime.RaceStageCacheAt = 0
         elseif response == 1 then
             -- Race-specific V3 quests are exposed through Wenlocktoad and the
             -- current quest UI. Keep normal farming active while the quest is live.
@@ -2564,16 +2846,18 @@ end
 function AutoFindPrehistoric()
     local island = DetectPrehistoricIsland()
     if island then
+        cancelBoatTween()
+        Runtime.BoatMode = false
         setAction("Prehistoric", "Island")
+        Runtime.FeatureStatus.Prehistoric = "Island found"
         local cframe = island:IsA("Model") and island:GetPivot() or island.CFrame
+        leaveBoatForCombat()
         toTarget(cframe * CFrame.new(0, 60, 0))
         return true
     end
 
-    if not findBoat() then
-        buyBoat("PirateBrigade")
-    end
-    return false
+    Runtime.FeatureStatus.Prehistoric = "Searching by boat"
+    return sailForSeaEvent("Find Prehistoric")
 end
 
 function DetectDragonEggs()
@@ -3220,19 +3504,21 @@ end
 function AutoSpawnKitsune()
     local island = DetectIslandKitsune()
     if island then
+        cancelBoatTween()
+        Runtime.BoatMode = false
+        Runtime.FeatureStatus.Kitsune = "Island found"
         local pivot = island:IsA("Model") and island:GetPivot() or island.CFrame
+        leaveBoatForCombat()
         toTarget(pivot * CFrame.new(0, 40, 0))
         return true
     end
 
-    local boat = findBoat()
-    if not boat then
-        buyBoat(Settings["Select Boat"] or "PirateBrigade")
-    end
-    if Settings["Hop Server Kitsune Island"] then
+    Runtime.FeatureStatus.Kitsune = "Searching by boat"
+    local sailing = sailForSeaEvent("Find Kitsune")
+    if not sailing and Settings["Hop Server Kitsune Island"] and not findBoat() then
         HopServer()
     end
-    return false
+    return sailing
 end
 
 -- --------------------------------------------------------------------------
@@ -3247,14 +3533,22 @@ end
 function AutoFindMirage()
     local island = findMirage()
     if island then
+        cancelBoatTween()
+        Runtime.BoatMode = false
+        Runtime.FeatureStatus.Mirage = "Island found"
         local pivot = island:GetPivot()
+        leaveBoatForCombat()
         toTarget(pivot * CFrame.new(0, 100, 0))
-        if Settings["Webhook Find Mirage"] then
+        if Settings["Webhook Find Mirage"] and not Runtime.MirageWebhookSent then
+            Runtime.MirageWebhookSent = true
             sendWebhook("Mirage found", "Mystic Island spawned in " .. game.JobId)
         end
         return true
     end
-    return false
+
+    Runtime.MirageWebhookSent = nil
+    Runtime.FeatureStatus.Mirage = "Searching by boat"
+    return sailForSeaEvent("Find Mirage")
 end
 
 -- --------------------------------------------------------------------------
@@ -3709,11 +4003,6 @@ function AutoStats()
     local sword = getStatLevel("Sword")
     local gun = getStatLevel("Gun")
 
-    local priority = Settings["Auto Stats Priority"]
-    if type(priority) ~= "table" then
-        priority = {"Melee", "Defense"}
-    end
-
     local current = {
         ["Melee"] = melee,
         ["Defense"] = defense,
@@ -3722,15 +4011,53 @@ function AutoStats()
         ["Gun"] = gun,
     }
 
-    for _, statName in ipairs(priority) do
-        local value = current[statName] or 0
-        if value < statCap and points > 0 then
-            local add = math.min(batch, statCap - value, points)
-            if add > 0 then
-                safeInvoke("AddPoint", statName, add)
-                return true
+    -- Explicit priority remains supported for custom builds. When omitted,
+    -- preserve the kaitun's intended 70/30 Melee/Defense distribution instead
+    -- of filling Melee to cap before Defense receives any points.
+    local priority = Settings["Auto Stats Priority"]
+    if type(priority) == "table" and #priority > 0 then
+        for _, statName in ipairs(priority) do
+            local value = current[statName] or 0
+            if value < statCap and points > 0 then
+                local add = math.min(batch, statCap - value, points)
+                if add > 0 then
+                    safeInvoke("AddPoint", statName, add)
+                    return true
+                end
             end
         end
+        return false
+    end
+
+    local meleePercent = math.clamp(tonumber(Settings["Auto Stats Melee Percent"]) or 70, 0, 100)
+    local defensePercent = math.clamp(tonumber(Settings["Auto Stats Defense Percent"]) or 30, 0, 100)
+    local weightTotal = meleePercent + defensePercent
+    if weightTotal <= 0 then
+        meleePercent, defensePercent, weightTotal = 70, 30, 100
+    end
+
+    local combined = melee + defense
+    local desiredMelee = (combined + points) * (meleePercent / weightTotal)
+    local desiredDefense = (combined + points) * (defensePercent / weightTotal)
+    local meleeDeficit = desiredMelee - melee
+    local defenseDeficit = desiredDefense - defense
+
+    local statName
+    if melee >= statCap then
+        statName = "Defense"
+    elseif defense >= statCap then
+        statName = "Melee"
+    elseif meleeDeficit >= defenseDeficit then
+        statName = "Melee"
+    else
+        statName = "Defense"
+    end
+
+    local value = current[statName] or 0
+    local add = math.min(batch, statCap - value, points)
+    if add > 0 then
+        safeInvoke("AddPoint", statName, add)
+        return true
     end
     return false
 end
@@ -4150,22 +4477,118 @@ end
 -- 16. FEATURE SCHEDULER
 -- ============================================================================
 
+-- Active-task arbitration. Banana's original root CFG serialized many of
+-- these actions; running every reconstructed loop concurrently causes movement
+-- races (farm tween fighting Saber/Raid/Sea/quest tweens). Keep passive helpers
+-- concurrent, but pause level farm while a higher-priority active task is
+-- actually requested and unfinished.
+local function currentRaceName()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local race = data and data:FindFirstChild("Race")
+    return race and tostring(race.Value) or ""
+end
+
+local function determinePriorityTask()
+    if Settings["Priority Tasks Preempt Farm"] == false then
+        return nil, nil
+    end
+
+    if Settings["Auto Sea Event"] or Settings["Auto Find Leviathan"] or Settings["Auto Attack Leviathan"] then
+        return "Sea", "Sea event / Leviathan"
+    end
+    if Settings["Auto Find Prehistoric Island"] or Settings["Fully Event Prehistoric Island"] then
+        return "Prehistoric", "Prehistoric event"
+    end
+    if Settings["Auto Spawn Kitsune Island"] or Settings["Auto Find Mirage"] then
+        return "SeaSearch", "Kitsune / Mirage search"
+    end
+    if Settings["Auto Raid"] or Settings["Auto Multi Raid"] or Settings["Auto Attack Dungeon"] or Settings["Auto Join Dungeon"] then
+        return "Raid", "Raid / Dungeon"
+    end
+
+    local level = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level")
+    level = level and tonumber(level.Value) or 0
+
+    if Settings["Auto Saber"] and level >= 200 and not CheckItemInventory("Saber") then
+        return "Saber", "Saber progression"
+    end
+    if Settings["Auto Yama"] and not CheckItemInventory("Yama") then
+        return "Yama", "Yama progression"
+    end
+    if Settings["Auto Tushita"] and not CheckItemInventory("Tushita") then
+        return "Tushita", "Tushita progression"
+    end
+    if Settings["Auto CDK"] and not CheckItemInventory("Cursed Dual Katana") then
+        return "CDK", "CDK progression"
+    end
+    if Settings["Auto Soul Guitar"] and not CheckItemInventory("Soul Guitar") then
+        return "SoulGuitar", "Soul Guitar progression"
+    end
+    if Settings["Auto Craft Item Shark Anchor"] and not CheckItemInventory("Shark Anchor") then
+        return "SharkAnchor", "Shark Anchor progression"
+    end
+
+    if Settings["Auto Get Cyborg"] and currentRaceName() ~= "Cyborg" then
+        return "Cyborg", "Cyborg progression"
+    end
+    if Settings["Auto Get Ghoul"] and currentRaceName() ~= "Ghoul" then
+        return "Ghoul", "Ghoul progression"
+    end
+    if Settings["Auto New World"] and getSea() == 1 and level >= 700 then
+        return "NewWorld", "Second Sea progression"
+    end
+    if Settings["Auto Third World"] and getSea() == 2 and level >= 1500 then
+        return "ThirdWorld", "Third Sea progression"
+    end
+    -- V2 flower progression owns its own movement and may safely preempt farm.
+    -- The race-specific V3 kill objectives are not fully recoverable from the
+    -- damaged root CFG, so do not freeze level farm indefinitely at V2.
+    if Settings["Auto Upgrade Race V2-V3"] and CheckRace() == "V1" then
+        return "RaceV2", "Race V2 flower progression"
+    end
+    if Settings["Auto Pull Lever"] or Settings["Auto Trial"] then
+        return "RaceV4", "Race V4 progression"
+    end
+    if Settings["Auto Upgrade Race V2-V3 Draco"]
+        or Settings["Auto Quest Dragon Hunter"]
+        or Settings["Auto Crafting Volcanic Magnet"]
+    then
+        return "Draco", "Draco / Dragon progression"
+    end
+
+    return nil, nil
+end
+
+runLoop("PriorityScan", 0.5, function()
+    return Settings["Priority Tasks Preempt Farm"] ~= false
+end, function()
+    local taskName, reason = determinePriorityTask()
+    Runtime.PriorityTask = taskName
+    Runtime.PriorityReason = reason
+end)
+
 -- Optional test telemetry. Enable ["Debug Runtime"] to make the next F9
 -- recording identify exactly which state the farm loop is stuck in.
 runLoop("RuntimeDebug", 5, function()
     return Settings["Debug Runtime"] == true
 end, function()
-    warn(("[BananaRebuild/State] action=%s | target=%s | quest=%s | farm=%s"):format(
+    warn(("[BananaRebuild/State] action=%s | target=%s | quest=%s | farm=%s | priority=%s"):format(
         tostring(Runtime.CurrentAction),
         tostring(Runtime.CurrentTarget),
         tostring(GetNameDoubleQuest()),
-        tostring(Runtime.FeatureStatus.Farm)
+        tostring(Runtime.FeatureStatus.Farm),
+        tostring(Runtime.PriorityTask or "none")
     ))
 end)
 
 
 runLoop("Farm", 0.05, function()
-    return Settings["Start Farm"] == true
+    if Settings["Start Farm"] ~= true then return false end
+    if Settings["Priority Tasks Preempt Farm"] ~= false and Runtime.PriorityTask then
+        Runtime.FeatureStatus.Farm = "Paused by " .. tostring(Runtime.PriorityReason or Runtime.PriorityTask)
+        return false
+    end
+    return true
 end, FarmMethod)
 
 runLoop("RandomFruit", 10, function()
@@ -4351,7 +4774,8 @@ runLoop("AutoStats", 0.25, function()
 end, AutoStats)
 
 runLoop("BasicProgression", 2, function()
-    return Settings["Auto Farm Mastery 600 Melees"] == true
+    return Settings["Auto Fully Fighting Style"] == true
+        or Settings["Auto Farm Mastery 600 Melees"] == true
 end, AutoBuyBasicProgression)
 
 runLoop("MeleeMastery", 0.15, function()
@@ -4457,9 +4881,16 @@ Runtime.FarmMastery = FarmMastery
 Runtime.DetectMobAura = DetectMobAura
 Runtime.HopServer = HopServer
 Runtime.SendWebhook = sendWebhook
+Runtime.FindBoat = findBoat
+Runtime.SailSea = sailForSeaEvent
+Runtime.CancelBoatTween = cancelBoatTween
 Runtime.Stop = function()
     Runtime.Stopped = true
     cancelTween()
+    cancelBoatTween()
+    Runtime.BoatMode = nil
+    Runtime.PriorityTask = nil
+    Runtime.PriorityReason = nil
     setCharacterNoclip(false)
 end
 
