@@ -75,7 +75,6 @@ local EXPLICIT_GET_FRUITS = Settings["Get Fruits"]
 
 local DEFAULTS = {
     ["Start Farm"] = false,
-    ["Skip Level"] = false,
     ["Select Method Farm"] = "Level Farm",
     ["Select Weapon"] = "Melee",
     ["Speed Tween "] = 300,
@@ -185,6 +184,7 @@ local DEFAULTS = {
     ["Sea Search Step"] = 6500,
     ["Boat Search Altitude"] = 160,
     ["Priority Tasks Preempt Farm"] = true,
+    ["Skip Level"] = false,
 }
 
 for key, value in pairs(DEFAULTS) do
@@ -757,30 +757,6 @@ end
 
 local RegisterAttack = nil
 local RegisterHit = nil
-local CombatRemoteThreadKnown = false
-local CombatRemoteThread = false
-local LastCombatAttack = 0
-
-do
-    local flagsModule = Modules and Modules:FindFirstChild("Flags")
-    if flagsModule then
-        local ok, flags = safeCall("Combat.Flags", require, flagsModule)
-        if ok and type(flags) == "table" then
-            CombatRemoteThreadKnown = true
-            CombatRemoteThread = flags.COMBAT_REMOTE_THREAD == true
-        end
-    end
-end
-
-local function equippedAttackCooldown()
-    local character = LocalPlayer.Character
-    local tool = character and character:FindFirstChildOfClass("Tool")
-    local cooldown = tool and tool:FindFirstChild("Cooldown")
-    local value = cooldown and tonumber(cooldown.Value) or 0.3
-    -- Keep a sane floor/ceiling. Current public combat code uses the equipped
-    -- tool Cooldown value rather than FireServer(0).
-    return math.clamp(value, 0.08, 1.5)
-end
 
 -- Current Blox Fruits Net API resolves these by logical name, not by forcing
 -- the internal "RE/" path. The second boolean argument used by the earlier
@@ -830,7 +806,7 @@ local ValidHitPart = {
 local function chooseHitPart(model)
     if not model then return nil end
     for _, name in ipairs({
-        "HumanoidRootPart", "Head", "UpperTorso", "LowerTorso", "ModelHitbox"
+        "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "ModelHitbox"
     }) do
         local part = model:FindFirstChild(name)
         if part and part:IsA("BasePart") then
@@ -881,38 +857,15 @@ function AttackFunction(radius, includePlayers)
         return false
     end
 
-    local cooldown = equippedAttackCooldown()
-    local now = tick()
-    if (now - LastCombatAttack) < cooldown then
-        return true
-    end
-    LastCombatAttack = now
-
-    -- Newer Blox Fruits builds can route combat through a client combat thread.
-    -- In that mode, forcing RE/RegisterHit directly can produce malformed client
-    -- projectile/effect payloads. Use normal Tool activation unless the current
-    -- Flags module explicitly permits the direct remote path.
-    if CombatRemoteThreadKnown and CombatRemoteThread then
-        local character = LocalPlayer.Character
-        local tool = character and character:FindFirstChildOfClass("Tool")
-        if tool then
-            safeCall("Combat.ThreadedToolActivate", function() tool:Activate() end)
-            return true
-        end
-        return false
-    end
-
     if RegisterAttack and RegisterHit then
-        local primaryPart = hits[1] and hits[1][2]
-        if primaryPart and primaryPart.Parent then
-            local ok = safeCall("Combat.RegisterHit", function()
-                RegisterAttack:FireServer(cooldown)
-                RegisterHit:FireServer(primaryPart, hits)
-            end)
-            if ok then return true end
-        end
+        local ok = safeCall("Combat.RegisterHit", function()
+            RegisterAttack:FireServer(0)
+            RegisterHit:FireServer(hits[1][2], hits)
+        end)
+        if ok then return true end
     end
 
+    -- Fallback to the equipped controller if remotes changed.
     local character = LocalPlayer.Character
     local tool = character and character:FindFirstChildOfClass("Tool")
     if tool then
@@ -1043,13 +996,6 @@ function BringMob(targetMob)
 
     local targetRoot = targetMob:FindFirstChild("HumanoidRootPart")
     if not targetRoot then return false, 0 end
-    local targetPos = targetRoot.Position
-    if targetPos.X ~= targetPos.X or targetPos.Y ~= targetPos.Y or targetPos.Z ~= targetPos.Z
-        or math.abs(targetPos.Y) >= 45000
-    then
-        Runtime.FeatureStatus.Bring = "Rejected invalid/high-Y target"
-        return false, 0
-    end
 
     tryCall(function()
         if sethiddenproperty then
@@ -1065,14 +1011,8 @@ function BringMob(targetMob)
     for _, mob in ipairs(enemies:GetChildren()) do
         if isAlive(mob) and cleanMobName(mob.Name) == wantedName then
             local root = mob:FindFirstChild("HumanoidRootPart")
-            if root then
-                local pos = root.Position
-                if pos.X == pos.X and pos.Y == pos.Y and pos.Z == pos.Z
-                    and math.abs(pos.Y) < 45000
-                    and (pos - targetRoot.Position).Magnitude <= 350
-                then
-                    candidates[#candidates + 1] = mob
-                end
+            if root and (root.Position - targetRoot.Position).Magnitude <= 350 then
+                candidates[#candidates + 1] = mob
             end
         end
     end
@@ -1106,6 +1046,8 @@ function BringMob(targetMob)
     getgenv().DaBringMob = moved >= 2
     return getgenv().DaBringMob, moved
 end
+
+local coreFarmIsActivelyFighting
 
 -- ============================================================================
 -- 7. INVENTORY / FRUIT
@@ -1194,6 +1136,11 @@ local function getFruitGachaBoxName()
 end
 
 function RandomFruit()
+    if coreFarmIsActivelyFighting and coreFarmIsActivelyFighting() then
+        Runtime.FeatureStatus.RandomFruit = "Waiting for combat gap"
+        return false
+    end
+
     -- Economy arbitration callback is installed by the melee subsystem later in
     -- the file. It keeps a ready melee purchase from losing its Beli to gacha.
     if Settings["Auto Fully Fighting Style"] == true and Runtime.ShouldReserveForMelee then
@@ -1655,78 +1602,66 @@ local function findSpawnPart(mobName)
     return nil, nil
 end
 
--- ============================================================================
--- SEA 1 SKIP LEVEL
--- Reconstructed from a public kaitun implementation that uses Sky Palace:
--- Lv9-70 -> Shanda, Lv71-150 -> Royal Squad, without normal quest routing.
--- This is intentionally limited to the recovered/proven range; normal level
--- quest farming resumes automatically after Lv150.
--- ============================================================================
+
+-- --------------------------------------------------------------------------
+-- Skip Level (routing only)
+-- This module NEVER replaces BringMob, attackTarget, AttackAOE or ClickM1.
+-- It only selects a Sky target and hands it to the existing combat core.
+-- Source-proven ranges:
+--   Lv 9-70   -> Shanda
+--   Lv 71-150 -> Royal Squad
+-- --------------------------------------------------------------------------
 local SKY_SKIP_PORTAL = Vector3.new(-7894.6176757813, 5547.1416015625, -380.29119873047)
-local SKY_SKIP_WAIT = CFrame.new(-7757, 5582, -481)
-local SKY_SKIP_DATA = {
-    {Min = 9, Max = 70, Mob = "Shanda"},
-    {Min = 71, Max = 150, Mob = "Royal Squad"},
+local SkipLevelRoutes = {
+    {Min = 9, Max = 70, Name = "Shanda", Spawn = CFrame.new(-7757, 5562, -481)},
+    {Min = 71, Max = 150, Name = "Royal Squad", Spawn = CFrame.new(-7757, 5562, -481)},
 }
 
-local function getSkipLevelData(level)
+local function getSkipLevelRoute(level)
     if Settings["Skip Level"] ~= true or game.PlaceId ~= 2753915549 then
         return nil
     end
-    for _, data in ipairs(SKY_SKIP_DATA) do
-        if level >= data.Min and level <= data.Max then
-            return data
+    for _, route in ipairs(SkipLevelRoutes) do
+        if level >= route.Min and level <= route.Max then
+            return route
         end
     end
     return nil
 end
 
-local function SkipLevelFarm()
-    local levelValue = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level")
+local function FarmSkipLevel()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local levelValue = data and data:FindFirstChild("Level")
     local level = levelValue and tonumber(levelValue.Value)
     if not level then return false end
 
-    local data = getSkipLevelData(level)
-    if not data then
-        Runtime.FeatureStatus.SkipLevel = "inactive at Lv" .. tostring(level)
-        return false
-    end
+    local route = getSkipLevelRoute(level)
+    if not route then return false end
 
-    if questVisible() then
-        safeInvoke("AbandonQuest")
-    end
+    local _, _, root = getCharacter()
+    if not root then return true end
 
-    local _, humanoid, root = getCharacter()
-    if not root or not humanoid or humanoid.Health <= 0 then return true end
-
-    Runtime.FeatureStatus.SkipLevel = ("Lv%d -> %s"):format(level, data.Mob)
-    local target = DetectMob(data.Mob)
-    if target then
-        setAction("Skip Level", data.Mob)
-        attackTarget(target)
-        return true
-    end
-
-    -- If we are far from Upper Sky, use the game entrance first.
-    if (root.Position - SKY_SKIP_WAIT.Position).Magnitude > 3000 then
-        setAction("Skip Level Portal", data.Mob)
+    if (root.Position - route.Spawn.Position).Magnitude > 3000 then
+        setAction("Skip Level Travel", route.Name)
         safeInvoke("requestEntrance", SKY_SKIP_PORTAL)
-        task.wait(0.5)
         return true
     end
 
-    local _, spawnCFrame = findSpawnPart(data.Mob)
-    setAction("Skip Level Wait", data.Mob)
-    toTarget((spawnCFrame or SKY_SKIP_WAIT) * CFrame.new(0, 20, 0))
+    local target = DetectMob(route.Name)
+    if target then
+        setAction("Skip Level", target.Name)
+        return attackTarget(target)
+    end
+
+    local _, spawnCFrame = findSpawnPart(route.Name)
+    spawnCFrame = spawnCFrame or route.Spawn
+    setAction("Skip Level Wait", route.Name)
+    toTarget(spawnCFrame * CFrame.new(0, 50, 0))
     return true
 end
 
 function FarmMethod()
     local method = Settings["Select Method Farm"] or "Level Farm"
-
-    if method == "Level Farm" and SkipLevelFarm() then
-        return true
-    end
 
     if Settings["Farm Material"] == true then
         local material = Settings["Select Material"]
@@ -1761,6 +1696,10 @@ function FarmMethod()
         end
         setAction("Aura Farm", "No mob in range")
         return false
+    end
+
+    if method == "Level Farm" and FarmSkipLevel() then
+        return true
     end
 
     local quest = DoubleQuest()
@@ -4546,20 +4485,48 @@ local function immediateMeleePurchaseCandidate(snapshot)
 end
 Runtime.ShouldReserveForMelee = immediateMeleePurchaseCandidate
 
+
+coreFarmIsActivelyFighting = function()
+    local action = tostring(Runtime.CurrentAction or "")
+    return action == "Farm"
+        or action == "Skip Level"
+        or action == "Farm Material"
+        or action == "Aura Farm"
+        or action:find("Boss", 1, true) ~= nil
+        or action:find("Raid", 1, true) ~= nil
+end
+
+local MeleeUnlockPlanByName = {}
+for _, plan in ipairs(MeleeUnlockPlan) do
+    MeleeUnlockPlanByName[plan.Unlock] = plan
+end
+
 local function tryBuyEveryMissingMelee(snapshot)
     snapshot = snapshot or meleeInventorySnapshot()
     Runtime.MeleePurchaseAt = Runtime.MeleePurchaseAt or {}
     local attempted = false
     local now = os.clock()
 
-    -- BUY-FIRST policy: every missing style gets its own cooldown. A failed
-    -- advanced style never blocks another style that is already purchasable.
     for _, style in ipairs(FightingStylePurchaseRoutes) do
         if not meleeOwned(style.Name, snapshot) then
-            local lastAttempt = Runtime.MeleePurchaseAt[style.Name] or 0
-            if now - lastAttempt >= 2.0 then
-                local basicRule = ImmediateMeleePurchaseRules[style.Name]
-                if basicRule == nil or purchaseRuleReady(basicRule) then
+            local canAttempt = false
+            local basicRule = ImmediateMeleePurchaseRules[style.Name]
+
+            if basicRule then
+                canAttempt = purchaseRuleReady(basicRule)
+            else
+                local plan = MeleeUnlockPlanByName[style.Name]
+                if plan then
+                    canAttempt = unlockCurrencyReady(plan)
+                        and requiredMasteriesMet(plan, snapshot)
+                elseif style.Name == "Sanguine Art" then
+                    canAttempt = getSea() >= 3
+                end
+            end
+
+            if canAttempt then
+                local lastAttempt = Runtime.MeleePurchaseAt[style.Name] or 0
+                if now - lastAttempt >= 3.0 then
                     Runtime.MeleePurchaseAt[style.Name] = now
                     invokeMeleePurchase(style)
                     attempted = true
@@ -4568,13 +4535,16 @@ local function tryBuyEveryMissingMelee(snapshot)
         end
     end
 
-    if attempted then
-        Runtime.InventoryCacheAt = 0
-    end
+    if attempted then Runtime.InventoryCacheAt = 0 end
     return attempted
 end
 
 function AutoBuyFightingStyles()
+    if coreFarmIsActivelyFighting() then
+        Runtime.FeatureStatus.MeleeProgression = "Waiting for combat gap"
+        return false
+    end
+
     local snapshot = meleeInventorySnapshot()
     local attempted = tryBuyEveryMissingMelee(snapshot)
 
@@ -4594,7 +4564,6 @@ function AutoBuyFightingStyles()
         }
         Settings["Preferred Melee"] = target
         Settings["Select Weapon"] = "Melee"
-        ensureMeleeEquipped(target)
         Runtime.FeatureStatus.MeleeProgression =
             ("Need %s %d/%d for %s"):format(
                 target,
