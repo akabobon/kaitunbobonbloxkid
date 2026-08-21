@@ -34,7 +34,7 @@ local Net = Modules and require(Modules:WaitForChild("Net")) or nil
 local CombatUtil = Modules and require(Modules:WaitForChild("CombatUtil")) or nil
 
 local Runtime = {
-    Version = "readable-rebuild-1.2-runtime-fixes",
+    Version = "readable-rebuild-1.3-melee-fruit-fixes",
     StartedAt = os.clock(),
     CurrentAction = "Idle",
     CurrentTarget = nil,
@@ -70,6 +70,9 @@ getgenv().Configs = Settings
 getgenv().Config = Settings
 getgenv().Settings = Settings
 
+local EXPLICIT_RANDOM_FRUIT = Settings["Random Devil Fruit"]
+local EXPLICIT_GET_FRUITS = Settings["Get Fruits"]
+
 local DEFAULTS = {
     ["Start Farm"] = false,
     ["Select Method Farm"] = "Level Farm",
@@ -82,7 +85,8 @@ local DEFAULTS = {
     ["Auto Turn On V3"] = false,
     ["Auto Turn On V4"] = false,
     ["Auto Store Fruit"] = false,
-    ["Random Devil Fruit"] = false,
+    ["Random Devil Fruit"] = true,
+    ["Get Fruits"] = true,
     ["Auto Chest"] = false,
     ["Auto Chest Hop"] = false,
     ["Kill Boss"] = false,
@@ -172,6 +176,8 @@ local DEFAULTS = {
     ["ESP Island"] = false,
     ["Debug Runtime"] = false,
     ["Auto Fully Fighting Style"] = false,
+    ["Melee Mastery Target"] = 600,
+    ["Auto Buy Basic Abilities"] = false,
     ["Auto Stats Melee Percent"] = 70,
     ["Auto Stats Defense Percent"] = 30,
     ["Sea Search Speed"] = 350,
@@ -206,6 +212,18 @@ do
         if oneclick["Get Ghoul"] ~= nil and Settings["Auto Get Ghoul"] == false then
             Settings["Auto Get Ghoul"] = oneclick["Get Ghoul"]
         end
+    end
+
+    -- Legacy kaitun compatibility: older configs expose fruit gacha as
+    -- ["Get Fruits"]. Keep both names synchronized.
+    if EXPLICIT_RANDOM_FRUIT ~= nil then
+        Settings["Random Devil Fruit"] = EXPLICIT_RANDOM_FRUIT == true
+        Settings["Get Fruits"] = Settings["Random Devil Fruit"]
+    elseif EXPLICIT_GET_FRUITS ~= nil then
+        Settings["Get Fruits"] = EXPLICIT_GET_FRUITS == true
+        Settings["Random Devil Fruit"] = Settings["Get Fruits"]
+    else
+        Settings["Get Fruits"] = Settings["Random Devil Fruit"] == true
     end
 end
 
@@ -675,6 +693,22 @@ end)
 function NameWeapon(toolType)
     local character = LocalPlayer.Character
     local containers = {LocalPlayer:FindFirstChild("Backpack"), character}
+
+    -- Full-melee progression intentionally trains a specific style while the
+    -- normal level farm keeps running. Prefer that style instead of whichever
+    -- Melee tool happens to be first in Backpack.
+    if toolType == "Melee" then
+        local preferred = Settings["Preferred Melee"]
+        if type(preferred) == "string" and preferred ~= "" then
+            for _, container in ipairs(containers) do
+                local tool = container and container:FindFirstChild(preferred)
+                if tool and tool:IsA("Tool") then
+                    return preferred
+                end
+            end
+        end
+    end
+
     for _, container in ipairs(containers) do
         if container then
             for _, tool in ipairs(container:GetChildren()) do
@@ -1069,10 +1103,77 @@ function GetPathFruit()
     return nil
 end
 
+local BannerClient = nil
+local function getFruitGachaBoxName()
+    if BannerClient == nil then
+        local controllers = ReplicatedStorage:FindFirstChild("Controllers")
+        local module = controllers and controllers:FindFirstChild("BannerClient")
+        if module then
+            local ok, loaded = tryCall(require, module)
+            if ok then BannerClient = loaded end
+        end
+    end
+
+    if BannerClient and type(BannerClient.TryGetBannerItemIfActiveAsync) == "function" then
+        local ok, item = tryCall(BannerClient.TryGetBannerItemIfActiveAsync)
+        if ok and type(item) == "table" then
+            if item.BoxName then return item.BoxName, item end
+            return "DLCBoxData", nil
+        end
+    end
+    return "DLCBoxData", nil
+end
+
 function RandomFruit()
-    local result = safeInvoke("Cousin", "Buy")
-    if result ~= nil then Runtime.InventoryCacheAt = 0 end
-    return result
+    -- Economy arbitration callback is installed by the melee subsystem later in
+    -- the file. It keeps a ready melee purchase from losing its Beli to gacha.
+    if Settings["Auto Fully Fighting Style"] == true and Runtime.ShouldReserveForMelee then
+        local ready, styleName, cost = Runtime.ShouldReserveForMelee()
+        if ready then
+            Runtime.FeatureStatus.RandomFruit = ("Waiting for melee: %s (%d Beli)"):format(styleName, cost)
+            return false
+        end
+    end
+
+    local boxName = getFruitGachaBoxName()
+
+    -- Reconstructed from the current Banana dump:
+    -- Cousin(Check, box) -> money, level, price; require Lv50 and enough money;
+    -- Cousin(CheckTime, box) must be true; Cousin(box) performs the roll.
+    local ok, money, level, price = safeCall("FruitGacha.Check", function()
+        return CommF:InvokeServer("Cousin", "Check", boxName)
+    end)
+    if not ok then return false end
+
+    money = tonumber(money) or 0
+    level = tonumber(level) or 0
+    price = tonumber(price) or math.huge
+    Runtime.FeatureStatus.RandomFruit = ("Lv=%d Money=%d Price=%s"):format(level, money, tostring(price))
+
+    if level < 50 or money < price then
+        return false
+    end
+
+    local available = safeInvoke("Cousin", "CheckTime", boxName)
+    if available ~= true then
+        Runtime.FeatureStatus.RandomFruit = "Cooldown"
+        return false
+    end
+
+    local rollCode, fruitData
+    local rollOk = safeCall("FruitGacha.Roll", function()
+        rollCode, fruitData = CommF:InvokeServer("Cousin", boxName)
+    end)
+    if not rollOk then return false end
+
+    if rollCode == 1 then
+        Runtime.InventoryCacheAt = 0
+        Runtime.FeatureStatus.RandomFruit = "Rolled"
+        return true, fruitData
+    end
+
+    Runtime.FeatureStatus.RandomFruit = "Roll rejected: " .. tostring(rollCode)
+    return false
 end
 
 function StoreFruit()
@@ -3952,21 +4053,132 @@ end
 -- --------------------------------------------------------------------------
 
 local FightingStylePurchaseRoutes = {
-    {Name = "Black Leg", Args = {"BuyBlackLeg"}},
-    {Name = "Electro", Args = {"BuyElectro"}},
-    {Name = "Fishman Karate", Args = {"BuyFishmanKarate"}},
-    {Name = "Dragon Claw", Args = {"BlackbeardReward", "DragonClaw", "2"}},
-    {Name = "Superhuman", Args = {"BuySuperhuman"}},
-    {Name = "Death Step", Args = {"BuyDeathStep"}},
-    {Name = "Sharkman Karate", Args = {"BuySharkmanKarate"}},
-    {Name = "Electric Claw", Args = {"BuyElectricClaw"}},
-    {Name = "Dragon Talon", Args = {"BuyDragonTalon"}},
-    {Name = "Godhuman", Args = {"BuyGodhuman"}},
-    {Name = "Sanguine Art", Args = {"BuySanguineArt"}},
+    {Name = "Black Leg", Buy = function() return safeInvoke("BuyBlackLeg") end},
+    {Name = "Electro", Buy = function() return safeInvoke("BuyElectro") end},
+    {Name = "Fishman Karate", Buy = function() return safeInvoke("BuyFishmanKarate") end},
+    {Name = "Dragon Claw", Buy = function()
+        safeInvoke("BlackbeardReward", "DragonClaw", "1")
+        return safeInvoke("BlackbeardReward", "DragonClaw", "2")
+    end},
+    {Name = "Superhuman", Buy = function() return safeInvoke("BuySuperhuman") end},
+    {Name = "Death Step", Buy = function()
+        local check = safeInvoke("BuyDeathStep", true)
+        if check == 1 then return safeInvoke("BuyDeathStep") end
+        return check
+    end},
+    {Name = "Sharkman Karate", Buy = function()
+        local check = safeInvoke("BuySharkmanKarate", true)
+        if check == 1 or check == true then return safeInvoke("BuySharkmanKarate") end
+        return check
+    end},
+    {Name = "Electric Claw", Buy = function()
+        local check = safeInvoke("BuyElectricClaw", true)
+        if check ~= 4 then return safeInvoke("BuyElectricClaw") end
+        return check
+    end},
+    {Name = "Dragon Talon", Buy = function()
+        local check = safeInvoke("BuyDragonTalon", true)
+        if check == 1 or check == true then return safeInvoke("BuyDragonTalon") end
+        return check
+    end},
+    {Name = "Godhuman", Buy = function() return safeInvoke("BuyGodhuman") end},
+    {Name = "Sanguine Art", Buy = function()
+        local check = safeInvoke("BuySanguineArt", true)
+        if check == 1 or check == true then return safeInvoke("BuySanguineArt") end
+        return check
+    end},
 }
 
-local function invokeRoute(route)
-    return safeInvoke(table.unpack(route.Args))
+local FightingStyleByName = {}
+for _, style in ipairs(FightingStylePurchaseRoutes) do
+    FightingStyleByName[style.Name] = style
+end
+
+local function meleeInventorySnapshot()
+    local snapshot = {}
+    for _, item in ipairs(readInventory()) do
+        if type(item) == "table" then
+            local name = item.Name or item.name
+            local itemType = item.Type or item.type
+            if name and (itemType == "Melee" or FightingStyleByName[name]) then
+                snapshot[name] = tonumber(item.Mastery or item.mastery or item.Level or item.level) or 0
+            end
+        end
+    end
+
+    for _, container in ipairs({LocalPlayer.Character, LocalPlayer:FindFirstChild("Backpack")}) do
+        if container then
+            for _, tool in ipairs(container:GetChildren()) do
+                if tool:IsA("Tool") and (tool.ToolTip == "Melee" or FightingStyleByName[tool.Name]) then
+                    local level = tool:FindFirstChild("Level")
+                    snapshot[tool.Name] = math.max(snapshot[tool.Name] or 0, level and tonumber(level.Value) or 0)
+                end
+            end
+        end
+    end
+    return snapshot
+end
+
+local function meleeMastery(name, snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+    return tonumber(snapshot[name]) or 0
+end
+
+local function meleeOwned(name, snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+    return snapshot[name] ~= nil
+end
+
+local function invokeMeleePurchase(style)
+    if not style or type(style.Buy) ~= "function" then return nil end
+    local ok, result = safeCall("Melee.Buy." .. style.Name, style.Buy)
+    Runtime.InventoryCacheAt = 0
+    Runtime.FeatureStatus.MeleePurchase = style.Name .. " -> " .. tostring(result)
+    return ok and result or nil
+end
+
+local function ensureMeleeEquipped(name)
+    if not name then return false end
+    local character = LocalPlayer.Character
+    local tool = (character and character:FindFirstChild(name)) or LocalPlayer.Backpack:FindFirstChild(name)
+    if not tool then
+        -- The original Banana 600-mastery loop re-invokes the style purchase
+        -- remote when an owned style is not currently materialized as a Tool.
+        invokeMeleePurchase(FightingStyleByName[name])
+        task.wait(0.1)
+        character = LocalPlayer.Character
+        tool = (character and character:FindFirstChild(name)) or LocalPlayer.Backpack:FindFirstChild(name)
+    end
+    if tool then
+        equiptool(name)
+        return true
+    end
+    return false
+end
+
+local function chooseMeleeTrainingTarget(snapshot)
+    -- Unlock gates first instead of wasting time taking the first style to 600.
+    -- After the whole chain is owned, finish every style to the configured cap.
+    local gates = {
+        {"Black Leg", 300}, {"Electro", 300}, {"Fishman Karate", 300}, {"Dragon Claw", 300},
+        {"Black Leg", 400}, {"Electro", 400}, {"Fishman Karate", 400}, {"Dragon Claw", 400},
+        {"Superhuman", 400}, {"Death Step", 400}, {"Sharkman Karate", 400},
+        {"Electric Claw", 400}, {"Dragon Talon", 400},
+    }
+    for _, gate in ipairs(gates) do
+        local name, needed = gate[1], gate[2]
+        if meleeOwned(name, snapshot) and meleeMastery(name, snapshot) < needed then
+            return name, needed
+        end
+    end
+
+    local cap = tonumber(Settings["Melee Mastery Target"]) or 600
+    for _, style in ipairs(FightingStylePurchaseRoutes) do
+        if meleeOwned(style.Name, snapshot) and meleeMastery(style.Name, snapshot) < cap then
+            return style.Name, cap
+        end
+    end
+    return nil, cap
 end
 
 local function getStatPoints()
@@ -4062,15 +4274,64 @@ function AutoStats()
     return false
 end
 
-function AutoBuyFightingStyles()
-    for _, route in ipairs(FightingStylePurchaseRoutes) do
-        if not CheckItemInventory(route.Name) and not DetectItemPlr(route.Name) then
-            local result = invokeRoute(route)
-            if result ~= nil then
-                return true
-            end
+local BasicMeleeBeliCost = {
+    ["Black Leg"] = 150000,
+    ["Electro"] = 500000,
+    ["Fishman Karate"] = 750000,
+}
+
+local function currentBeli()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local beli = data and data:FindFirstChild("Beli")
+    return beli and tonumber(beli.Value) or 0
+end
+
+local function basicMeleePurchaseReady(snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+    local beli = currentBeli()
+    for _, name in ipairs({"Black Leg", "Electro", "Fishman Karate"}) do
+        local cost = BasicMeleeBeliCost[name]
+        if not meleeOwned(name, snapshot) and beli >= cost then
+            return true, name, cost
         end
     end
+    return false
+end
+Runtime.ShouldReserveForMelee = basicMeleePurchaseReady
+
+function AutoBuyFightingStyles()
+    local snapshot = meleeInventorySnapshot()
+    Runtime.MeleePurchaseCursor = (Runtime.MeleePurchaseCursor or 0) + 1
+    if Runtime.MeleePurchaseCursor > #FightingStylePurchaseRoutes then
+        Runtime.MeleePurchaseCursor = 1
+    end
+
+    -- Round-robin every missing style. Unlike testfix2, a non-nil response from
+    -- Black Leg can no longer block every later melee forever.
+    for offset = 0, #FightingStylePurchaseRoutes - 1 do
+        local index = ((Runtime.MeleePurchaseCursor + offset - 1) % #FightingStylePurchaseRoutes) + 1
+        local style = FightingStylePurchaseRoutes[index]
+        if not meleeOwned(style.Name, snapshot) then
+            Runtime.MeleePurchaseCursor = index
+            invokeMeleePurchase(style)
+            break
+        end
+    end
+
+    Runtime.InventoryCacheAt = 0
+    snapshot = meleeInventorySnapshot()
+    local target, targetMastery = chooseMeleeTrainingTarget(snapshot)
+    Settings["Preferred Melee"] = target
+    if target then
+        Settings["Select Weapon"] = "Melee"
+        ensureMeleeEquipped(target)
+        Runtime.FeatureStatus.MeleeProgression = ("Training %s %d/%d"):format(
+            target, meleeMastery(target, snapshot), targetMastery
+        )
+        return true
+    end
+
+    Runtime.FeatureStatus.MeleeProgression = "All owned melee at target mastery"
     return false
 end
 
@@ -4292,17 +4553,22 @@ function AutoBuyHakiColor()
     return result ~= nil
 end
 
-local BasicShopRoutes = {
-    {"BuyBlackLeg"}, {"BuyElectro"}, {"BuyFishmanKarate"},
+local BasicAbilityRoutes = {
     {"BuyHaki", "Geppo"}, {"BuyHaki", "Buso"}, {"BuyHaki", "Soru"},
     {"KenTalk", "Buy"},
 }
 
 function AutoBuyBasicProgression()
-    for _, route in ipairs(BasicShopRoutes) do
-        safeInvoke(table.unpack(route))
+    local progressed = AutoBuyFightingStyles()
+    if Settings["Auto Buy Basic Abilities"] == true then
+        local reserve = Runtime.ShouldReserveForMelee and Runtime.ShouldReserveForMelee()
+        if not reserve then
+            for _, route in ipairs(BasicAbilityRoutes) do
+                safeInvoke(table.unpack(route))
+            end
+        end
     end
-    return AutoBuyFightingStyles()
+    return progressed
 end
 
 -- --------------------------------------------------------------------------
@@ -4579,6 +4845,13 @@ end, function()
         tostring(Runtime.FeatureStatus.Farm),
         tostring(Runtime.PriorityTask or "none")
     ))
+    if Settings["Auto Fully Fighting Style"] or Settings["Auto Farm Mastery 600 Melees"] then
+        warn("[BananaRebuild/Melee] " .. tostring(Runtime.FeatureStatus.MeleeProgression or "waiting")
+            .. " | buy=" .. tostring(Runtime.FeatureStatus.MeleePurchase or "none"))
+    end
+    if Settings["Random Devil Fruit"] or Settings["Get Fruits"] then
+        warn("[BananaRebuild/Fruit] " .. tostring(Runtime.FeatureStatus.RandomFruit or "waiting"))
+    end
 end)
 
 
@@ -4591,8 +4864,8 @@ runLoop("Farm", 0.05, function()
     return true
 end, FarmMethod)
 
-runLoop("RandomFruit", 10, function()
-    return Settings["Random Devil Fruit"] == true
+runLoop("RandomFruit", 1, function()
+    return Settings["Random Devil Fruit"] == true or Settings["Get Fruits"] == true
 end, RandomFruit)
 
 runLoop("StoreFruit", 2, function()
@@ -4773,16 +5046,14 @@ runLoop("AutoStats", 0.25, function()
     return Settings["Auto Stats"] == true
 end, AutoStats)
 
-runLoop("BasicProgression", 2, function()
+runLoop("BasicProgression", 0.5, function()
     return Settings["Auto Fully Fighting Style"] == true
-        or Settings["Auto Farm Mastery 600 Melees"] == true
 end, AutoBuyBasicProgression)
 
-runLoop("MeleeMastery", 0.15, function()
+runLoop("MeleeMastery", 0.5, function()
     return Settings["Auto Farm Mastery 600 Melees"] == true
-end, function()
-    AutoFarmWeaponMastery("Melee")
-end)
+        and Settings["Auto Fully Fighting Style"] ~= true
+end, AutoBuyFightingStyles)
 
 runLoop("SwordMastery", 0.15, function()
     return Settings["Auto Farm Mastery 600 Sword In Inventory"] == true
