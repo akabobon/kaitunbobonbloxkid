@@ -163,6 +163,7 @@ local DEFAULTS = {
     ["ESP Fruit"] = false,
     ["ESP Player"] = false,
     ["ESP Island"] = false,
+    ["Debug Runtime"] = false,
 }
 
 for key, value in pairs(DEFAULTS) do
@@ -667,13 +668,32 @@ function UsedualFlock()
     return equiptool(NameWeapon(weaponType))
 end
 
-local RegisterAttack = Modules and Modules:FindFirstChild("Net") and Modules.Net:FindFirstChild("RE/RegisterAttack")
+local RegisterAttack = nil
 local RegisterHit = nil
+
+-- Current Blox Fruits Net API resolves these by logical name, not by forcing
+-- the internal "RE/" path. The second boolean argument used by the earlier
+-- reconstruction caused Modules.Net to throw "Failed to find RemoteEvent".
 if Net then
-    local ok, remote = tryCall(function()
-        return Net:RemoteEvent("RegisterHit", true)
+    local okAttack, attackRemote = tryCall(function()
+        return Net:RemoteEvent("RegisterAttack")
     end)
-    if ok then RegisterHit = remote end
+    if okAttack then RegisterAttack = attackRemote end
+
+    local okHit, hitRemote = tryCall(function()
+        return Net:RemoteEvent("RegisterHit")
+    end)
+    if okHit then RegisterHit = hitRemote end
+end
+
+-- Conservative instance fallback for executors/versions where Net cannot be
+-- required correctly. Do not create remotes; only bind ones that already exist.
+local NetModuleScript = Modules and Modules:FindFirstChild("Net")
+if not RegisterAttack and NetModuleScript then
+    RegisterAttack = NetModuleScript:FindFirstChild("RE/RegisterAttack")
+end
+if not RegisterHit and NetModuleScript then
+    RegisterHit = NetModuleScript:FindFirstChild("RE/RegisterHit")
 end
 
 local ValidHitPart = {
@@ -1343,23 +1363,71 @@ local function attackTarget(target)
     return true
 end
 
+local StaticMobFallback = {
+    -- Runtime fallback only when _WorldOrigin.EnemySpawns cannot expose a usable
+    -- spawn. These two were added from the Sea-1 quest mapping because the
+    -- first runtime test was Lv300 and otherwise remained at the quest NPC.
+    ["Military Soldier"] = CFrame.new(-5314.72217, 51.9536018, 8501.80859),
+    ["Military Spy"] = CFrame.new(-5787.99023, 120.864456, 8762.25293),
+}
+
+local function objectCFrame(object)
+    if not object then return nil end
+    if object:IsA("BasePart") then
+        return object.CFrame
+    end
+    if object:IsA("Model") then
+        return object:GetPivot()
+    end
+    return nil
+end
+
+local function ancestorMatches(instance, mobName, stopAt)
+    local current = instance
+    while current and current ~= stopAt do
+        if nameMatches(current.Name, mobName) then
+            return true
+        end
+        current = current.Parent
+    end
+    return false
+end
+
 local function findSpawnPart(mobName)
     local worldOrigin = Workspace:FindFirstChild("_WorldOrigin")
     local enemySpawns = worldOrigin and worldOrigin:FindFirstChild("EnemySpawns")
+    local _, _, playerRoot = getCharacter()
+
     if enemySpawns then
-        local best, bestDistance = nil, math.huge
-        local _, _, playerRoot = getCharacter()
-        for _, spawn in ipairs(enemySpawns:GetDescendants()) do
-            if spawn:IsA("BasePart") and nameMatches(spawn.Name, mobName) then
-                local distance = playerRoot and (spawn.Position - playerRoot.Position).Magnitude or 0
+        local bestObject, bestDistance = nil, math.huge
+
+        -- Spawn layouts differ between updates: sometimes the named object is
+        -- itself a BasePart/Model; sometimes a named Folder/Model owns generic
+        -- child parts. Check both the object and its ancestry.
+        for _, object in ipairs(enemySpawns:GetDescendants()) do
+            local cf = objectCFrame(object)
+            if cf and (
+                nameMatches(object.Name, mobName)
+                or ancestorMatches(object.Parent, mobName, enemySpawns.Parent)
+            ) then
+                local distance = playerRoot and (cf.Position - playerRoot.Position).Magnitude or 0
                 if distance < bestDistance then
-                    best, bestDistance = spawn, distance
+                    bestObject, bestDistance = object, distance
                 end
             end
         end
-        return best
+
+        if bestObject then
+            return bestObject, objectCFrame(bestObject)
+        end
     end
-    return nil
+
+    local normalized = cleanMobName(type(mobName) == "table" and mobName[1] or mobName)
+    local fallback = StaticMobFallback[normalized]
+    if fallback then
+        return nil, fallback
+    end
+    return nil, nil
 end
 
 function FarmMethod()
@@ -1380,10 +1448,10 @@ function FarmMethod()
             return attackTarget(target)
         end
         for _, name in ipairs(names) do
-            local spawnPart = findSpawnPart(name)
-            if spawnPart then
+            local spawnPart, spawnCFrame = findSpawnPart(name)
+            if spawnCFrame then
                 setAction("Wait Material", material)
-                toTarget(spawnPart.CFrame * CFrame.new(0, 50, 0))
+                toTarget(spawnCFrame * CFrame.new(0, 50, 0))
                 return false
             end
         end
@@ -1440,8 +1508,15 @@ function FarmMethod()
     local target = DetectMob(mobName)
     if target then
         if questVisible() and type(mobName) ~= "table" then
-            local title = currentQuestTitle()
-            if title ~= "" and not title:find(cleanMobName(target.Name), 1, true) then
+            -- Never validate against PlayerGui text: Roblox localizes the quest
+            -- title (the test video shows Vietnamese "Linh Quân Đội"), while
+            -- enemy model names remain English. GuideModule keeps the canonical
+            -- quest task name and is localization-independent.
+            local activeMob = GetNameDoubleQuest()
+            if activeMob and not nameMatches(activeMob, target.Name) then
+                Runtime.FeatureStatus.Quest = ("Mismatch: %s / %s"):format(
+                    tostring(activeMob), tostring(target.Name)
+                )
                 safeInvoke("AbandonQuest")
                 return false
             end
@@ -1453,15 +1528,26 @@ function FarmMethod()
     local spawnPart
     if type(mobName) == "table" then
         for _, name in ipairs(mobName) do
-            spawnPart = findSpawnPart(name)
-            if spawnPart then break end
+            local foundObject, foundCFrame = findSpawnPart(name)
+            if foundCFrame then
+                spawnPart = {Object = foundObject, CFrame = foundCFrame}
+                break
+            end
         end
     else
-        spawnPart = findSpawnPart(mobName)
+        local foundObject, foundCFrame = findSpawnPart(mobName)
+        if foundCFrame then
+            spawnPart = {Object = foundObject, CFrame = foundCFrame}
+        end
     end
     if spawnPart then
         setAction("Wait Mob", type(mobName) == "table" and table.concat(mobName, ", ") or mobName)
         toTarget(spawnPart.CFrame * CFrame.new(0, 50, 0))
+    else
+        Runtime.FeatureStatus.Farm = "No live mob/spawn found: " .. tostring(
+            type(mobName) == "table" and table.concat(mobName, ", ") or mobName
+        )
+        setAction("Farm Search", Runtime.FeatureStatus.Farm)
     end
     return false
 end
@@ -4063,6 +4149,20 @@ end
 -- ============================================================================
 -- 16. FEATURE SCHEDULER
 -- ============================================================================
+
+-- Optional test telemetry. Enable ["Debug Runtime"] to make the next F9
+-- recording identify exactly which state the farm loop is stuck in.
+runLoop("RuntimeDebug", 5, function()
+    return Settings["Debug Runtime"] == true
+end, function()
+    warn(("[BananaRebuild/State] action=%s | target=%s | quest=%s | farm=%s"):format(
+        tostring(Runtime.CurrentAction),
+        tostring(Runtime.CurrentTarget),
+        tostring(GetNameDoubleQuest()),
+        tostring(Runtime.FeatureStatus.Farm)
+    ))
+end)
+
 
 runLoop("Farm", 0.05, function()
     return Settings["Start Farm"] == true
