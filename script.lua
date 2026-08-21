@@ -75,6 +75,7 @@ local EXPLICIT_GET_FRUITS = Settings["Get Fruits"]
 
 local DEFAULTS = {
     ["Start Farm"] = false,
+    ["Skip Level"] = false,
     ["Select Method Farm"] = "Level Farm",
     ["Select Weapon"] = "Melee",
     ["Speed Tween "] = 300,
@@ -756,6 +757,30 @@ end
 
 local RegisterAttack = nil
 local RegisterHit = nil
+local CombatRemoteThreadKnown = false
+local CombatRemoteThread = false
+local LastCombatAttack = 0
+
+do
+    local flagsModule = Modules and Modules:FindFirstChild("Flags")
+    if flagsModule then
+        local ok, flags = safeCall("Combat.Flags", require, flagsModule)
+        if ok and type(flags) == "table" then
+            CombatRemoteThreadKnown = true
+            CombatRemoteThread = flags.COMBAT_REMOTE_THREAD == true
+        end
+    end
+end
+
+local function equippedAttackCooldown()
+    local character = LocalPlayer.Character
+    local tool = character and character:FindFirstChildOfClass("Tool")
+    local cooldown = tool and tool:FindFirstChild("Cooldown")
+    local value = cooldown and tonumber(cooldown.Value) or 0.3
+    -- Keep a sane floor/ceiling. Current public combat code uses the equipped
+    -- tool Cooldown value rather than FireServer(0).
+    return math.clamp(value, 0.08, 1.5)
+end
 
 -- Current Blox Fruits Net API resolves these by logical name, not by forcing
 -- the internal "RE/" path. The second boolean argument used by the earlier
@@ -805,7 +830,7 @@ local ValidHitPart = {
 local function chooseHitPart(model)
     if not model then return nil end
     for _, name in ipairs({
-        "Head", "HumanoidRootPart", "UpperTorso", "LowerTorso", "ModelHitbox"
+        "HumanoidRootPart", "Head", "UpperTorso", "LowerTorso", "ModelHitbox"
     }) do
         local part = model:FindFirstChild(name)
         if part and part:IsA("BasePart") then
@@ -856,15 +881,38 @@ function AttackFunction(radius, includePlayers)
         return false
     end
 
-    if RegisterAttack and RegisterHit then
-        local ok = safeCall("Combat.RegisterHit", function()
-            RegisterAttack:FireServer(0)
-            RegisterHit:FireServer(hits[1][2], hits)
-        end)
-        if ok then return true end
+    local cooldown = equippedAttackCooldown()
+    local now = tick()
+    if (now - LastCombatAttack) < cooldown then
+        return true
+    end
+    LastCombatAttack = now
+
+    -- Newer Blox Fruits builds can route combat through a client combat thread.
+    -- In that mode, forcing RE/RegisterHit directly can produce malformed client
+    -- projectile/effect payloads. Use normal Tool activation unless the current
+    -- Flags module explicitly permits the direct remote path.
+    if CombatRemoteThreadKnown and CombatRemoteThread then
+        local character = LocalPlayer.Character
+        local tool = character and character:FindFirstChildOfClass("Tool")
+        if tool then
+            safeCall("Combat.ThreadedToolActivate", function() tool:Activate() end)
+            return true
+        end
+        return false
     end
 
-    -- Fallback to the equipped controller if remotes changed.
+    if RegisterAttack and RegisterHit then
+        local primaryPart = hits[1] and hits[1][2]
+        if primaryPart and primaryPart.Parent then
+            local ok = safeCall("Combat.RegisterHit", function()
+                RegisterAttack:FireServer(cooldown)
+                RegisterHit:FireServer(primaryPart, hits)
+            end)
+            if ok then return true end
+        end
+    end
+
     local character = LocalPlayer.Character
     local tool = character and character:FindFirstChildOfClass("Tool")
     if tool then
@@ -995,6 +1043,13 @@ function BringMob(targetMob)
 
     local targetRoot = targetMob:FindFirstChild("HumanoidRootPart")
     if not targetRoot then return false, 0 end
+    local targetPos = targetRoot.Position
+    if targetPos.X ~= targetPos.X or targetPos.Y ~= targetPos.Y or targetPos.Z ~= targetPos.Z
+        or math.abs(targetPos.Y) >= 45000
+    then
+        Runtime.FeatureStatus.Bring = "Rejected invalid/high-Y target"
+        return false, 0
+    end
 
     tryCall(function()
         if sethiddenproperty then
@@ -1010,8 +1065,14 @@ function BringMob(targetMob)
     for _, mob in ipairs(enemies:GetChildren()) do
         if isAlive(mob) and cleanMobName(mob.Name) == wantedName then
             local root = mob:FindFirstChild("HumanoidRootPart")
-            if root and (root.Position - targetRoot.Position).Magnitude <= 350 then
-                candidates[#candidates + 1] = mob
+            if root then
+                local pos = root.Position
+                if pos.X == pos.X and pos.Y == pos.Y and pos.Z == pos.Z
+                    and math.abs(pos.Y) < 45000
+                    and (pos - targetRoot.Position).Magnitude <= 350
+                then
+                    candidates[#candidates + 1] = mob
+                end
             end
         end
     end
@@ -1594,8 +1655,78 @@ local function findSpawnPart(mobName)
     return nil, nil
 end
 
+-- ============================================================================
+-- SEA 1 SKIP LEVEL
+-- Reconstructed from a public kaitun implementation that uses Sky Palace:
+-- Lv9-70 -> Shanda, Lv71-150 -> Royal Squad, without normal quest routing.
+-- This is intentionally limited to the recovered/proven range; normal level
+-- quest farming resumes automatically after Lv150.
+-- ============================================================================
+local SKY_SKIP_PORTAL = Vector3.new(-7894.6176757813, 5547.1416015625, -380.29119873047)
+local SKY_SKIP_WAIT = CFrame.new(-7757, 5582, -481)
+local SKY_SKIP_DATA = {
+    {Min = 9, Max = 70, Mob = "Shanda"},
+    {Min = 71, Max = 150, Mob = "Royal Squad"},
+}
+
+local function getSkipLevelData(level)
+    if Settings["Skip Level"] ~= true or game.PlaceId ~= 2753915549 then
+        return nil
+    end
+    for _, data in ipairs(SKY_SKIP_DATA) do
+        if level >= data.Min and level <= data.Max then
+            return data
+        end
+    end
+    return nil
+end
+
+local function SkipLevelFarm()
+    local levelValue = LocalPlayer:FindFirstChild("Data") and LocalPlayer.Data:FindFirstChild("Level")
+    local level = levelValue and tonumber(levelValue.Value)
+    if not level then return false end
+
+    local data = getSkipLevelData(level)
+    if not data then
+        Runtime.FeatureStatus.SkipLevel = "inactive at Lv" .. tostring(level)
+        return false
+    end
+
+    if questVisible() then
+        safeInvoke("AbandonQuest")
+    end
+
+    local _, humanoid, root = getCharacter()
+    if not root or not humanoid or humanoid.Health <= 0 then return true end
+
+    Runtime.FeatureStatus.SkipLevel = ("Lv%d -> %s"):format(level, data.Mob)
+    local target = DetectMob(data.Mob)
+    if target then
+        setAction("Skip Level", data.Mob)
+        attackTarget(target)
+        return true
+    end
+
+    -- If we are far from Upper Sky, use the game entrance first.
+    if (root.Position - SKY_SKIP_WAIT.Position).Magnitude > 3000 then
+        setAction("Skip Level Portal", data.Mob)
+        safeInvoke("requestEntrance", SKY_SKIP_PORTAL)
+        task.wait(0.5)
+        return true
+    end
+
+    local _, spawnCFrame = findSpawnPart(data.Mob)
+    setAction("Skip Level Wait", data.Mob)
+    toTarget((spawnCFrame or SKY_SKIP_WAIT) * CFrame.new(0, 20, 0))
+    return true
+end
+
 function FarmMethod()
     local method = Settings["Select Method Farm"] or "Level Farm"
+
+    if method == "Level Farm" and SkipLevelFarm() then
+        return true
+    end
 
     if Settings["Farm Material"] == true then
         local material = Settings["Select Material"]
