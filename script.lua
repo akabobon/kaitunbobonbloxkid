@@ -46,6 +46,18 @@
 -- * Old TeddyAir eligibility could reject v22.29.7 secondaries even after visual bring.
 -- Fix: one HP-proof CombatController, explicit single-owner secondary eligibility,
 -- safe bring trials only, and ghost secondaries restored before primary promotion.
+-- v22.30.0 REAL BRING ROOT REBASE
+-- Root-cause rebase after repeated v22.29.x bring regressions.
+-- [B30-1] Exactly one normal-farm bring writer; legacy SharedBring/Teddy heartbeat are hard-isolated.
+-- [B30-2] Live primary is never moved. It is the movement + damage authority.
+-- [B30-3] owner=true may snap continuously; owner=false/nil never get continuous pin authority.
+-- [B30-4] owner=false/nil (common/uncertain on REAL): ONE snap -> two NO-REWRITE persistence samples.
+-- [B30-5] Persisted unknown gets a short attack probation; real Humanoid HP delta is required for durable PROVEN.
+-- [B30-6] No HP delta / server snap-back restores original CFrame and backs off. No permanent visual statue.
+-- [B30-7] No BodyPosition/BodyGyro, no WalkSpeed=0, no Animator deletion, no ChangeState freeze in normal farm.
+-- [C30-1] Real HP-verified combat backend is preferred before SKID-DIRECT-4.
+-- [C30-2] Failed unverified direct-4 waits >=2.5s so helper/token/legacy can actually prove.
+-- [C30-3] Primary changes abort stale pending HP probes immediately.
 -- =================================================================
 --         BOBON HUB v22.28.2 REAL-COMPAT • ERROR-RETRY HOP • REMOTE QUEST
 --         BOBON HUB v22.28.4 REAL COMPAT + GAME ERROR FILTER + ENGLISH UI
@@ -4870,7 +4882,9 @@ function CombatController:FailBackend(backend, reason)
         and (_G.Settings.CombatVerifiedBackendRetry or 0.85)
         or (_G.Settings.CombatBackendRetry or 12)
     if backend == "SKID-DIRECT-4" and not wasProven then
-        retryFor = math.max(0.20, tonumber(_G.Settings.SharedSkidDirectRetry) or 0.45)
+        -- v22.30: do not reclaim the farm after ~0.45s. Give helper/token/legacy
+        -- a real causal HP-proof window first.
+        retryFor = math.max(2.50, tonumber(_G.Settings.SharedSkidDirectRetry) or 2.50)
     end
     self.FailedUntil[backend] = tick() + retryFor
     if backend == "TOKEN-4" then
@@ -5095,16 +5109,19 @@ function CombatController:SelectBackend(now)
         return "LEGACY-2"
     end
 
-    -- v21.43: ordinary shared-source quest farm probes the source-compatible
-    -- direct 4-argument hit shape first. Real HP proof still decides trust.
-    if sharedFarm and self:BackendAvailable("SKID-DIRECT-4") then
-        return "SKID-DIRECT-4"
-    end
-
+    -- v22.30: once a backend has REAL HP proof, keep it authoritative.
+    -- Do not let a short direct-4 cooldown steal the next mob from a backend that
+    -- already produced server-observed damage.
     if self.VerifiedBackend and self:BackendAvailable(self.VerifiedBackend) then
         if not (airFarm and IsClientInputBackend(self.VerifiedBackend)) then
             return self.VerifiedBackend
         end
+    end
+
+    -- First unverified shared-farm probe may still use the current public
+    -- direct-4 shape. A failure must leave enough time for alternative backends.
+    if sharedFarm and self:BackendAvailable("SKID-DIRECT-4") then
+        return "SKID-DIRECT-4"
     end
 
     if airFarm then
@@ -8293,6 +8310,26 @@ function ClusterFarmController:SharedRelease(reason)
     self.SharedEmptySince = 0
     self.SharedLastBringAt = 0
     self.SharedBringCount = 0
+
+    -- v22.30: restore any one-shot/proven visual pulls before leaving normal farm.
+    if type(self.ReferenceVideoBringState) == "table" then
+        for root, state in pairs(self.ReferenceVideoBringState) do
+            if root and root.Parent and type(state) == "table" and state.OriginCF then
+                pcall(function()
+                    root.CFrame = state.OriginCF
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                end)
+            end
+        end
+    end
+    self.ReferenceVideoSingleOwnerActive = nil
+    self.ReferenceVideoPrimaryModel = nil
+    self.ReferenceVideoPrimaryName = nil
+    self.ReferenceVideoBringState = setmetatable({}, {__mode="k"})
+    self.ReferenceVideoLastPrimaryPos = nil
+    self.ReferenceVideoLastKillAt = 0
+
     if self.ReferenceVideoMoveState then
         for root in pairs(self.ReferenceVideoMoveState) do
             pcall(function()
@@ -8462,6 +8499,9 @@ function ClusterFarmController:SharedEnsurePile(mobName, target, fallbackCF)
 end
 
 function ClusterFarmController:SharedTeddyRestack(forceScan)
+    -- v22.30: hard isolation from normal ReferenceVideo farm.
+    if self.ReferenceVideoSingleOwnerActive
+        and _G.State and _G.State.Mode == "Farming" then return 0, 0 end
     -- v22.25.0 VIDEO7951: Stable PileAnchor + concurrent field bring.
     -- IMPORTANT: no live mob owns the pile and no seed HP proof gates Bring.
     -- Damage proof only controls multi-hit eligibility / health authority; it never
@@ -8669,9 +8709,7 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
         return nil
     end
 
-    self.ReferenceVideoMovedOrigin = self.ReferenceVideoMovedOrigin
-        or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoDamageProven = self.ReferenceVideoDamageProven
+    self.ReferenceVideoBringState = self.ReferenceVideoBringState
         or setmetatable({}, {__mode="k"})
 
     local function valid(mob)
@@ -8690,8 +8728,8 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
         local sr = sticky:FindFirstChild("HumanoidRootPart")
         if sr then
             self.ReferenceVideoLastPrimaryPos = sr.Position
-            -- A primary must always be a real live target, never held by bring state.
-            self.ReferenceVideoMovedOrigin[sr] = nil
+            -- The primary stays at its real server-driven position.
+            self.ReferenceVideoBringState[sr] = nil
         end
         return sticky
     end
@@ -8708,30 +8746,30 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
 
     local origin = self.ReferenceVideoLastPrimaryPos or me.Position
     local best, bestDist = nil, math.huge
-    local restoredGhost = false
     local now = tick()
 
     for _, mob in ipairs(folder:GetChildren()) do
         if valid(mob) then
             local root = mob:FindFirstChild("HumanoidRootPart")
-            local movedOrigin = self.ReferenceVideoMovedOrigin[root]
-            local proofAt = self.ReferenceVideoDamageProven[root]
-            local damageProven = proofAt and now - proofAt <= 4.0
+            local state = self.ReferenceVideoBringState[root]
+            local phase = state and state.Phase or nil
 
-            -- Never promote a secondary that only appears near the pile because
-            -- this client moved it. Restore it first; next scan will use its real
-            -- replicated position. This breaks the "one kill then ghost target" loop.
-            if movedOrigin and not damageProven then
-                pcall(function()
-                    root.CFrame = movedOrigin
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-                self.ReferenceVideoMovedOrigin[root] = nil
-                if self.ReferenceVideoBringNearSince then
-                    self.ReferenceVideoBringNearSince[root] = nil
+            -- Never promote an in-flight visual probe. It has not yet proved that
+            -- the server accepted its moved position.
+            local unsafeVisual = phase == "PROBE1"
+                or phase == "PROBE2"
+                or phase == "PROBATION"
+
+            if unsafeVisual then
+                if state.OriginCF and now >= (state.RestoreAfter or math.huge) then
+                    pcall(function()
+                        root.CFrame = state.OriginCF
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                    state.Phase = "REJECT"
+                    state.NextRetry = now + 0.75
                 end
-                restoredGhost = true
             else
                 local dist = (root.Position - origin).Magnitude
                 if dist < bestDist then
@@ -8741,24 +8779,17 @@ function ClusterFarmController:ReferenceVideoPrimary(mobName)
         end
     end
 
-    -- Give restored secondaries one replication frame before selecting them.
-    if not best and restoredGhost then
-        self.ReferenceVideoPrimaryModel = nil
-        self.ReferenceVideoPrimaryName = nil
-        return nil
-    end
-
     if oldPrimary ~= best then
-        self.ReferenceVideoBatchWatch = nil
-        self.ReferenceVideoNoDamageStreak = 0
-        self.ReferenceVideoDirectMisses = 0
-        self.ReferenceVideoDirectFallbackUntil = 0
-        self.ReferenceVideoLastAttack = 0
+        pcall(function() CombatController:AbortPending("PRIMARY-CHANGE") end)
+        self.SharedPrimaryWatchTarget = nil
+        self.SharedPrimaryWatchHealth = nil
+        self.SharedPrimaryLastDamageAt = 0
+        self.SharedPrimaryWatchStartedAt = 0
 
         local root = best and best:FindFirstChild("HumanoidRootPart")
         if root then
             self.ReferenceVideoLastPrimaryPos = root.Position
-            self.ReferenceVideoMovedOrigin[root] = nil
+            self.ReferenceVideoBringState[root] = nil
         end
     end
 
@@ -8781,49 +8812,42 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
 
     pcall(function() ExpandSimulationRadius() end)
 
-    self.ReferenceVideoBringNearSince = self.ReferenceVideoBringNearSince
-        or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoBringLastSnap = self.ReferenceVideoBringLastSnap
-        or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoMovedOrigin = self.ReferenceVideoMovedOrigin
-        or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoDamageProven = self.ReferenceVideoDamageProven
-        or setmetatable({}, {__mode="k"})
-    self.ReferenceVideoLastHealth = self.ReferenceVideoLastHealth
+    self.ReferenceVideoBringState = self.ReferenceVideoBringState
         or setmetatable({}, {__mode="k"})
 
+    -- Best-effort ownership request. Executor support differs; failure is harmless.
     local env = (type(getgenv) == "function" and getgenv()) or _G
-    local synObj = type(rawget(env, "syn")) == "table" and rawget(env, "syn") or nil
+    local synObj = type(env) == "table" and type(rawget(env, "syn")) == "table"
+        and rawget(env, "syn") or nil
     local requestOwnership =
         (synObj and synObj.request_network_ownership)
-        or rawget(env, "requestnetworkownership")
-        or rawget(env, "request_network_ownership")
+        or (type(env) == "table" and rawget(env, "requestnetworkownership"))
+        or (type(env) == "table" and rawget(env, "request_network_ownership"))
     local setOwnership =
         (synObj and synObj.set_network_ownership)
-        or rawget(env, "setnetworkownership")
-        or rawget(env, "set_network_ownership")
+        or (type(env) == "table" and rawget(env, "setnetworkownership"))
+        or (type(env) == "table" and rawget(env, "set_network_ownership"))
 
-    local ownerCheck = nil
-    for _, name in ipairs({
-        "isnetworkowner", "is_network_owner", "isnetowner", "is_net_owner",
-    }) do
-        local fn = rawget(env, name) or rawget(_G, name)
-        if type(fn) == "function" then
-            ownerCheck = fn
-            break
-        end
-    end
-
-    local center = primaryRoot.Position
+    local now = tick()
+    local centerCF = primaryRoot.CFrame
+    local center = centerCF.Position
     self.ReferenceVideoLastPrimaryPos = center
 
-    local radius = math.max(220,
+    local radius = math.max(250,
         tonumber(_G.Settings.ReferenceVideoBringRadius) or 420)
+    local trialRange = math.max(radius,
+        tonumber(_G.Settings.ReferenceVideoUnknownOwnerTrialRange) or radius)
     local maxMobs = math.max(2,
         math.floor(tonumber(_G.MobM)
             or tonumber(_G.Settings.ReferenceVideoMaxTargets)
-            or 8))
-    local now = tick()
+            or 10))
+
+    local probeCheck1 = 0.14
+    local probeCheck2 = 0.28
+    local probationWindow = 0.95
+    local provenLease = 2.75
+    local snapInterval = 0.08
+    local verifyRadius = 13
 
     local rows = {}
     for _, mob in ipairs(folder:GetChildren()) do
@@ -8835,18 +8859,11 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
                 if okPos and IsValidPos(pos) and IsAllowedWorldPosition(pos)
                     and ((pos - center).Magnitude <= radius
                         or (pos - me.Position).Magnitude <= radius) then
-
-                    local hp = tonumber(hum.Health) or 0
-                    local previous = self.ReferenceVideoLastHealth[root]
-                    if previous ~= nil and hp < previous - 0.01 then
-                        self.ReferenceVideoDamageProven[root] = now
-                    end
-                    self.ReferenceVideoLastHealth[root] = hp
-
                     rows[#rows + 1] = {
                         Model = mob,
                         Humanoid = hum,
                         Root = root,
+                        Position = pos,
                         Distance = (pos - center).Magnitude,
                     }
                 end
@@ -8861,85 +8878,218 @@ function ClusterFarmController:ReferenceVideoBring(mobName, primary)
     end)
 
     local count = math.min(#rows, maxMobs)
-    local moved, stable, blocked = 0, 0, 0
-    local closeTrialRange = math.max(70,
-        tonumber(_G.Settings.ReferenceVideoUnknownOwnerTrialRange) or 120)
+    local moved, stable, blocked, probation = 0, 0, 0, 0
 
     for i = 1, count do
         local row = rows[i]
-        local mob, root = row.Model, row.Root
+        local mob, hum, root = row.Model, row.Humanoid, row.Root
 
         if mob == primary then
-            self.ReferenceVideoBringNearSince[root] =
-                self.ReferenceVideoBringNearSince[root] or now
-            self.ReferenceVideoMovedOrigin[root] = nil
             stable = stable + 1
+            self.ReferenceVideoBringState[root] = nil
         else
+            local state = self.ReferenceVideoBringState[root]
+            if type(state) ~= "table" then
+                state = {
+                    Phase = "IDLE",
+                    NextRetry = 0,
+                    LastSnap = 0,
+                    LastHealth = tonumber(hum.Health) or 0,
+                    DamageAt = 0,
+                }
+                self.ReferenceVideoBringState[root] = state
+            end
+
+            local hp = tonumber(hum.Health) or 0
+            local oldHp = tonumber(state.LastHealth)
+            if oldHp and hp < oldHp - 0.01 then
+                state.DamageAt = now
+                if state.Phase == "PROBATION" or state.Phase == "PROVEN" then
+                    state.Phase = "PROVEN"
+                    state.LeaseUntil = now + provenLease
+                end
+            elseif oldHp and hp > oldHp + 0.01 then
+                -- New/healed instance requires fresh movement authority proof.
+                if state.Phase ~= "OWNED" then
+                    state.Phase = "IDLE"
+                    state.NextRetry = now + 0.10
+                    state.DamageAt = 0
+                end
+            end
+            state.LastHealth = hp
+
             pcall(function()
                 if type(requestOwnership) == "function" then requestOwnership(root) end
                 if type(setOwnership) == "function" then setOwnership(root, LP) end
             end)
 
-            local owns = nil
-            if type(ownerCheck) == "function" then
-                pcall(function() owns = ownerCheck(root) end)
+            local owner = ClientOwnsMob(root)
+
+            if owner == true then
+                state.Phase = "OWNED"
+                state.LeaseUntil = now + 0.40
+            elseif owner == false and state.Phase == "OWNED" then
+                -- Ownership was genuinely lost after an owned lease.
+                state.Phase = "IDLE"
+                state.NextRetry = now + 0.20
             end
 
-            -- owner=false is authoritative: don't make a client-only statue.
-            -- owner=nil is common on REAL, so allow a bounded trial only when the
-            -- player is already physically close enough for ownership transfer.
-            local canTrial = owns == true
-                or (owns == nil and (root.Position - me.Position).Magnitude <= closeTrialRange)
-                or (self.ReferenceVideoDamageProven[root]
-                    and now - self.ReferenceVideoDamageProven[root] <= 4.0)
+            -- IMPORTANT REAL rule:
+            -- false/nil ownership is not trusted enough to continuously pin a mob,
+            -- but it may attempt ONE write followed by no-rewrite persistence proof.
+            -- Server snap-back rejects it; persistence + real HP can promote it.
+            local phase = state.Phase
 
-            if canTrial then
-                if not self.ReferenceVideoMovedOrigin[root] then
-                    self.ReferenceVideoMovedOrigin[root] = root.CFrame
-                end
-
-                pcall(function()
-                    root.CanCollide = false
-                    local head = mob:FindFirstChild("Head")
-                    if head and head:IsA("BasePart") then head.CanCollide = false end
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                end)
-
-                if now - (self.ReferenceVideoBringLastSnap[root] or 0) >= 0.10 then
-                    self.ReferenceVideoBringLastSnap[root] = now
+            if phase == "OWNED" then
+                if now - (state.LastSnap or 0) >= snapInterval then
+                    state.LastSnap = now
                     pcall(function()
-                        root.CFrame = primaryRoot.CFrame
+                        root.CanCollide = false
                         root.AssemblyLinearVelocity = Vector3.zero
                         root.AssemblyAngularVelocity = Vector3.zero
+                        root.CFrame = centerCF
                     end)
                     moved = moved + 1
                 end
-
-                local near = (root.Position - primaryRoot.Position).Magnitude <= 12
-                if near then
-                    self.ReferenceVideoBringNearSince[root] =
-                        self.ReferenceVideoBringNearSince[root] or now
+                if (root.Position - center).Magnitude <= verifyRadius then
                     stable = stable + 1
-                else
-                    self.ReferenceVideoBringNearSince[root] = nil
                 end
+
+            elseif phase == "PROVEN" then
+                if now > (state.LeaseUntil or 0) then
+                    state.Phase = "IDLE"
+                    state.NextRetry = now + 0.15
+                else
+                    if now - (state.LastSnap or 0) >= snapInterval then
+                        state.LastSnap = now
+                        pcall(function()
+                            root.CanCollide = false
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                            root.CFrame = centerCF
+                        end)
+                        moved = moved + 1
+                    end
+                    if (root.Position - center).Magnitude <= verifyRadius then
+                        stable = stable + 1
+                    elseif now - (state.DamageAt or 0) > 0.85 then
+                        if state.OriginCF then
+                            pcall(function()
+                                root.CFrame = state.OriginCF
+                                root.AssemblyLinearVelocity = Vector3.zero
+                                root.AssemblyAngularVelocity = Vector3.zero
+                            end)
+                        end
+                        state.Phase = "REJECT"
+                        state.NextRetry = now + 0.75
+                    end
+                end
+
+            elseif phase == "PROBATION" then
+                probation = probation + 1
+
+                -- No continuous rewrite here. If the server accepted the one-shot
+                -- move the mob should remain close enough without client spam.
+                local near = state.ProbePos
+                    and (root.Position - state.ProbePos).Magnitude <= verifyRadius
+                if not near then
+                    if state.OriginCF then
+                        pcall(function()
+                            root.CFrame = state.OriginCF
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                    end
+                    state.Phase = "REJECT"
+                    state.NextRetry = now + 0.90
+                elseif (state.DamageAt or 0) >= (state.ProbationAt or math.huge) then
+                    state.Phase = "PROVEN"
+                    state.LeaseUntil = now + provenLease
+                    stable = stable + 1
+                elseif now >= (state.ProbationUntil or 0) then
+                    if state.OriginCF then
+                        pcall(function()
+                            root.CFrame = state.OriginCF
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.AssemblyAngularVelocity = Vector3.zero
+                        end)
+                    end
+                    state.Phase = "REJECT"
+                    state.NextRetry = now + 0.90
+                else
+                    stable = stable + 1
+                end
+
+            elseif phase == "PROBE1" then
+                -- First no-rewrite persistence sample.
+                if now - (state.ProbeAt or now) >= probeCheck1 then
+                    if state.ProbePos
+                        and (root.Position - state.ProbePos).Magnitude <= verifyRadius then
+                        state.Phase = "PROBE2"
+                    else
+                        if state.OriginCF then
+                            pcall(function() root.CFrame = state.OriginCF end)
+                        end
+                        state.Phase = "REJECT"
+                        state.NextRetry = now + 0.80
+                    end
+                end
+
+            elseif phase == "PROBE2" then
+                -- Second independent no-rewrite sample.
+                if now - (state.ProbeAt or now) >= probeCheck2 then
+                    if state.ProbePos
+                        and (root.Position - state.ProbePos).Magnitude <= verifyRadius then
+                        state.Phase = "PROBATION"
+                        state.ProbationAt = now
+                        state.ProbationUntil = now + probationWindow
+                        state.RestoreAfter = state.ProbationUntil
+                        stable = stable + 1
+                        probation = probation + 1
+                    else
+                        if state.OriginCF then
+                            pcall(function() root.CFrame = state.OriginCF end)
+                        end
+                        state.Phase = "REJECT"
+                        state.NextRetry = now + 0.80
+                    end
+                end
+
             else
-                self.ReferenceVideoBringNearSince[root] = nil
-                blocked = blocked + 1
+                -- REAL may report false/nil even when a movement request can persist.
+                -- One trial write only; all following samples are observation-only.
+                if now >= (state.NextRetry or 0)
+                    and ((root.Position - me.Position).Magnitude <= trialRange
+                        or (root.Position - center).Magnitude <= radius) then
+                    state.OriginCF = root.CFrame
+                    state.ProbePos = center
+                    state.ProbeAt = now
+                    state.RestoreAfter = now + probeCheck2 + probationWindow
+                    state.Phase = "PROBE1"
+                    pcall(function()
+                        root.CanCollide = false
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.AssemblyAngularVelocity = Vector3.zero
+                        root.CFrame = centerCF
+                    end)
+                    moved = moved + 1
+                else
+                    blocked = blocked + 1
+                end
             end
         end
     end
 
+    self.SharedBringCount = stable
     if _G.BobonDiagnostics then
-        _G.BobonDiagnostics.Bring = "SAFE-LIVE-PRIMARY"
+        _G.BobonDiagnostics.Bring = "AUTHORITY-PROBE-V30"
         _G.BobonDiagnostics.BringCandidates = count
         _G.BobonDiagnostics.BringMoved = moved
         _G.BobonDiagnostics.BringOwned = stable
         _G.BobonDiagnostics.BringUnknown = blocked
+        _G.BobonDiagnostics.BringProbation = probation
     end
 
-    self.SharedBringCount = stable
     return moved, count, stable, blocked
 end
 
@@ -9042,6 +9192,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     self.SharedTrioPullArmed = false
     self.SharedPileCFrame = nil
     self.SharedClassicCurrentPile = nil
+    self.SharedTeddyBatch = {}
     _G.State.ClusterMode = "OFF"
 
     local primary = self:ReferenceVideoPrimary(mobName)
@@ -9128,7 +9279,7 @@ function ClusterFarmController:TeddySequenceFarmTick(mobName, fallbackCF, status
     local dist = me and (me.Position - root.Position).Magnitude or -1
 
     _G.BobonStatus =
-        ("%s: CORE8 • %s • d%.0f • bring %d/%d stable%d • hit%d %s")
+        ("%s: CORE30 • %s • d%.0f • bring %d/%d stable%d • hit%d %s")
         :format(prefix, tostring(mobName), dist,
             tonumber(brought) or 0,
             tonumber(candidates) or 0,
@@ -9141,6 +9292,9 @@ end
 
 
 function ClusterFarmController:SharedBring(mobName, pileCF, fallbackCF, primaryTarget)
+    -- v22.30 normal farm has exactly one bring writer.
+    if self.ReferenceVideoSingleOwnerActive
+        and _G.State and _G.State.Mode == "Farming" then return 0 end
     if _G.Settings.SharedSourceFarmMode == false then return 0 end
     if not _G.State or _G.State.Mode ~= "Farming" or _G.State.ActiveActionToken ~= 0 then return 0 end
     if type(mobName) ~= "string" or mobName == "" then return 0 end
@@ -9229,28 +9383,33 @@ function ClusterFarmController:IsSharedAttackEligible(model, primaryTarget)
     local root = model:FindFirstChild("HumanoidRootPart")
     if not hum or hum.Health <= 0 or not root or not root.Parent then return false end
 
-    -- v22.29.8 single-owner farm path.
-    -- This must run before the old TeddyAir/SharedTeddy gates, otherwise the
-    -- adaptive CombatController rejects every newly brought secondary.
-    if self.ReferenceVideoSingleOwnerActive then
+    if self.ReferenceVideoSingleOwnerActive
+        and _G.State and _G.State.Mode == "Farming" then
         local wanted = self.ReferenceVideoSingleOwnerActive
-        if IsEnemyNamed(model, wanted) then
-            local primaryRoot = primaryTarget
-                and primaryTarget:FindFirstChild("HumanoidRootPart")
-            local since = self.ReferenceVideoBringNearSince
-                and self.ReferenceVideoBringNearSince[root]
-            local damageAt = self.ReferenceVideoDamageProven
-                and self.ReferenceVideoDamageProven[root]
-            local okPos, pos = pcall(function() return root.Position end)
-            if okPos and IsValidPos(pos) and primaryRoot and primaryRoot.Parent then
-                local near = (pos - primaryRoot.Position).Magnitude <= 15
-                local persisted = since and tick() - since >= 0.10
-                local damageProven = damageAt and tick() - damageAt <= 4.0
-                if near and (persisted or damageProven) then
-                    return true
-                end
-            end
+        if not IsEnemyNamed(model, wanted) then return false end
+
+        local primaryRoot = primaryTarget
+            and primaryTarget:FindFirstChild("HumanoidRootPart")
+        local state = self.ReferenceVideoBringState
+            and self.ReferenceVideoBringState[root]
+        if not primaryRoot or not primaryRoot.Parent or type(state) ~= "table" then
+            return false
         end
+
+        if (root.Position - primaryRoot.Position).Magnitude > 16 then
+            return false
+        end
+
+        if state.Phase == "OWNED" then
+            return true
+        elseif state.Phase == "PROVEN" then
+            return tick() <= (state.LeaseUntil or 0)
+                and tick() - (state.DamageAt or 0) <= 2.75
+        elseif state.Phase == "PROBATION" then
+            -- Short causal attack window. Bring promotes it only after a real HP delta.
+            return tick() <= (state.ProbationUntil or 0)
+        end
+        return false
     end
 
     if _G.Settings.TeddyAirSweepMode ~= false then
@@ -9879,6 +10038,8 @@ local ClusterHeartbeatConnection
 pcall(function()
     ClusterHeartbeatConnection = RunService.Heartbeat:Connect(function()
         if not SessionAlive() then return end
+        if ClusterFarmController.ReferenceVideoSingleOwnerActive
+            and _G.State and _G.State.Mode == "Farming" then return end
         if _G.Settings.SharedTeddyMode ~= false
             and ClusterFarmController.SharedTeddyActive == true then
             pcall(function() ClusterFarmController:SharedTeddyRestack(false) end)
