@@ -176,7 +176,7 @@ local DEFAULTS = {
     ["ESP Island"] = false,
     ["Debug Runtime"] = false,
     ["Auto Fully Fighting Style"] = false,
-    ["Melee Mastery Target"] = 600,
+    ["Melee Mastery Target"] = 600, -- only used by explicit Auto Farm Mastery 600 Melees
     ["Auto Buy Basic Abilities"] = false,
     ["Auto Stats Melee Percent"] = 70,
     ["Auto Stats Defense Percent"] = 30,
@@ -694,9 +694,9 @@ function NameWeapon(toolType)
     local character = LocalPlayer.Character
     local containers = {LocalPlayer:FindFirstChild("Backpack"), character}
 
-    -- Full-melee progression intentionally trains a specific style while the
-    -- normal level farm keeps running. Prefer that style instead of whichever
-    -- Melee tool happens to be first in Backpack.
+    -- A melee unlock task may temporarily request one exact style. Otherwise
+    -- keep the melee that is already equipped; newly purchased styles stay in
+    -- Backpack until a later unlock actually needs their mastery.
     if toolType == "Melee" then
         local preferred = Settings["Preferred Melee"]
         if type(preferred) == "string" and preferred ~= "" then
@@ -704,6 +704,14 @@ function NameWeapon(toolType)
                 local tool = container and container:FindFirstChild(preferred)
                 if tool and tool:IsA("Tool") then
                     return preferred
+                end
+            end
+        end
+
+        if character then
+            for _, tool in ipairs(character:GetChildren()) do
+                if tool:IsA("Tool") and tool.ToolTip == "Melee" then
+                    return tool.Name
                 end
             end
         end
@@ -4156,22 +4164,102 @@ local function ensureMeleeEquipped(name)
     return false
 end
 
-local function chooseMeleeTrainingTarget(snapshot)
-    -- Unlock gates first instead of wasting time taking the first style to 600.
-    -- After the whole chain is owned, finish every style to the configured cap.
-    local gates = {
-        {"Black Leg", 300}, {"Electro", 300}, {"Fishman Karate", 300}, {"Dragon Claw", 300},
-        {"Black Leg", 400}, {"Electro", 400}, {"Fishman Karate", 400}, {"Dragon Claw", 400},
-        {"Superhuman", 400}, {"Death Step", 400}, {"Sharkman Karate", 400},
-        {"Electric Claw", 400}, {"Dragon Talon", 400},
-    }
-    for _, gate in ipairs(gates) do
-        local name, needed = gate[1], gate[2]
-        if meleeOwned(name, snapshot) and meleeMastery(name, snapshot) < needed then
-            return name, needed
+local MeleeUnlockPlan = {
+    -- Buy the four prerequisite styles first. Mastery is not trained until the
+    -- account is in the sea where the next style can actually be obtained and
+    -- has the required currency for that unlock.
+    {
+        Unlock = "Superhuman", MinSea = 2, Beli = 3000000, Fragments = 0,
+        Requires = {
+            {"Black Leg", 300},
+            {"Electro", 300},
+            {"Fishman Karate", 300},
+            {"Dragon Claw", 300},
+        },
+    },
+    {
+        Unlock = "Death Step", MinSea = 2, Beli = 2500000, Fragments = 5000,
+        Requires = {{"Black Leg", 400}},
+    },
+    {
+        Unlock = "Sharkman Karate", MinSea = 2, Beli = 2500000, Fragments = 5000,
+        Requires = {{"Fishman Karate", 400}},
+    },
+    {
+        Unlock = "Electric Claw", MinSea = 3, Beli = 3000000, Fragments = 5000,
+        Requires = {{"Electro", 400}},
+    },
+    {
+        Unlock = "Dragon Talon", MinSea = 3, Beli = 3000000, Fragments = 5000,
+        Requires = {{"Dragon Claw", 400}},
+    },
+    {
+        Unlock = "Godhuman", MinSea = 3, Beli = 5000000, Fragments = 5000,
+        Requires = {
+            {"Superhuman", 400},
+            {"Death Step", 400},
+            {"Sharkman Karate", 400},
+            {"Electric Claw", 400},
+            {"Dragon Talon", 400},
+        },
+    },
+}
+
+local function currentBeli()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local beli = data and data:FindFirstChild("Beli")
+    return beli and tonumber(beli.Value) or 0
+end
+
+local function currentFragments()
+    local data = LocalPlayer:FindFirstChild("Data")
+    local fragments = data and (data:FindFirstChild("Fragments") or data:FindFirstChild("Fragment"))
+    return fragments and tonumber(fragments.Value) or 0
+end
+
+local function unlockCurrencyReady(plan)
+    if getSea() < (plan.MinSea or 1) then
+        return false
+    end
+    if currentBeli() < (plan.Beli or 0) then
+        return false
+    end
+    if currentFragments() < (plan.Fragments or 0) then
+        return false
+    end
+    return true
+end
+
+local function chooseRequiredMeleeForUnlock(snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+
+    for _, plan in ipairs(MeleeUnlockPlan) do
+        if not meleeOwned(plan.Unlock, snapshot) and unlockCurrencyReady(plan) then
+            local ownsAllRequirements = true
+            for _, requirement in ipairs(plan.Requires) do
+                if not meleeOwned(requirement[1], snapshot) then
+                    ownsAllRequirements = false
+                    break
+                end
+            end
+
+            if ownsAllRequirements then
+                for _, requirement in ipairs(plan.Requires) do
+                    local styleName, neededMastery = requirement[1], requirement[2]
+                    local mastery = meleeMastery(styleName, snapshot)
+                    if mastery < neededMastery then
+                        return styleName, neededMastery, plan.Unlock
+                    end
+                end
+            end
         end
     end
 
+    return nil, nil, nil
+end
+
+local function chooseMelee600Target(snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
     local cap = tonumber(Settings["Melee Mastery Target"]) or 600
     for _, style in ipairs(FightingStylePurchaseRoutes) do
         if meleeOwned(style.Name, snapshot) and meleeMastery(style.Name, snapshot) < cap then
@@ -4274,65 +4362,150 @@ function AutoStats()
     return false
 end
 
-local BasicMeleeBeliCost = {
-    ["Black Leg"] = 150000,
-    ["Electro"] = 500000,
-    ["Fishman Karate"] = 750000,
+local ImmediateMeleePurchaseRules = {
+    ["Black Leg"] = {MinSea = 1, Beli = 150000, Fragments = 0},
+    ["Electro"] = {MinSea = 1, Beli = 500000, Fragments = 0},
+    ["Fishman Karate"] = {MinSea = 1, Beli = 750000, Fragments = 0},
+    ["Dragon Claw"] = {MinSea = 2, Beli = 0, Fragments = 1500},
 }
 
-local function currentBeli()
-    local data = LocalPlayer:FindFirstChild("Data")
-    local beli = data and data:FindFirstChild("Beli")
-    return beli and tonumber(beli.Value) or 0
+local function purchaseRuleReady(rule)
+    if not rule then return true end
+    return getSea() >= (rule.MinSea or 1)
+        and currentBeli() >= (rule.Beli or 0)
+        and currentFragments() >= (rule.Fragments or 0)
 end
 
-local function basicMeleePurchaseReady(snapshot)
-    snapshot = snapshot or meleeInventorySnapshot()
-    local beli = currentBeli()
-    for _, name in ipairs({"Black Leg", "Electro", "Fishman Karate"}) do
-        local cost = BasicMeleeBeliCost[name]
-        if not meleeOwned(name, snapshot) and beli >= cost then
-            return true, name, cost
+local function requiredMasteriesMet(plan, snapshot)
+    for _, requirement in ipairs(plan.Requires or {}) do
+        if not meleeOwned(requirement[1], snapshot)
+            or meleeMastery(requirement[1], snapshot) < requirement[2]
+        then
+            return false
         end
     end
+    return true
+end
+
+local function immediateMeleePurchaseCandidate(snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+
+    -- First Sea / basic purchases: reserve Beli only when the account can buy
+    -- that style right now. Do not reserve money just to grind mastery later.
+    for _, name in ipairs({"Black Leg", "Electro", "Fishman Karate", "Dragon Claw"}) do
+        local rule = ImmediateMeleePurchaseRules[name]
+        if not meleeOwned(name, snapshot) and purchaseRuleReady(rule) then
+            return true, name, rule.Beli or 0
+        end
+    end
+
+    -- Superhuman has no key/material gate. Once its four mastery requirements
+    -- are already met and the currency is present, keep gacha from spending it.
+    for _, plan in ipairs(MeleeUnlockPlan) do
+        if plan.Unlock == "Superhuman"
+            and not meleeOwned(plan.Unlock, snapshot)
+            and unlockCurrencyReady(plan)
+            and requiredMasteriesMet(plan, snapshot)
+        then
+            return true, plan.Unlock, plan.Beli or 0
+        end
+    end
+
     return false
 end
-Runtime.ShouldReserveForMelee = basicMeleePurchaseReady
+Runtime.ShouldReserveForMelee = immediateMeleePurchaseCandidate
+
+local function tryBuyEveryMissingMelee(snapshot)
+    snapshot = snapshot or meleeInventorySnapshot()
+    Runtime.MeleePurchaseAt = Runtime.MeleePurchaseAt or {}
+    local attempted = false
+    local now = os.clock()
+
+    -- BUY-FIRST policy: every missing style gets its own cooldown. A failed
+    -- advanced style never blocks another style that is already purchasable.
+    for _, style in ipairs(FightingStylePurchaseRoutes) do
+        if not meleeOwned(style.Name, snapshot) then
+            local lastAttempt = Runtime.MeleePurchaseAt[style.Name] or 0
+            if now - lastAttempt >= 2.0 then
+                local basicRule = ImmediateMeleePurchaseRules[style.Name]
+                if basicRule == nil or purchaseRuleReady(basicRule) then
+                    Runtime.MeleePurchaseAt[style.Name] = now
+                    invokeMeleePurchase(style)
+                    attempted = true
+                end
+            end
+        end
+    end
+
+    if attempted then
+        Runtime.InventoryCacheAt = 0
+    end
+    return attempted
+end
 
 function AutoBuyFightingStyles()
     local snapshot = meleeInventorySnapshot()
-    Runtime.MeleePurchaseCursor = (Runtime.MeleePurchaseCursor or 0) + 1
-    if Runtime.MeleePurchaseCursor > #FightingStylePurchaseRoutes then
-        Runtime.MeleePurchaseCursor = 1
+    local attempted = tryBuyEveryMissingMelee(snapshot)
+
+    -- Refresh after purchases. If something was buyable, it should now appear
+    -- in inventory before deciding whether any mastery is actually required.
+    if attempted then
+        task.wait(0.05)
+        snapshot = meleeInventorySnapshot()
     end
 
-    -- Round-robin every missing style. Unlike testfix2, a non-nil response from
-    -- Black Leg can no longer block every later melee forever.
-    for offset = 0, #FightingStylePurchaseRoutes - 1 do
-        local index = ((Runtime.MeleePurchaseCursor + offset - 1) % #FightingStylePurchaseRoutes) + 1
-        local style = FightingStylePurchaseRoutes[index]
-        if not meleeOwned(style.Name, snapshot) then
-            Runtime.MeleePurchaseCursor = index
-            invokeMeleePurchase(style)
-            break
-        end
-    end
-
-    Runtime.InventoryCacheAt = 0
-    snapshot = meleeInventorySnapshot()
-    local target, targetMastery = chooseMeleeTrainingTarget(snapshot)
-    Settings["Preferred Melee"] = target
+    local target, neededMastery, unlockName = chooseRequiredMeleeForUnlock(snapshot)
     if target then
+        Runtime.RequiredMeleeTraining = {
+            Style = target,
+            Mastery = neededMastery,
+            Unlock = unlockName,
+        }
+        Settings["Preferred Melee"] = target
         Settings["Select Weapon"] = "Melee"
         ensureMeleeEquipped(target)
-        Runtime.FeatureStatus.MeleeProgression = ("Training %s %d/%d"):format(
-            target, meleeMastery(target, snapshot), targetMastery
-        )
+        Runtime.FeatureStatus.MeleeProgression =
+            ("Need %s %d/%d for %s"):format(
+                target,
+                meleeMastery(target, snapshot),
+                neededMastery,
+                unlockName
+            )
         return true
     end
 
-    Runtime.FeatureStatus.MeleeProgression = "All owned melee at target mastery"
-    return false
+    Runtime.RequiredMeleeTraining = nil
+    if Settings["Auto Farm Mastery 600 Melees"] ~= true then
+        Settings["Preferred Melee"] = nil
+    end
+
+    Runtime.FeatureStatus.MeleeProgression =
+        attempted and "Buying available melee; no mastery grind"
+        or "Waiting for next melee requirement; no mastery grind"
+    return attempted
+end
+
+function AutoFarmMeleeMastery600()
+    -- Explicit 600-mastery mode remains available, but it never overrides a
+    -- mastery requirement that the unlock manager is actively working on.
+    if Runtime.RequiredMeleeTraining then
+        return false
+    end
+
+    local snapshot = meleeInventorySnapshot()
+    local target, cap = chooseMelee600Target(snapshot)
+    if not target then
+        Settings["Preferred Melee"] = nil
+        Runtime.FeatureStatus.MeleeMastery600 = "All owned melee at target mastery"
+        return false
+    end
+
+    Settings["Preferred Melee"] = target
+    Settings["Select Weapon"] = "Melee"
+    ensureMeleeEquipped(target)
+    Runtime.FeatureStatus.MeleeMastery600 =
+        ("Training %s %d/%d"):format(target, meleeMastery(target, snapshot), cap)
+    return true
 end
 
 local function toolMastery(tool)
@@ -4847,6 +5020,7 @@ end, function()
     ))
     if Settings["Auto Fully Fighting Style"] or Settings["Auto Farm Mastery 600 Melees"] then
         warn("[BananaRebuild/Melee] " .. tostring(Runtime.FeatureStatus.MeleeProgression or "waiting")
+            .. " | 600=" .. tostring(Runtime.FeatureStatus.MeleeMastery600 or "off")
             .. " | buy=" .. tostring(Runtime.FeatureStatus.MeleePurchase or "none"))
     end
     if Settings["Random Devil Fruit"] or Settings["Get Fruits"] then
@@ -5052,8 +5226,7 @@ end, AutoBuyBasicProgression)
 
 runLoop("MeleeMastery", 0.5, function()
     return Settings["Auto Farm Mastery 600 Melees"] == true
-        and Settings["Auto Fully Fighting Style"] ~= true
-end, AutoBuyFightingStyles)
+end, AutoFarmMeleeMastery600)
 
 runLoop("SwordMastery", 0.15, function()
     return Settings["Auto Farm Mastery 600 Sword In Inventory"] == true
